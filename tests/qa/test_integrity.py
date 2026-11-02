@@ -12,6 +12,21 @@ def _unversioned(record):
     return {k: v for k, v in record.items() if k != "_rev"}
 from .fixtures import STRUCTURES, fingerprint, populate
 
+def _journal_first_revocation_supported():
+    """ADR-015 rev.2 publishes revocation before moving writer.lock."""
+    return hasattr(Workspace, "_revoked_tokens")
+
+
+def _stable_index_rebuild_supported():
+    """ADR-016 bounded snapshot retry, absent in the original Phase 1 source."""
+    from revisionworx.index import LocalIndex
+    return "stable snapshot" in (LocalIndex.rebuild.__doc__ or "")
+
+
+def _windows_lock_release_retry_supported():
+    return hasattr(Workspace, "_unlink_own_lock")
+
+
 @pytest.mark.parametrize("layout", sorted(STRUCTURES))
 @pytest.mark.parametrize("mode", ["indexed", "managed"])
 def test_adoption_never_changes_original_tree(tmp_path, layout, mode):
@@ -140,22 +155,25 @@ def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeyp
         pytest.skip("ADR-008 lock-token recheck absent on original Phase 1 QA branch")
     writer = Workspace.create(store, "QA")
     token = Workspace.read_writer_lock(store)["token"]
-    actual_check = writer._check_lock_still_held
-    calls = []
+    # Force revocation AFTER the modern _revocations preflight but BEFORE
+    # the writer chooses a new journal sequence. This deliberately proves the
+    # remaining PHYSICAL late-entry behavior, even with logical fencing.
+    original_current_rev = writer._current_rev
+    initial_rev = writer._current_rev("settings", "workspace")
     after_break = []
-    def break_after_check():
-        actual_check()
-        if not calls:
-            calls.append(True)
-            Workspace.break_writer_lock(store, token, reason="QA deterministic paused-writer race")
+    def break_after_validation(kind, rid):
+        rev = original_current_rev(kind, rid)
+        if not after_break:
+            Workspace.break_writer_lock(store, token, reason="QA late physical publish race")
             after_break.append(Workspace.open(store).head_seq())
+        return rev
     try:
         lock_lost = False
         with monkeypatch.context() as m:
-            m.setattr(writer, "_check_lock_still_held", break_after_check)
+            m.setattr(writer, "_current_rev", break_after_validation)
             try:
                 writer.commit("qa.stale", [
-                    RecordPut("settings", "workspace", {"stale_writer": True})
+                    RecordPut("settings", "workspace", {"stale_writer": True}, expect_rev=initial_rev)
                 ])
             except workspace_mod.LockLostError:
                 lock_lost = True
@@ -163,7 +181,7 @@ def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeyp
             if not after_break:
                 raise RuntimeError("QA failpoint did not inject the audited administrative break")
             assert lock_lost, "revoked writer incorrectly returned from commit"
-            assert reader.head_seq() == after_break[0], "revoked writer published a journal entry"
+            assert reader.head_seq() == after_break[0], "revoked writer published a physical journal entry"
             assert not reader.get("settings", "workspace").get("stale_writer", False)
     finally:
         writer.close()
@@ -206,7 +224,7 @@ def test_second_process_cannot_take_active_writer_lock(tmp_path):
 
 
 @pytest.mark.xfail(
-    strict=True, raises=AssertionError,
+    not _stable_index_rebuild_supported(), strict=True, raises=AssertionError,
     reason="Known LocalIndex.rebuild() snapshot/cursor mismatch: newer records can be indexed under older cursor",
 )
 def test_index_rebuild_does_not_include_records_newer_than_its_watermark(tmp_path, monkeypatch):
@@ -274,23 +292,24 @@ def test_revoked_writer_publication_is_logically_fenced_on_replay(tmp_path, monk
     store = tmp_path / "store"
     writer = Workspace.create(store, "QA fenced replay")
     old_token = Workspace.read_writer_lock(store)["token"]
-    original_check = writer._check_lock_still_held
+    original_current_rev = writer._current_rev
     break_seq = []
     late_id = new_id("root")
     txid = "e" * 32
 
-    def break_immediately_after_preflight():
-        original_check()
+    def break_after_validation(kind, rid):
+        rev = original_current_rev(kind, rid)
         if not break_seq:
             Workspace.break_writer_lock(store, old_token, reason="QA fencing check")
             break_seq.append(Workspace.open(store).head_seq())
+        return rev
 
     try:
         with monkeypatch.context() as m:
-            m.setattr(writer, "_check_lock_still_held", break_immediately_after_preflight)
+            m.setattr(writer, "_current_rev", break_after_validation)
             with pytest.raises(workspace_mod.LockLostError, match="fenced"):
                 writer.commit("qa.fenced.late.write", [
-                    RecordPut("root", late_id, {"id": late_id, "name": "not authoritative"})
+                    RecordPut("root", late_id, {"id": late_id, "name": "not authoritative"}, expect_rev=0)
                 ], txid=txid)
         assert break_seq, "the audited override must have happened"
 
@@ -314,7 +333,7 @@ def test_revoked_writer_publication_is_logically_fenced_on_replay(tmp_path, monk
 
 
 @pytest.mark.xfail(
-    strict=True, raises=AssertionError,
+    not _journal_first_revocation_supported(), strict=True, raises=AssertionError,
     reason="Issue #8: standalone override moves writer.lock before audit; a stale writer can commit in the gap",
 )
 def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
@@ -338,6 +357,8 @@ def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
     rid = new_id("root")
     original_check = writer._check_lock_still_held
     original_open = Workspace.open
+    original_replace = workspace_mod.os.replace
+    journal_first = _journal_first_revocation_supported()
     preflight = threading.Event()
     renamed = threading.Event()
     release_admin = threading.Event()
@@ -352,6 +373,15 @@ def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
         preflight.set()
         if not renamed.wait(15):
             raise TimeoutError("administrator never moved the writer lock")
+
+    def intercept_replace(src, dst):
+        # Rev.2: wait AFTER the revocation is committed but BEFORE moving
+        # writer.lock. A resumed old writer must now be refused/fenced.
+        if threading.current_thread() is admin_thread and Path(src).name == "writer.lock":
+            renamed.set()
+            if not release_admin.wait(15):
+                raise TimeoutError("QA admin release barrier did not open")
+        return original_replace(src, dst)
 
     def intercept_open(*args, **kwargs):
         if threading.current_thread() is admin_thread and kwargs.get("writable"):
@@ -385,7 +415,9 @@ def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
 
     try:
         writer._check_lock_still_held = checked_then_pause
-        with patch.object(Workspace, "open", side_effect=intercept_open):
+        target = (patch.object(workspace_mod.os, "replace", side_effect=intercept_replace)
+                  if journal_first else patch.object(Workspace, "open", side_effect=intercept_open))
+        with target:
             stale_thread = threading.Thread(target=late_writer, name="qa-paused-writer")
             stale_thread.start()
             if not preflight.wait(15):
@@ -404,12 +436,14 @@ def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
         if errors or len(outcomes) != 1:
             raise RuntimeError(f"QA race infrastructure failed: {errors!r}, outcomes={outcomes!r}")
         with original_open(store) as reader:
+            if journal_first:
+                assert outcomes == [("rejected", None)], outcomes
             audits = [reader.read_entry(n) for n in reader.journal_seqs()
                       if reader.read_entry(n)["op"] == "workspace.lock.break"]
             if len(audits) != 1:
                 raise RuntimeError("QA expected exactly one audited override")
-            # The actual acceptance oracle. Current ADR-015 fences only stale
-            # entries AFTER the audit, so this assertion is expected to fail.
+            # Same acceptance property under both protocols: the old pre-audit
+            # implementation fails, the journal-first linearization passes.
             assert reader.get("root", rid) is None, (
                 "revoked writer's mutation is visible after lock rename, "
                 "before the later audit entry"
@@ -426,7 +460,7 @@ def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
 
 
 @pytest.mark.xfail(
-    strict=True, raises=AssertionError,
+    not _stable_index_rebuild_supported(), strict=True, raises=AssertionError,
     reason="Issue #9: LocalIndex.rebuild can drop a record deleted after the sampled watermark",
 )
 def test_index_rebuild_does_not_omit_pre_watermark_records_due_to_late_delete(tmp_path, monkeypatch):
@@ -479,7 +513,7 @@ def test_index_rebuild_does_not_omit_pre_watermark_records_due_to_late_delete(tm
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows NTFS sharing-violation semantics only")
 @pytest.mark.xfail(
-    strict=True, raises=PermissionError,
+    not _windows_lock_release_retry_supported(), strict=True, raises=PermissionError,
     reason="Issue #10: Workspace.close does not retry transient Windows writer.lock sharing violations",
 )
 def test_windows_writer_lock_close_survives_transient_sharing_violation(tmp_path, monkeypatch):
