@@ -8,12 +8,13 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
-                               QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget)
+                               QPushButton, QSplitter, QTableView, QTabWidget, QVBoxLayout, QWidget)
 
 from ... import __version__
 from ..controller import Controller, Progress, describe_error
 from ..viewmodels import ProjectDetailsModel, ProjectListModel
 from .dialogs import AdoptDialog, NewProjectDialog
+from .documents import DocumentsTab
 from .models import ViewModelTable
 
 
@@ -86,16 +87,23 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.archive_btn)
         buttons.addStretch(1)
         dl.addLayout(buttons)
-        self.file_filter = QLineEdit(detail)
+        tabs = QTabWidget(detail)
+        self.documents_tab = DocumentsTab(ctl, configure_table, tabs)
+        tabs.addTab(self.documents_tab, "Documents")
+        files_page = QWidget(tabs)
+        fl = QVBoxLayout(files_page)
+        self.file_filter = QLineEdit(files_page)
         self.file_filter.setPlaceholderText("Filter files…")
         self.file_filter.returnPressed.connect(lambda *_: self.filter_files())
-        dl.addWidget(self.file_filter)
-        self.files = QTableView(detail)
+        fl.addWidget(self.file_filter)
+        self.files = QTableView(files_page)
         self.files_model = ViewModelTable(ProjectDetailsModel.FILE_COLUMNS, lambda: len(self.detail_vm.files),
                                           self.detail_vm.file_cell, self)
         self.files.setModel(self.files_model)
         configure_table(self.files, ProjectDetailsModel.FILE_COLUMNS)
-        dl.addWidget(self.files, 1)
+        fl.addWidget(self.files, 1)
+        tabs.addTab(files_page, "Baseline files")
+        dl.addWidget(tabs, 1)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         outer.addWidget(split, 1)
@@ -235,8 +243,10 @@ class MainWindow(QMainWindow):
 
     def selection_changed(self, *_):
         rows = self.table.selectionModel().selectedRows()
+        pid = self.list_vm.row_id(rows[0].row()) if rows else None
         try:
-            self.detail_vm.load(self.list_vm.row_id(rows[0].row()) if rows else None)
+            self.detail_vm.load(pid)
+            self.documents_tab.load_project(pid)
         except Exception as exc:
             self.error("Cannot load project", exc)
 

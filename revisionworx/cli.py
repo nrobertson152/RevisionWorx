@@ -8,7 +8,8 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, atomicio, projects
+from . import __version__, atomicio, documents, projects
+from .clientstate import CheckoutTokens
 from .index import open_index
 from .workspace import Workspace, WorkspaceError
 
@@ -193,12 +194,183 @@ def cmd_lock_break(args):
     _emit(args, holder, f"Broke writer lock held by {holder.get('user')}@{holder.get('host')}; recorded in journal.")
 
 
+# ---------------------------------------------------------------- Phase 2: documents
+def _tokens(args) -> CheckoutTokens:
+    return CheckoutTokens(args.state_dir)
+
+
+def _rev_line(r: dict) -> str:
+    return (f"{r['label']:>4}  {r['state']:<11} {r['created']}  {r['author'].get('user', '')}  "
+            f"{r['sha256'][:12]}  {r['description']}")
+
+
+def cmd_doc_register(args):
+    with _open(args, True) as ws:
+        doc, rev = documents.register_document(
+            ws, args.project, Path(args.file), type_id=args.type, number=args.number, title=args.title,
+            owner=args.owner, revision_scheme=args.scheme, capture=not args.no_revision,
+            revision_description=args.message, label=args.label,
+            allow_duplicate_number=args.allow_duplicate_number)
+        _emit(args, {"document": doc, "revision": rev},
+              f"Registered {doc['id']}  {doc['rel_path']}  [{doc['type_id']}]"
+              + (f"\n  revision {rev['label']} ({rev['sha256'][:12]})" if rev else "\n  no revision captured"))
+
+
+def cmd_doc_list(args):
+    with _open(args, False) as ws, open_index(ws, args.cache_dir) as idx:
+        rows = idx.documents(args.project, args.text or "", limit=args.limit)
+        _emit(args, rows, "\n".join(
+            f"{r['id']}  {r['number'] or '-':<10} rev {r['latest_label'] or '-':<3} {r['latest_state'] or '':<10}"
+            f"{' OUT:' + r['checked_out_by'] if r['checked_out_by'] else ''}  {r['rel_path']}" for r in rows)
+            or "No documents.")
+
+
+def cmd_doc_show(args):
+    with _open(args, False) as ws:
+        doc = ws.get("document", args.id)
+        if doc is None:
+            raise WorkspaceError(f"unknown document {args.id}")
+        status = documents.document_status(ws, args.id, verify_hash=args.hash)
+        hist = documents.history(ws, args.id)
+        co = ws.get("checkout", args.id)
+        data = {"document": doc, "status": status, "history": hist, "checkout": co and
+                {k: v for k, v in co.items() if k != "token"}}
+        text = [f"{doc['title']}  [{doc['type_id']}]  {doc['number']}", f"  file: {status['path']}",
+                f"  working file: {status['state']} (checked by {status['method']})"]
+        if co:
+            text.append(f"  checked out by {co['owner']['user']}@{co['owner']['host']} since {co['acquired']}")
+        text += ["  history:"] + [f"    {_rev_line(r)}" for r in hist]
+        _emit(args, data, "\n".join(text))
+
+
+def cmd_doc_checkout(args):
+    with _open(args, True) as ws:
+        co = documents.checkout(ws, args.id, note=args.note)
+        _tokens(args).put(ws.id, args.id, co["token"])
+        _emit(args, {k: v for k, v in co.items() if k != "token"},
+              f"Checked out {args.id}; edit the file in place, then run 'doc checkin'.")
+
+
+def cmd_doc_checkin(args):
+    with _open(args, True) as ws:
+        token = _tokens(args).get(ws.id, args.id)
+        if not token:
+            raise WorkspaceError("this machine holds no checkout token for that document")
+        rev = documents.checkin(ws, args.id, token, args.message, label=args.label,
+                                allow_unchanged=args.allow_unchanged)
+        _tokens(args).forget(ws.id, args.id)
+        _emit(args, rev, f"Checked in revision {rev['label']} ({rev['sha256'][:12]})")
+
+
+def cmd_doc_cancel(args):
+    with _open(args, True) as ws:
+        token = _tokens(args).get(ws.id, args.id)
+        if not token:
+            raise WorkspaceError("this machine holds no checkout token for that document")
+        documents.cancel_checkout(ws, args.id, token, revert=args.revert)
+        _tokens(args).forget(ws.id, args.id)
+        _emit(args, {"cancelled": args.id}, "Checkout cancelled" + (" and file reverted." if args.revert else
+                                                                     "; the working file was left as it is."))
+
+
+def cmd_doc_restore(args):
+    with _open(args, True) as ws:
+        token = _tokens(args).get(ws.id, args.id)
+        if not token:
+            raise WorkspaceError("check the document out first")
+        documents.restore_to_working(ws, args.id, token, args.revision)
+        _emit(args, {"restored": args.revision}, "Working file restored; check in to record it as a new revision.")
+
+
+def cmd_doc_release_checkout(args):
+    with _open(args, True) as ws:
+        co = documents.admin_release_checkout(ws, args.id, args.token, args.reason)
+        _emit(args, {k: v for k, v in co.items() if k != "token"},
+              f"Released checkout held by {co['owner']['user']}@{co['owner']['host']} (audited).")
+
+
+def cmd_doc_checkout_info(args):
+    with _open(args, False) as ws:
+        co = ws.get("checkout", args.id)
+        _emit(args, co, json.dumps(co, indent=2) if co else "Not checked out.")
+
+
+def cmd_rev_transition(args):
+    with _open(args, True) as ws:
+        rev = documents.transition(ws, args.revision, args.state, comment=args.comment,
+                                   expected_rev=args.expect_rev)
+        _emit(args, rev, f"Revision {rev['label']} is now {rev['state']}")
+
+
+def cmd_rev_export(args):
+    with _open(args, False) as ws:
+        out = documents.export_revision(ws, args.revision, Path(args.dest))
+        _emit(args, {"file": str(out)}, f"Exported and verified {out}")
+
+
+def cmd_rev_compare(args):
+    with _open(args, False) as ws:
+        _emit(args, documents.compare_revisions(ws, args.a, args.b))
+
+
+def cmd_doc_verify(args):
+    with _open(args, False) as ws:
+        problems = documents.verify_revisions(ws, args.id)
+        _emit(args, problems, "\n".join(f"{p['document_id']} rev {p['label']}: {p['problem']}" for p in problems)
+              or "All stored revision content verified (SHA-256).")
+        if problems:
+            raise SystemExit(1)
+
+
+def cmd_drawing_register(args):
+    with _open(args, False) as ws:
+        rows = documents.drawing_register(ws, args.project)
+        text = documents.drawing_register_csv(rows)
+        if args.csv:
+            out = Path(args.csv)
+            if out.exists() and not args.force:
+                raise WorkspaceError(f"{out} exists; use --force to overwrite")
+            atomicio.atomic_write_bytes(out, text.encode("utf-8"))
+            _emit(args, {"file": str(out), "rows": len(rows)}, f"Wrote {len(rows)} drawings to {out}")
+        else:
+            _emit(args, rows, text.rstrip())
+
+
+def cmd_doctype_list(args):
+    with _open(args, False) as ws:
+        t = documents.list_doctypes(ws)
+        _emit(args, t, "\n".join(f"{k:<14} {v['name']:<26} {v['revision_scheme']:<9} {' '.join(v['extensions'])}"
+                                  for k, v in t.items()))
+
+
+def cmd_doctype_save(args):
+    with _open(args, True) as ws:
+        tid = documents.save_doctype(ws, {"id": args.id, "name": args.name, "extensions": args.ext,
+                                          "revision_scheme": args.scheme, "category": args.category})
+        _emit(args, {"id": tid}, f"Saved document type {tid!r}")
+
+
+def cmd_lifecycle_show(args):
+    with _open(args, False) as ws:
+        lc = documents.get_lifecycle(ws)
+        _emit(args, lc, "\n".join([f"States: {', '.join(s['name'] for s in lc['states'])}",
+                                   "Transitions:"] + [f"  {a} -> {b}" for a, b in lc["transitions"]]
+                                  + [f"  {a} -> {b} (automatic)" for a, b in lc["system_transitions"]]))
+
+
+def cmd_lifecycle_import(args):
+    with _open(args, True) as ws:
+        documents.save_lifecycle(ws, atomicio.read_json(Path(args.file)))
+        _emit(args, {"saved": True}, "Lifecycle saved.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="revisionworx", description="RevisionWorx engineering PDM")
     p.add_argument("--version", action="version", version=f"RevisionWorx {__version__}")
     p.add_argument("-w", "--workspace", help="workspace folder (or REVISIONWORX_WORKSPACE)")
     p.add_argument("--cache-dir", type=Path, default=None, help="local index cache folder")
     p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.add_argument("--state-dir", type=Path, default=None, help="local client state (checkout tokens)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init", help="create a new workspace")
@@ -253,6 +425,55 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("verify", help="check records against the journal (admin)")
     s.add_argument("--repair", action="store_true", help="rebuild records from the journal")
     s.set_defaults(fn=cmd_verify)
+
+    doc = sub.add_parser("doc", help="documents (Phase 2)").add_subparsers(dest="sub", required=True)
+    s = doc.add_parser("register", help="register an existing file in a managed project (never moved)")
+    s.add_argument("project"); s.add_argument("file")
+    s.add_argument("--type"); s.add_argument("--number", default=""); s.add_argument("--title", default="")
+    s.add_argument("--owner", default=""); s.add_argument("--scheme", choices=("alpha", "numeric", "numeric2", "manual"))
+    s.add_argument("--label"); s.add_argument("-m", "--message", default="Initial revision")
+    s.add_argument("--no-revision", action="store_true", help="do not capture the current content")
+    s.add_argument("--allow-duplicate-number", action="store_true"); s.set_defaults(fn=cmd_doc_register)
+    s = doc.add_parser("list"); s.add_argument("--project"); s.add_argument("text", nargs="?")
+    s.add_argument("--limit", type=int, default=200); s.set_defaults(fn=cmd_doc_list)
+    s = doc.add_parser("show"); s.add_argument("id"); s.add_argument("--hash", action="store_true",
+                                                                   help="hash the working file")
+    s.set_defaults(fn=cmd_doc_show)
+    s = doc.add_parser("checkout"); s.add_argument("id"); s.add_argument("--note", default="")
+    s.set_defaults(fn=cmd_doc_checkout)
+    s = doc.add_parser("checkin"); s.add_argument("id"); s.add_argument("-m", "--message", required=True)
+    s.add_argument("--label"); s.add_argument("--allow-unchanged", action="store_true"); s.set_defaults(fn=cmd_doc_checkin)
+    s = doc.add_parser("cancel"); s.add_argument("id"); s.add_argument("--revert", action="store_true",
+                                                                      help="discard edits: restore latest revision")
+    s.set_defaults(fn=cmd_doc_cancel)
+    s = doc.add_parser("restore", help="put an earlier revision's content into the checked-out file")
+    s.add_argument("id"); s.add_argument("revision"); s.set_defaults(fn=cmd_doc_restore)
+    s = doc.add_parser("checkout-info"); s.add_argument("id"); s.set_defaults(fn=cmd_doc_checkout_info)
+    s = doc.add_parser("release-checkout", help="administrative release of an abandoned checkout")
+    s.add_argument("id"); s.add_argument("--token", required=True, help="token shown by checkout-info")
+    s.add_argument("--reason", required=True); s.set_defaults(fn=cmd_doc_release_checkout)
+    s = doc.add_parser("verify", help="re-hash stored revision content"); s.add_argument("--id")
+    s.set_defaults(fn=cmd_doc_verify)
+    s = doc.add_parser("register-report", help="engineering drawing register of a project")
+    s.add_argument("project"); s.add_argument("--csv"); s.add_argument("--force", action="store_true")
+    s.set_defaults(fn=cmd_drawing_register)
+
+    rv = sub.add_parser("rev", help="revisions").add_subparsers(dest="sub", required=True)
+    s = rv.add_parser("transition"); s.add_argument("revision"); s.add_argument("state")
+    s.add_argument("--comment", default=""); s.add_argument("--expect-rev", type=int); s.set_defaults(fn=cmd_rev_transition)
+    s = rv.add_parser("export"); s.add_argument("revision"); s.add_argument("dest"); s.set_defaults(fn=cmd_rev_export)
+    s = rv.add_parser("compare"); s.add_argument("a"); s.add_argument("b"); s.set_defaults(fn=cmd_rev_compare)
+
+    dt = sub.add_parser("doctype").add_subparsers(dest="sub", required=True)
+    dt.add_parser("list").set_defaults(fn=cmd_doctype_list)
+    s = dt.add_parser("save"); s.add_argument("id"); s.add_argument("--name", required=True)
+    s.add_argument("--ext", action="append", default=[]); s.add_argument("--category", default="document")
+    s.add_argument("--scheme", default="alpha", choices=("alpha", "numeric", "numeric2", "manual"))
+    s.set_defaults(fn=cmd_doctype_save)
+
+    lcp = sub.add_parser("lifecycle").add_subparsers(dest="sub", required=True)
+    lcp.add_parser("show").set_defaults(fn=cmd_lifecycle_show)
+    s = lcp.add_parser("import"); s.add_argument("file"); s.set_defaults(fn=cmd_lifecycle_import)
 
     lk = sub.add_parser("lock").add_subparsers(dest="sub", required=True)
     lk.add_parser("show").set_defaults(fn=cmd_lock_show)

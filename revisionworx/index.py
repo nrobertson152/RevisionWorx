@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .workspace import Workspace
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: Phase 2 document/revision/checkout tables
 
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -36,6 +36,22 @@ CREATE INDEX files_category ON files(category);
 CREATE INDEX files_sha ON files(sha256) WHERE sha256 IS NOT NULL;
 CREATE VIRTUAL TABLE files_fts USING fts5(project_id UNINDEXED, path,
                                           tokenize = "unicode61 separators '/._-'");
+CREATE TABLE documents (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, rel_path TEXT NOT NULL, type_id TEXT NOT NULL,
+    number TEXT NOT NULL, title TEXT NOT NULL, owner TEXT NOT NULL, status TEXT NOT NULL,
+    latest_rev_id TEXT, released_rev_id TEXT, rev_count INTEGER NOT NULL);
+CREATE INDEX documents_project ON documents(project_id);
+CREATE INDEX documents_number ON documents(number COLLATE NOCASE);
+CREATE VIRTUAL TABLE documents_fts USING fts5(id UNINDEXED, number, title, rel_path,
+                                              tokenize = "unicode61 separators '/._-'");
+CREATE TABLE revisions (
+    id TEXT PRIMARY KEY, document_id TEXT NOT NULL, number INTEGER NOT NULL, label TEXT NOT NULL,
+    state TEXT NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL, author TEXT NOT NULL,
+    created TEXT NOT NULL, description TEXT NOT NULL);
+CREATE INDEX revisions_document ON revisions(document_id, number);
+CREATE INDEX revisions_sha ON revisions(sha256);
+CREATE TABLE checkouts (document_id TEXT PRIMARY KEY, owner_user TEXT NOT NULL, owner_host TEXT NOT NULL,
+                        acquired TEXT NOT NULL);
 """
 
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
@@ -144,6 +160,22 @@ class LocalIndex:
                 self._load_files(rid, new_blob)
         elif kind == "root":
             self.db.execute("INSERT OR REPLACE INTO roots VALUES (?,?)", (rid, data["name"]))
+        elif kind == "document":
+            self.db.execute("DELETE FROM documents_fts WHERE id=?", (rid,))
+            self.db.execute("INSERT OR REPLACE INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (rid, data["project_id"], data["rel_path"], data["type_id"], data.get("number", ""),
+                             data.get("title", ""), data.get("owner", ""), data["status"],
+                             data.get("latest_rev_id"), data.get("released_rev_id"), data.get("rev_count", 0)))
+            self.db.execute("INSERT INTO documents_fts VALUES (?,?,?,?)",
+                            (rid, data.get("number", ""), data.get("title", ""), data["rel_path"]))
+        elif kind == "revision":
+            self.db.execute("INSERT OR REPLACE INTO revisions VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (rid, data["document_id"], data["number"], data["label"], data["state"],
+                             data["sha256"], data["size"], data["author"].get("user", ""), data["created"],
+                             data["description"]))
+        elif kind == "checkout":
+            self.db.execute("INSERT OR REPLACE INTO checkouts VALUES (?,?,?,?)",
+                            (rid, data["owner"].get("user", ""), data["owner"].get("host", ""), data["acquired"]))
 
     def _apply_delete(self, kind: str, rid: str) -> None:
         if kind == "project":
@@ -152,17 +184,24 @@ class LocalIndex:
                 self.db.execute(f"DELETE FROM {table} WHERE {col}=?", (rid,))
         elif kind == "root":
             self.db.execute("DELETE FROM roots WHERE id=?", (rid,))
+        elif kind == "checkout":
+            self.db.execute("DELETE FROM checkouts WHERE document_id=?", (rid,))
+        elif kind == "document":
+            self.db.execute("DELETE FROM documents WHERE id=?", (rid,))
+            self.db.execute("DELETE FROM documents_fts WHERE id=?", (rid,))
+        elif kind == "revision":
+            self.db.execute("DELETE FROM revisions WHERE id=?", (rid,))
 
     def rebuild(self) -> int:
         """Discard everything and reload from the authoritative workspace."""
         head = self.ws.head_seq()  # captured first: later entries are replayed idempotently
         with self.db:
-            for table in ("roots", "projects", "projects_fts", "files", "files_fts"):
+            for table in ("roots", "projects", "projects_fts", "files", "files_fts", "documents",
+                          "documents_fts", "revisions", "checkouts"):
                 self.db.execute(f"DELETE FROM {table}")
-            for rid, data in self.ws.list("root").items():
-                self._apply_put("root", rid, data)
-            for rid, data in self.ws.list("project").items():
-                self._apply_put("project", rid, data)
+            for kind in ("root", "project", "document", "revision", "checkout"):
+                for rid, data in self.ws.list(kind).items():
+                    self._apply_put(kind, rid, data)
             self.db.execute("UPDATE meta SET value=? WHERE key='journal_seq'", (str(head),))
         return head
 
@@ -236,6 +275,34 @@ class LocalIndex:
             "SELECT fl.project_id, fl.path, fl.size, fl.category, fl.sha256, fl.verified_format "
             "FROM files_fts f JOIN files fl ON fl.project_id = f.project_id AND fl.path = f.path "
             f"WHERE files_fts MATCH ? {proj} ORDER BY fl.path LIMIT ? OFFSET ?", args)
+
+    def documents(self, project_id: str | None = None, text: str = "", limit: int = 200,
+                  offset: int = 0) -> list[dict]:
+        """Documents with their latest/released revision labels and checkout owner."""
+        cols = ("d.id, d.project_id, d.rel_path, d.type_id, d.number, d.title, d.owner, d.status, "
+                "d.rev_count, lr.label AS latest_label, lr.state AS latest_state, rr.label AS released_label, "
+                "c.owner_user AS checked_out_by, c.owner_host AS checked_out_host")
+        joins = ("LEFT JOIN revisions lr ON lr.id = d.latest_rev_id LEFT JOIN revisions rr ON rr.id = d.released_rev_id "
+                 "LEFT JOIN checkouts c ON c.document_id = d.id")
+        where, args = [], []
+        if project_id:
+            where.append("d.project_id = ?")
+            args.append(project_id)
+        q = fts_query(text)
+        if q:
+            where.append("d.id IN (SELECT id FROM documents_fts WHERE documents_fts MATCH ?)")
+            args.append(q)
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        return self._rows(f"SELECT {cols} FROM documents d {joins} {clause} "
+                          "ORDER BY d.rel_path COLLATE NOCASE LIMIT ? OFFSET ?", (*args, limit, offset))
+
+    def revisions(self, document_id: str) -> list[dict]:
+        return self._rows("SELECT id, number, label, state, sha256, size, author, created, description "
+                          "FROM revisions WHERE document_id = ? ORDER BY number", (document_id,))
+
+    def documents_by_content(self, sha256: str) -> list[dict]:
+        return self._rows("SELECT r.document_id, r.id AS revision_id, r.label FROM revisions r WHERE r.sha256 = ?",
+                          (sha256,))
 
     def coverage(self) -> dict:
         """What the index covers, so callers can never imply company-wide completeness."""

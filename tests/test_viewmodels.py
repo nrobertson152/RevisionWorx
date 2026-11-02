@@ -178,3 +178,68 @@ def test_job_result_callbacks_run_on_drain_thread(ctl):
     ctl.results.put(JobResult("x", value=1, on_done=lambda r: seen.append(r.value)))
     ctl.drain()
     assert seen == [1]
+
+
+# ---------------------------------------------------------------- Phase 2 view-models
+@pytest.fixture
+def doc_ctl(tmp_path):
+    c = Controller(cfg_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache", state_dir=tmp_path / "state")
+    (tmp_path / "share" / "Eng").mkdir(parents=True)
+    c.create_workspace(tmp_path / "share", "Docs VM")
+    c.add_root("Eng", tmp_path / "share" / "Eng")
+    rec = c.create_project(NewProject(name="Valve", rel_path="Valve"))
+    f = tmp_path / "share" / "Eng" / "Valve" / "03 Drawings" / "Native" / "body.idw"
+    f.write_bytes(b"v1")
+    c.start_register(rec["id"], f, number="D-1")
+    res = None
+    end = time.time() + 30
+    while res is None and time.time() < end:
+        for ev in c.drain():
+            if isinstance(ev, JobResult):
+                res = ev
+        time.sleep(0.01)
+    assert res.error is None
+    c.project_id, c.doc_id, c.file = rec["id"], res.value[0]["id"], f
+    return c
+
+
+def test_document_list_and_panel_workflow(doc_ctl):
+    from revisionworx.gui.viewmodels import DocumentListModel, DocumentPanel
+    lst = DocumentListModel(doc_ctl)
+    lst.load(doc_ctl.project_id)
+    assert lst.cell(0, 0) == "D-1" and lst.cell(0, 2) == "A"
+    panel = DocumentPanel(doc_ctl)
+    panel.load(lst.row_id(0))
+    assert panel.can_checkout and not panel.can_checkin
+    assert "matches the latest revision" in panel.status_text
+    assert [c[0] for c in panel.transition_choices] == ["in_review", "obsolete"]
+    panel.checkout()
+    assert panel.can_checkin and not panel.can_checkout and "Checked out by you" in panel.status_text
+    assert panel.start_checkin("  ") is False and "Describe" in panel.message
+    doc_ctl.file.write_bytes(b"v2")
+    assert panel.start_checkin("Add note 4")
+    pump(doc_ctl, lambda: "Checked in" in panel.message or "error" in panel.message.lower())
+    assert panel.message == "Checked in revision B."
+    assert [h["label"] for h in panel.history] == ["B", "A"]  # newest first
+    assert panel.history_cell(0, 1) == "Work in Progress"
+    rev = panel.transition_latest("in_review", "please check")
+    assert rev["state"] == "in_review" and [c[0] for c in panel.transition_choices] == ["wip", "approved"]
+    lst.refresh()
+    assert lst.cell(0, 2) == "B" and lst.cell(0, 5) == ""
+
+
+def test_panel_shows_foreign_checkout_and_external_edits(doc_ctl, tmp_path):
+    from revisionworx.gui.viewmodels import DocumentPanel
+    other = Controller(cfg_dir=tmp_path / "cfg2", cache_dir=tmp_path / "cache2", state_dir=tmp_path / "state2")
+    other.open_workspace(tmp_path / "share")
+    other.checkout(doc_ctl.doc_id)  # another session holds it
+    panel = DocumentPanel(doc_ctl)
+    panel.load(doc_ctl.doc_id)
+    assert not panel.can_checkout and not panel.can_checkin and "Checked out by" in panel.status_text
+    from revisionworx.documents import CheckoutConflict
+    with pytest.raises(CheckoutConflict):
+        panel.checkout()
+    other.cancel_checkout(doc_ctl.doc_id)
+    doc_ctl.file.write_bytes(b"sneaky edit")
+    panel.load(doc_ctl.doc_id)
+    assert "WITHOUT a checkout" in panel.status_text

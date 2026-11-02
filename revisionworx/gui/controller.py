@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .. import atomicio, projects
+from .. import atomicio, documents, projects
+from ..clientstate import CheckoutTokens
 from ..index import LocalIndex, open_index
 from ..workspace import Workspace
 
@@ -49,9 +50,12 @@ class Progress:
 
 
 class Controller:
-    def __init__(self, cfg_dir: Path | None = None, cache_dir: Path | None = None):
+    def __init__(self, cfg_dir: Path | None = None, cache_dir: Path | None = None,
+                 state_dir: Path | None = None):
         self.cfg_dir = Path(cfg_dir) if cfg_dir else config_dir()
         self.cache_dir = cache_dir
+        self.tokens = CheckoutTokens(state_dir)
+        self.workspace_id: str | None = None
         self.location: Path | None = None
         self.results: "queue.Queue[JobResult | Progress]" = queue.Queue()
         self._cancel = threading.Event()
@@ -87,6 +91,7 @@ class Controller:
         with Workspace.open(location) as ws:  # validates format before we accept it
             info = {"id": ws.id, "name": ws.name}
         self.location = location
+        self.workspace_id = info["id"]
         self._remember(location)
         return info
 
@@ -156,6 +161,67 @@ class Controller:
         with self._write() as ws:
             return projects.update_project(ws, project_id, expected_rev=expected_rev, **changes)
 
+    # ------------------------------------------------------------------ Phase 2: documents
+    def documents(self, project_id: str, text: str = "") -> list[dict]:
+        with self._read() as ws, self._index(ws) as idx:
+            return idx.documents(project_id, text)
+
+    def document_detail(self, doc_id: str, verify_hash: bool = False) -> dict:
+        with self._read() as ws:
+            doc = ws.get("document", doc_id)
+            if doc is None:
+                raise documents.DocumentError(f"unknown document {doc_id}")
+            lc = documents.get_lifecycle(ws)
+            hist = documents.history(ws, doc_id)
+            co = ws.get("checkout", doc_id)
+            latest = hist[-1] if hist else None
+            return {"document": doc, "history": hist, "lifecycle": lc,
+                    "status": documents.document_status(ws, doc_id, verify_hash=verify_hash),
+                    "checkout": {k: v for k, v in co.items() if k != "token"} if co else None,
+                    "mine": bool(co and self.tokens.get(ws.id, doc_id) == co["token"]),
+                    "latest": latest,
+                    "transitions": documents.lc_mod.allowed_targets(lc, latest["state"]) if latest else []}
+
+    def doctypes(self) -> dict[str, dict]:
+        with self._read() as ws:
+            return documents.list_doctypes(ws)
+
+    def checkout(self, doc_id: str, note: str = "") -> dict:
+        with self._write() as ws:
+            co = documents.checkout(ws, doc_id, note)
+            self.tokens.put(ws.id, doc_id, co["token"])
+            return {k: v for k, v in co.items() if k != "token"}
+
+    def cancel_checkout(self, doc_id: str, revert: bool = False) -> None:
+        with self._write() as ws:
+            documents.cancel_checkout(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", revert=revert)
+            self.tokens.forget(ws.id, doc_id)
+
+    def transition(self, rev_id: str, state: str, comment: str, expected_rev: int | None) -> dict:
+        with self._write() as ws:
+            return documents.transition(ws, rev_id, state, comment, expected_rev=expected_rev)
+
+    def export_revision(self, rev_id: str, dest: Path) -> Path:
+        with self._read() as ws:
+            return documents.export_revision(ws, rev_id, Path(dest))
+
+    def start_register(self, project_id: str, file_path: Path, on_done=None, **kw) -> bool:
+        def job():
+            with self._write() as ws:
+                return documents.register_document(ws, project_id, Path(file_path), **kw)
+        return self._run("register", job, on_done)
+
+    def start_checkin(self, doc_id: str, message: str, label: str | None = None,
+                      allow_unchanged: bool = False, on_done=None) -> bool:
+        """Copy + hash can be slow for large CAD files, so it runs in the background."""
+        def job():
+            with self._write() as ws:
+                rev = documents.checkin(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", message,
+                                        label=label, allow_unchanged=allow_unchanged)
+                self.tokens.forget(ws.id, doc_id)
+                return rev
+        return self._run("checkin", job, on_done)
+
     # ------------------------------------------------------------------ background jobs
     def cancel(self) -> None:
         self._cancel.set()
@@ -217,6 +283,10 @@ class Controller:
 def describe_error(exc: BaseException) -> str:
     """Actionable, human-readable error text for dialogs."""
     from ..workspace import CommittedNotApplied, ConflictError, WorkspaceLockedError
+    if isinstance(exc, documents.CheckoutConflict):
+        return f"This document is {exc}. Ask them to check it in, or ask an administrator to release it."
+    if isinstance(exc, documents.NoChanges):
+        return str(exc)
     if isinstance(exc, ConflictError):
         return f"{exc}\n\nSomeone else changed this item while you were viewing it. Reload and reapply your change."
     if isinstance(exc, CommittedNotApplied):

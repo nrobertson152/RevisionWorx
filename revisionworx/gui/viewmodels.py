@@ -323,3 +323,139 @@ def preview_report(s: dict) -> str:
         lines += ["", "Overlaps registered project(s): " + ", ".join(c["name"] for c in s["conflicts"])]
     lines += ["", *[f"⚠ {w}" for w in s["warnings"]], "", s["cad_references"], "", "Nothing has been changed."]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------- Phase 2: documents
+class DocumentListModel(Observable):
+    COLUMNS = (Column("number", "Number", 100), Column("title", "Title", 200, True),
+               Column("latest_label", "Rev", 50), Column("latest_state", "State", 100),
+               Column("released_label", "Released", 70), Column("checked_out_by", "Checked out by", 120),
+               Column("rel_path", "File", 260, True))
+
+    def __init__(self, ctl: Controller):
+        super().__init__()
+        self.ctl = ctl
+        self.project_id: str | None = None
+        self.text = ""
+        self.rows: list[dict] = []
+        self.error: str | None = None
+
+    def load(self, project_id: str | None) -> None:
+        self.project_id = project_id
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.error = None
+        try:
+            self.rows = self.ctl.documents(self.project_id, self.text) if self.project_id else []
+        except Exception as exc:
+            self.rows, self.error = [], describe_error(exc)
+        self.changed()
+
+    def cell(self, row: int, col: int) -> str:
+        v = self.rows[row].get(self.COLUMNS[col].key)
+        return "" if v is None else str(v)
+
+    def row_id(self, row: int) -> str:
+        return self.rows[row]["id"]
+
+
+class DocumentPanel(Observable):
+    """Selected document: details, history and which actions are currently possible."""
+    HISTORY_COLUMNS = (Column("label", "Rev", 50), Column("state_name", "State", 110),
+                       Column("created", "Date", 160), Column("author", "Author", 100),
+                       Column("description", "Change", 260, True))
+
+    def __init__(self, ctl: Controller):
+        super().__init__()
+        self.ctl = ctl
+        self.detail: dict | None = None
+        self.message = ""
+
+    def load(self, doc_id: str | None, verify_hash: bool = False) -> None:
+        self.detail = self.ctl.document_detail(doc_id, verify_hash) if doc_id else None
+        self.changed()
+
+    def reload(self) -> None:
+        if self.detail:
+            self.load(self.detail["document"]["id"])
+
+    @property
+    def doc_id(self) -> str | None:
+        return self.detail["document"]["id"] if self.detail else None
+
+    @property
+    def history(self) -> list[dict]:
+        return list(reversed(self.detail["history"])) if self.detail else []
+
+    def history_cell(self, row: int, col: int) -> str:
+        r = self.history[row]
+        key = self.HISTORY_COLUMNS[col].key
+        if key == "state_name":
+            from ..lifecycle import state_name
+            return state_name(self.detail["lifecycle"], r["state"])
+        if key == "author":
+            return r["author"].get("user", "")
+        return str(r.get(key, ""))
+
+    @property
+    def status_text(self) -> str:
+        if not self.detail:
+            return ""
+        st = self.detail["status"]
+        co = self.detail["checkout"]
+        texts = {"unchanged": "Working file matches the latest revision.",
+                 "modified": "Working file has been edited (checked out).",
+                 "modified-externally": "⚠ Working file was changed WITHOUT a checkout.",
+                 "missing": "⚠ Working file is missing.",
+                 "unrevisioned": "No revision has been captured yet."}
+        text = texts.get(st["state"], st["state"])
+        if co:
+            who = "you" if self.detail["mine"] else f"{co['owner']['user']}@{co['owner']['host']}"
+            text += f"  Checked out by {who} since {co['acquired']}."
+        return text
+
+    @property
+    def can_checkout(self) -> bool:
+        return bool(self.detail) and self.detail["checkout"] is None and \
+            self.detail["document"]["status"] == "active"
+
+    @property
+    def can_checkin(self) -> bool:
+        return bool(self.detail) and self.detail["mine"]
+
+    can_cancel = can_checkin
+
+    @property
+    def transition_choices(self) -> list[tuple[str, str]]:
+        if not self.detail or not self.detail["latest"]:
+            return []
+        from ..lifecycle import state_name
+        return [(s, state_name(self.detail["lifecycle"], s)) for s in self.detail["transitions"]]
+
+    def checkout(self) -> None:
+        self.ctl.checkout(self.doc_id)
+        self.reload()
+
+    def cancel(self, revert: bool) -> None:
+        self.ctl.cancel_checkout(self.doc_id, revert)
+        self.reload()
+
+    def transition_latest(self, state: str, comment: str = "") -> dict:
+        latest = self.detail["latest"]
+        rev = self.ctl.transition(latest["id"], state, comment, latest["_rev"])
+        self.reload()
+        return rev
+
+    def start_checkin(self, message: str, on_done=None, allow_unchanged: bool = False) -> bool:
+        if not message.strip():
+            self.message = "Describe the change before checking in."
+            self.changed()
+            return False
+
+        def done(res: JobResult):
+            self.message = describe_error(res.error) if res.error else f"Checked in revision {res.value['label']}."
+            self.reload() if not res.error else self.changed()
+            if on_done:
+                on_done(res)
+        return self.ctl.start_checkin(self.doc_id, message, allow_unchanged=allow_unchanged, on_done=done)

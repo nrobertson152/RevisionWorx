@@ -444,3 +444,73 @@ def test_workspace_verify_clean_after_full_workflow(ws, proj):
     for state in ("in_review", "approved", "released"):
         D.transition(ws, b["id"], state)
     assert ws.verify()["problems"] == [] and D.verify_revisions(ws) == []
+
+
+# ---------------------------------------------------------------- local index
+def test_index_tracks_documents_revisions_and_checkouts(ws, proj, cache_dir):
+    from revisionworx.index import open_index
+    with open_index(ws, cache_dir) as idx:
+        doc, a = reg(ws, proj, "02 CAD/Parts/bracket.ipt", number="P-7", title="Bracket")
+        co = D.checkout(ws, doc["id"])
+        idx.sync()
+        row = idx.documents(proj["id"])[0]
+        assert (row["number"], row["latest_label"], row["checked_out_by"]) == ("P-7", "A", co["owner"]["user"])
+        (ws.folder / "02 CAD/Parts/bracket.ipt").write_bytes(b"v2")
+        D.checkin(ws, doc["id"], co["token"], "v2")
+        assert idx.sync()["mode"] == "incremental"
+        row = idx.documents(text="bracket")[0]
+        assert row["latest_label"] == "B" and row["checked_out_by"] is None
+        assert [r["label"] for r in idx.revisions(doc["id"])] == ["A", "B"]
+        incremental = idx.documents()
+        idx.rebuild()
+        assert idx.documents() == incremental
+        assert idx.documents_by_content(a["sha256"])[0]["label"] == "A"
+
+
+# ---------------------------------------------------------------- CLI
+def test_cli_document_workflow(tmp_path, capsys):
+    import json
+    from revisionworx import cli
+    share = tmp_path / "share"
+    (share / "Eng").mkdir(parents=True)
+    w = ["-w", str(share), "--cache-dir", str(tmp_path / "cache"), "--state-dir", str(tmp_path / "state")]
+
+    def run(*a):
+        code = cli.main([*w, *a])
+        out = capsys.readouterr()
+        return code, out.out, out.err
+
+    run("init", str(share), "--name", "Docs")
+    run("root", "add", "Eng", str(share / "Eng"))
+    code, out, _ = run("--json", "project", "new", "--name", "Valve block", "--number", "J-9")
+    p = json.loads(out)
+    f = share / "Eng" / "Unassigned" / "J-9 Valve block" / "03 Drawings" / "Native" / "block.slddrw"
+    f.write_bytes(b"DRW1")
+    code, out, _ = run("--json", "doc", "register", p["id"], str(f), "--number", "D-1")
+    assert code == 0
+    doc = json.loads(out)["document"]
+    rev_a = json.loads(out)["revision"]
+    assert run("doc", "checkout", doc["id"])[0] == 0
+    code, _, err = run("doc", "checkout", doc["id"])
+    assert code == 2 and "already checked out" in err
+    f.write_bytes(b"DRW2")
+    code, out, _ = run("--json", "doc", "checkin", doc["id"], "-m", "Add section view")
+    assert code == 0 and json.loads(out)["label"] == "B"
+    rev_b = json.loads(out)
+    for state in ("in_review", "approved", "released"):
+        assert run("rev", "transition", rev_b["id"], state)[0] == 0
+    code, out, _ = run("--json", "doc", "show", doc["id"], "--hash")
+    shown = json.loads(out)
+    assert [r["label"] for r in shown["history"]] == ["A", "B"] and shown["status"]["state"] == "unchanged"
+    assert "token" not in json.dumps(shown["checkout"] or {})
+    code, out, _ = run("doc", "register-report", p["id"])
+    assert "D-1" in out and "Released" in out
+    assert run("rev", "export", rev_a["id"], str(tmp_path / "a.slddrw"))[0] == 0
+    assert (tmp_path / "a.slddrw").read_bytes() == b"DRW1"
+    assert run("doc", "verify")[0] == 0
+    code, out, _ = run("--json", "doc", "list", "--project", p["id"])
+    assert json.loads(out)[0]["released_label"] == "B"
+    f.write_bytes(b"edited without checkout")
+    code, out, _ = run("--json", "doc", "show", doc["id"])
+    assert json.loads(out)["status"]["state"] == "modified-externally"
+    assert run("verify")[0] == 0

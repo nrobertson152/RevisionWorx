@@ -78,3 +78,36 @@ def test_adopt_dialog_buttons_follow_flow(qapp, ctl):
         time.sleep(0.02)
     assert dlg.adopt_btn.isEnabled()
     dlg.reject()
+
+
+def test_documents_tab_checkout_checkin(qapp, tmp_path):
+    from revisionworx.gui.qt.documents import DocumentsTab
+    from revisionworx.gui.qt.mainwindow import configure_table
+    c = Controller(cfg_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache", state_dir=tmp_path / "state")
+    (tmp_path / "share" / "Eng").mkdir(parents=True)
+    c.create_workspace(tmp_path / "share", "Qt docs")
+    c.add_root("Eng", tmp_path / "share" / "Eng")
+    prj = c.create_project(NewProject(name="P", rel_path="P"))
+    f = tmp_path / "share" / "Eng" / "P" / "03 Drawings" / "Native" / "x.idw"
+    f.write_bytes(b"1")
+    c.start_register(prj["id"], f)
+    end = time.time() + 30
+    while not c.documents(prj["id"]) and time.time() < end:
+        c.drain()
+        time.sleep(0.02)
+    tab = DocumentsTab(c, configure_table)
+    tab.load_project(prj["id"])
+    assert tab.table_model.rowCount() == 1
+    tab.table.selectRow(0)
+    qapp.processEvents()
+    assert tab.checkout_btn.isEnabled() and not tab.checkin_btn.isEnabled()
+    tab.checkout_btn.click()
+    assert tab.checkin_btn.isEnabled()
+    f.write_bytes(b"2")
+    tab.panel.start_checkin("v2")
+    end = time.time() + 30
+    while "Checked in" not in tab.panel.message and time.time() < end:
+        c.drain()
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert tab.history_model.rowCount() == 2
