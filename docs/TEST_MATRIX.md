@@ -1,5 +1,25 @@
 # RevisionWorx — Risk-based QA acceptance matrix
 
+## Current independently verified Phase 2 acceptance — 2026-11-02 ET
+
+**Exact source:** Claude Phase 2 `366d4355abcde7543122551fadaab01ac9832e01` + independent QA tests `77aba36b72f50890e2df753df86aebeae6f395e5`. [GitHub Actions run 41392876919](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392876919): **all four integrated application/test jobs SUCCESS** on Ubuntu and Windows × Python 3.11/3.13, with an identical pinned Phase 2 SHA in each job.
+
+| Runner, each Python version | QA-only | Full Phase 2 |
+| --- | --- | --- |
+| Linux Python 3.11 / 3.13 | **56 passed, 3 skipped, 1 strict xfailed** | **251 passed, 3 skipped, 1 strict xfailed** |
+| Windows Python 3.11 / 3.13 | **59 passed, 1 strict xfailed** | **253 passed, 1 skipped, 1 strict xfailed** |
+
+**ACCEPT (local filesystem, exact code):** ADR-019 automatic fail-closed malformed orphan and crash-resumable, audit-first supervised orphan clearance (original evidence preserved, one durable audit, exact SHA-256 checked on restart and rejection of changed evidence); ADR-021 v2 complete ordered request digest, correct `TxidReuseError` for altered/removed/reordered/interleaved `RecordCheck`, identical lost-ACK retry after restart, explicit `IdentityUnverifiable` for pre-v2 txids, non-finite payload refusal; transaction outcome after prepublication and postpublication faults, GC audit-before-delete with old referenced/young content protected, revision-chain cycle rejection before new revision, and bounded verified SHA-256 reads. **New independent test paths:** `tests/qa/test_phase2_recovery_boundaries.py` and `tests/qa/test_txid_check_identity.py`.
+
+**Historical regression evidence:** [run 41392345698](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392345698), Phase 2 `2a280482` + QA `47c5c0bb`, showed two separate strict expected failures: administrator clear moved evidence before audit, and reordered check/write interleaving reused txid. Both now **PASS normally** at `366d4355`/`77aba36b`. Research confirmed the old malformed-orphan dual-writer bug at `d656884b` before the P0 correction. These historical results must not be described as defects in the current SHA.
+
+**One open strict XFAIL:** `tests/qa/test_integrity.py::test_paused_writer_break_after_lock_check_must_not_publish` asks for physical absence of a late journal entry. A physically published but **logically fenced** artifact is permitted by the accepted authority model; physical nonpublication is not certified. No effective stale mutation was proven in the current tested local code.
+
+**Remaining product/release gates:** manual operator must independently prove an unknowable orphan owner stopped; approved optional multi-user coordinator, authenticated recovery, real two-host SMB/uncertain-ACK and power-loss durability, backup/restore trust root, interactive installed Windows/Linux GUI, offline deployment and upgrades/rollback **NOT CERTIFIED**. QA PR #3 is independently reviewable; Phase 2 local integrity acceptance is **not** authorization to merge/release or certify multi-user use. The isolated Phase 1 reliability backport `phase1-backport-8-9-10` is still **`36d1957` and obsolete** (pre-ADR-019); **HOLD** until Claude updates it with applicable accepted corrections and asks QA to retest exact new SHA.
+
+All historical 'latest' headings below are archival checkpoints for older sources and **are superseded by this section**.
+
+
 ## Latest P0/P1 independent acceptance — 2026-11-01 ET
 
 **Verified current source:** Phase 2 `2a2804820d4aca48b50026bdb7edfe8c241b1866` + QA `17ac2374b3234c495608300a6b0e9309b44d7143`, [GitHub Actions run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343). All four integrated jobs SUCCESS on Linux/Windows Python 3.11/3.13.
@@ -64,11 +84,16 @@ Two independently added ADR-019 acceptance tests **passed** on both OSes: a revo
 | INDEX-04 | P0 | Cache rebuild with permanently unstable snapshots must fail closed without altering previous cache cursor/rows | **PASS LOCAL** deterministic retry-exhaustion injection, actual continuous-writer soak not qualified |
 | CHECKOUT-01 | P0 | Exact one winner in real local six-process checkout; others are conflicts; no orphan lock | **PASS LOCAL Windows Server 2025: 5/5 trials, 30 process attempts, 1 winner + 5 conflicts per trial, all exits zero** |
 | CHECKOUT-02 | P0 | Stale checkout tokens rejected and checkout history unaltered | **PASS LOCAL**, independent Phase 2 suite |
-| TXID-01 | P1 | Same txid plus altered, missing or reordered RecordCheck preconditions must raise TxidReuseError; exact retry after restart must not mutate | **PASS LOCAL** at Phase 2 `2a280482` + QA `17ac2374`, Linux/Windows Python 3.11/3.13 [run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343); legacy journal request-identity policy unresolved |
+| TXID-01 | P1 | Same txid replay identical across restart, altered/missing/reordered checks and interleaved operations rejected; legacy txid identity not guessed | **PASS LOCAL**, ADR-021 v2 at `366d4355` + QA `77aba36b` [run 41392876919](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392876919); historical strict xfail on `2a28048` corrected |
 | WINDOWS-LOCK-01 | P0 | Transient Windows writer.lock sharing violation gets bounded retry, verifies owner, removes own lock | **PASS LOCAL Windows**, #10 injected failure and successor acquisition |
 | WINDOWS-LOCK-02 | P0 | Persistent Windows lock release denial is reported and rightful lock remains held | **PASS LOCAL Windows**, bounded retry exhaustion and exclusive successor refusal |
 | WINDOWS-LOCK-03 | P0 | Writer must not unlink successor token after sharing violation and ownership reassignment | **PASS LOCAL Windows**, injection at ADR-019's actual atomic move |
 | LOCK-ADR019-01 | P0 | Old releaser A cannot delete successor B lock following administrative override | **PASS LOCAL Linux/Windows**, deterministic independent release-interleaving, B remains able to commit |
+| ORPHAN-CLEAR-01 | P0 | Administrator clear audit must be durable before evidence move; crash, restart and tampered evidence fail closed; retry exactly once | **PASS LOCAL**, `tests/qa/test_phase2_recovery_boundaries.py`, Phase 2 `366d4355` + QA `77aba36b` [run 41392876919](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392876919); operator stopped-writer assertion not mechanically verifiable |
+| GC-01 | P0 | Failed GC audit publication preserves old orphan; completed GC emits durable audit before deletion; young and old referenced objects survive | **PASS LOCAL** independent `test_content_gc_audit_is_published_before_delete_and_precommit_failure_preserves_data`, same exact CI |
+| REV-CHAIN-01 | P0 | Corrupt cyclic revision chain rejected before history/check-in; no new revision published | **PASS LOCAL** independent cyclic-chain fault injection, same exact CI |
+| READ-VERIFIED-01 | P0 | Immutable revision reads enforce max_bytes, expected size, SHA-256 despite mutable working edits | **PASS LOCAL** independent verified-read boundary/corruption test, same exact CI |
+| TX-OUTCOME-01 | P0 | Prepublication OSError -> not-found; postpublication materialization failure -> committed and recoverable, retry idempotent | **PASS LOCAL** independent journal failpoint test, same exact CI |
 | LOCK-ORPHAN-01 | P0 | Malformed `.releasing-*` file cannot grant C authority while preflighted B remains effective; retain evidence | **PASS LOCAL** at Phase 2 `2a280482` + QA `17ac2374`, Linux/Windows Python 3.11/3.13 [run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343); manual recovery and SMB unqualified |
 | LOCK-ADR019-02 | P0 | Crash-orphaned successor token must be fenced before new C can commit | **PASS LOCAL Linux/Windows**, single audit revocation, preserved evidence, no remaining .releasing file |
 | REV-01 | P0 | Historical revision SHA-256 and content immutable after check-in | **PASS LOCAL**, dedicated Phase 2 integrity tests |

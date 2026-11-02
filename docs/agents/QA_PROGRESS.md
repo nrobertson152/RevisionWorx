@@ -4,7 +4,7 @@
 **Working branch:** `qa/testing-infrastructure`
 **Pull request:** https://github.com/nrobertson152/RevisionWorx/pull/3 (draft; base `phase1-foundation`)
 **Coordination:** https://github.com/nrobertson152/RevisionWorx/issues/1
-**Updated:** 2026-11-01
+**Updated:** 2026-11-02
 **Role identification:** QA Engineer; Lead Architect owns implementation and architectural decisions.
 
 ## Session resumption protocol
@@ -279,3 +279,28 @@ Linux each Python: QA **46 passed / 3 skipped / 1 strict xfailed**, full **230 p
 **CI error attribution:** initial `eb704df3` had a QA fixture assumption (`_rev=1`), later `57c902fd` had strict XPASS upon Claude fixing P0, and `58acb0d5` had a stale `_rev==1` assertion after correct TxidReuseError. These were test-marker/fixture errors, not proof of current production failures. Latest `17ac2374` full pinned matrix is SUCCESS.
 
 **Review and handoff:** New P0 and P1 acceptance is supported on current local Linux/Windows filesystems only. Claude owns legacy txid digest/version decision and manual orphan recovery semantics. QA docs/matrix and draft PR #3 updated; tell Claude via one PR #7 acceptance comment. No production source edits, merge, release or coordinator/SMB certification. Await actual new code before running another costly matrix.
+
+
+## 2026-11-02 ET — QA Engineer independently accepted ADR-019 rev.2 and ADR-021; cross-platform Phase 2 integrity batch
+
+**Role / branch / PR:** independent QA Engineer; `qa/testing-infrastructure`, draft PR #3 (base `phase1-foundation`). Reviewed latest `main` QA instructions, coordinator PR #3/Claude PR #7/Distributed PR #4 comments, production workspace/transaction/content/revision code, current QA progress and CI jobs. No production source, integration/distributed branches or release refs changed. Current exact production `phase2-documents` SHA `366d4355abcde7543122551fadaab01ac9832e01`. QA test SHA `77aba36b72f50890e2df753df86aebeae6f395e5`.
+
+**New executable QA commits and files:**
+- `25defa36b92c7ae59370e4139e20db4c10787cec`: introduced `tests/qa/test_phase2_recovery_boundaries.py` for P1 supervised orphan-clear crash audit invariant, independently measured postcommit vs precommit `transaction_outcome`, GC audit-before-delete, malformed revision-chain cycles, bounded immutable content verification.
+- `5b4e5534fe76ee25feb9c813795c24fb88654900`: imported the pre-existing synthetic managed CAD fixture so the standalone recovery test module executes on actual Phase 2 and skips original Phase 1 correctly.
+- `47c5c0bb7d3104cc85bfd6cb8e17a5df17699d0b`: added `tests/qa/test_txid_check_identity.py` strict P1 regression for changing the relative order of `RecordCheck` vs `RecordPut` under one txid; confirmed current `2a28048` behavior was an expected failure.
+- `6f0fb5a5b7b40de60cc81890c88e92349db8752d`: strengthened the orphan-clear test to examine whether an unaudited successor commit is **effective**, and ensured content GC leaves an old but still-referenced revision object intact.
+- `77aba36b72f50890e2df753df86aebeae6f395e5`: converted the P1 orphan-clear and ADR-021 interleaving safety oracles into **normal passing acceptance on corrected capable code**, while legacy implementation remains strictly xfailed; added deterministic audit-first crash/resume and changed-evidence tests, old-format txid `IdentityUnverifiable`, and nonfinite-payload rejection. No production code modified.
+
+**Exact independent CI:** [GitHub Actions run 41392876919](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392876919) pinned **Phase 2 `366d4355abcde7543122551fadaab01ac9832e01` + QA `77aba36b72f50890e2df753df86aebeae6f395e5` in every job**. Executed `python -m pytest -q -ra tests/qa` plus `python -m pytest -q -ra` under both Linux and Windows Python 3.11 and 3.13. All **four** complete jobs SUCCESS.
+- Linux Python 3.11 and 3.13 **each** QA 56 passed / 3 skipped / 1 strict xfailed, full 251 passed / 3 skipped / 1 strict xfailed.
+- Windows Python 3.11 and 3.13 **each** QA 59 passed / 1 strict xfailed, full 253 passed / 1 skipped / 1 strict xfailed. Linux skips three Windows-only fault-injection tests; Windows full skip is an OS case-sensitivity fixture.
+- One remaining strict XFAIL `test_paused_writer_break_after_lock_check_must_not_publish` concerns **physical** journal file publication even when the entry is provably logically fenced. It is not accepted as physical nonpublication and not evidence of an effective stale mutation.
+
+**Independent before/after defect evidence:** [four-platform run 41392345698](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392345698), earlier Phase 2 `2a280482` / QA `47c5c0bb`: Linux each QA 50 passed/3 skipped/3 strict xfailed, full 234 passed/3 skipped/3 xfailed; Windows each QA 53 passed/3 xfailed, full 236 passed/1 skipped/3 xfailed. Two additional strict xfails were (1) manual orphan-clear evidence moved before audit and (2) check/write interleaving lost from txid identity. Both now **ordinary PASS** on `366d4355`, verifying source correction. A stronger QA test on `6f0fb5a5` checks the effective unaudited later write and old referenced GC safety. No Windows API emulation or fake share certification.
+
+**Defect status / ownership:** #8 journal-first effective revocation plus ADR-019 successor custody accepted on tested local filesystems; #9 index snapshots and retry exhaustion accepted; #10 Windows sharing retry, token ownership, malformed orphan automatic refusal and *now* audit-first supervised clearance with exact-evidence digest/resumption accepted on tested local CI. ADR-021 full canonical ordered transaction identity, lost ACK/restart, altered checks/writes interleaving and explicit unprovable legacy identity accepted locally. Claude owns core fixes; issues/PRs remain Director-controlled. Previously reported semantic hazards correctly remain documented historically.
+
+**Release/Phase 1 backport:** This is **ACCEPT** for the exact Phase 2 *local single-writer correctness* acceptance cases only; **REJECT / NOT CERTIFIED** for multi-host SMB, coordinator authentication, installed interactive GUI, backup/restore epochs, power loss and operator proof that unknown former writer was actually stopped. The isolated `phase1-backport-8-9-10` is still at `36d1957fe8d7800659b488106ef6cec1fa0c6267` (pre-ADR-019); it is **NOT ACCEPTED** for fast-forward/merge. Asked Claude on PR #6 to update an isolated Phase 1 backport after current acceptance, then request exact-SHA QA. Integration's frozen CLI/offscreen Qt and copied-workspace packaging CI are **not** installed interactive GUI or offline clean-VM certifications. PR #3 remains draft; no merges/releases.
+
+**Next:** communicate verified acceptance on Claude PR #7 and issue #10, update QA PR #3, and await updated backport SHA or new production semantics to retest. Avoid redundant full CI for documentation-only changes.
