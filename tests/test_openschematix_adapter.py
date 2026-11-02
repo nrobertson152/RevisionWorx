@@ -229,6 +229,56 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(UnsupportedFormat):
             inspect(path)
 
+    def test_reject_zip_member_decompression_limit(self):
+        path = self.project()
+        with patch("revisionworx_integrations.openschematix.MAX_MEMBER", 20):
+            with self.assertRaisesRegex(InvalidProject, "oversized member"):
+                inspect(path)
+
+    def test_reject_zip_aggregate_decompression_limit(self):
+        path = self.project()
+        with patch("revisionworx_integrations.openschematix.MAX_TOTAL", 20):
+            with self.assertRaisesRegex(InvalidProject, "ZIP size/member count"):
+                inspect(path)
+
+    def test_reject_truncated_zip_container(self):
+        path = self.project()
+        raw = path.read_bytes()
+        path.write_bytes(raw[:len(raw) // 2])
+        with self.assertRaises(InvalidProject):
+            inspect(path)
+
+    def test_reject_mismatched_manifest_sheet_uid(self):
+        path = self.project()
+        with zipfile.ZipFile(path, "r") as archive:
+            records = [(info.filename, archive.read(info), info.compress_type)
+                       for info in archive.infolist()]
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, payload, compression in records:
+                if name == "sheets/s1.json":
+                    doc = json.loads(payload)
+                    doc["uid"] = "different-sheet"
+                    payload = json.dumps(doc).encode()
+                archive.writestr(name, payload, compress_type=compression)
+        with self.assertRaisesRegex(InvalidProject, "manifest/sheet UID mismatch"):
+            inspect(path)
+
+    def test_reject_future_legacy_schema(self):
+        path = self.legacy()
+        doc = json.loads(path.read_text())
+        doc["schema"] = 999
+        self.legacy(doc)
+        with self.assertRaises(UnsupportedFormat):
+            inspect(path)
+
+    def test_reject_nonfinite_component_coordinates(self):
+        path = self.legacy()
+        doc = json.loads(path.read_text())
+        doc["components"][0]["x"] = float("nan")
+        self.legacy(doc)
+        with self.assertRaises(InvalidProject):
+            inspect(path)
+
     def test_unknown_extension(self):
         path = self.root / "example.step"
         path.write_text("{}")
