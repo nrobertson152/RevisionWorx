@@ -159,3 +159,25 @@ def test_crash_after_rename_of_successor_lock_fails_closed(share, monkeypatch):
     b._lock_token = None
     b.close()
     c.close()
+
+
+def test_malformed_orphan_blocks_acquisition_instead_of_skipping(share):
+    """DS counterexample (run 41390605906): an unreadable .releasing-* file hides whose lock it was.
+    Acquisition must fail closed rather than let a new writer coexist with an unfenced one."""
+    from revisionworx.workspace import WorkspaceError
+    b = Workspace.create(share, "W")
+    locks = share / ".revisionworx" / "locks"
+    os.replace(locks / "writer.lock", locks / ".releasing-deadbeef")  # B's lock displaced by a releaser...
+    (locks / ".releasing-deadbeef").write_text("{ torn")             # ...and the file is damaged
+    with pytest.raises(WorkspaceError, match="orphaned"):
+        Workspace.open(share, writable=True)                          # C must not acquire
+    assert Workspace.read_writer_lock(share) is None                  # and leaves no lock behind
+    with pytest.raises(LockLostError):  # B itself: its preflight sees no writer.lock and refuses
+        b.commit("b.only", [RecordPut("project", RID, {"by": "B"})])
+    # administrator resolves it explicitly (audited), after which acquisition works again
+    Workspace.clear_orphaned_release(share, ".releasing-deadbeef", reason="B's workstation confirmed off")
+    with Workspace.open(share, writable=True) as c:
+        assert any(x["event"] == "orphaned-release-cleared" for x in c.list("audit").values())
+    assert any(p.name.startswith("writer.lock.orphaned-") for p in locks.iterdir())
+    b._lock_token = None
+    b.close()

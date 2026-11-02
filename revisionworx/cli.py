@@ -189,6 +189,11 @@ def cmd_lock_show(args):
     _emit(args, holder, json.dumps(holder, indent=2) if holder else "No writer lock is held.")
 
 
+def cmd_lock_clear_orphan(args):
+    Workspace.clear_orphaned_release(_ws_location(args), args.file, args.reason)
+    _emit(args, {"cleared": args.file}, f"Cleared {args.file} (kept as evidence; recorded in the journal).")
+
+
 def cmd_lock_break(args):
     holder = Workspace.break_writer_lock(_ws_location(args), args.token, args.reason)
     _emit(args, holder, f"Broke writer lock held by {holder.get('user')}@{holder.get('host')}; recorded in journal.")
@@ -489,6 +494,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     lk = sub.add_parser("lock").add_subparsers(dest="sub", required=True)
     lk.add_parser("show").set_defaults(fn=cmd_lock_show)
+    s = lk.add_parser("clear-orphan", help="admin: resolve an unreadable orphaned .releasing-* file")
+    s.add_argument("file"); s.add_argument("--reason", required=True); s.set_defaults(fn=cmd_lock_clear_orphan)
     s = lk.add_parser("break", help="administrative recovery of an abandoned writer lock")
     s.add_argument("--token", required=True, help="token shown by 'lock show'")
     s.add_argument("--reason", required=True); s.set_defaults(fn=cmd_lock_break)
