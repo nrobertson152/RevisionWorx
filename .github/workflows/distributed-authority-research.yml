@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Independent-process checkout and fencing tests
-        run: python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator prototype.test_record_batch_research
+        run: python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator prototype.test_record_batch_research prototype.test_request_identity_research
 
   phase1-stale-writer-reproduction:
     name: Phase 1 real-code fencing and cache-watermark probes (research)
