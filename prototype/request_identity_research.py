@@ -2,8 +2,8 @@
 
 Canonical JSON is sorted by mapping key, NOT by operations order. RecordCheck
 inputs remain in the digest even though they are not replayed as mutations.
-This is an executable proposal requiring Claude's approval and versioned
-migration. It does not authenticate a caller or fence a lease.
+The domain prefix now matches Claude's ADR-021. The full request
+schema and migration are still research-only. It does not authenticate a caller or fence a lease.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import json
 import math
 from typing import Any
 
-_DOMAIN = b"RevisionWorx.CommitAuthority.request.v2\x00"
+_DOMAIN = b"revisionworx/commit-request/v2\x00"
 _MAX_PAYLOAD = 1_048_576
 _MAX_DEPTH = 32
 
