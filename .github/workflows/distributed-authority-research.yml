@@ -66,7 +66,7 @@ jobs:
       - name: Checkout actual Phase 2 implementation
         uses: actions/checkout@v4
         with:
-          ref: 541abe57e72e960e182a0ca17a1422df7c3c552f
+          ref: d656884b39401134149273dd0121ef620b76eb8e
           path: phase2-documents
       - uses: actions/setup-python@v5
         with:
@@ -75,7 +75,7 @@ jobs:
         working-directory: research
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
-        run: python -m unittest -v prototype.test_phase2_lock_break_order prototype.test_phase2_lock_release_race prototype.test_phase2_txid_check_reuse
+        run: python -m unittest -v prototype.test_phase2_lock_break_order prototype.test_phase2_lock_release_race prototype.test_phase2_orphan_recovery prototype.test_phase2_txid_check_reuse
 
   phase2-commit-authority-conformance:
     name: ADR-017 exact contract on witnessed batch prototype (Ubuntu 3.13)
@@ -88,7 +88,7 @@ jobs:
       - name: Checkout pinned Phase 2 contract
         uses: actions/checkout@v4
         with:
-          ref: 541abe57e72e960e182a0ca17a1422df7c3c552f
+          ref: d656884b39401134149273dd0121ef620b76eb8e
           path: phase2-documents
       - uses: actions/setup-python@v5
         with:
