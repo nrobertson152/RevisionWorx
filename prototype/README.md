@@ -36,3 +36,19 @@ The earlier README described an **unimplemented mkdir/COMMIT-marker experiment**
 * No protocol decision: optional offline local-LAN coordinator remains a proposal under GitHub issue #5, not an approved implementation.
 
 Fail closed for authoritative multi-user writes until these gaps and real deployment qualification are resolved.
+
+## Further research — Windows CI failures and immutable manifests (2026-11-01 ET)
+
+`prototype/coordinator_research.py` now models acquire/verify/release, an epoch guard and ordered incremental change feed; `prototype/test_coordinator_research.py` has **9 new tests**. The guard detects missing/mismatched epoch files but **does not detect a same-epoch database snapshot rollback**. A test intentionally demonstrates this unsafe state. A nonrollbackable authority or mandatory epoch rotation on restore remains required.
+
+`prototype/immutable_manifest_research.py` stages SHA-256-named objects using local filesystem hardlinks and verifies their bytes before a transaction marker; `prototype/test_immutable_manifest_research.py` contains **6 tests** for multi-file publication, orphan staging, corrupt/missing objects and stale writers. These tests do not establish SMB server power-loss durability. This is a local research-only experiment.
+
+**Observed CI failure:** [run 41373765030](https://github.com/nrobertson152/RevisionWorx/actions/runs/41373765030) passed Linux jobs and both actual Phase 1 regression probes but failed Windows Python 3.11/3.13: `WinError 32` on SQLite file deletion during test cleanup. The root cause is SQLite connections left open by Python's connection context manager (which commits/rolls back but does not close). Changes `1dbbfe4f` and `2b0068d7` explicitly close all new research/test SQLite read connections. Run `41380280216` at the intermediate test-only fix still failed on Windows because the production research change-feed connection had not yet been fixed. **Do not claim a passing Windows result until a later run containing both fixes succeeds.**
+
+Current intended command:
+
+```sh
+python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research
+```
+
+Expected discovery count is **29 tests** (14 authority + 9 coordinator + 6 manifest). This is **not** a verified pass count until CI confirms it. The separate real Phase 1 probes remain **2/2 confirmed** on earlier completed GitHub CI.
