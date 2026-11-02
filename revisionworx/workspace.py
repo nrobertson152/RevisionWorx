@@ -344,10 +344,37 @@ class Workspace:
             raise WorkspaceCorruptError(f"journal entry {seq} fails its SHA-256 digest check (altered?)")
         return entry
 
+    def _revocations(self) -> list[tuple[int, str]]:
+        """(seq, token) of every audited writer-lock break, in journal order (issue #8 fence)."""
+        head = self.head_seq()
+        cached = getattr(self, "_revocation_cache", None)
+        if cached and cached[0] == head:
+            return cached[1]
+        out = []
+        for s in self.journal_seqs():
+            e = self.read_entry(s)
+            if e.get("op") == "workspace.lock.break":
+                for item in e["records"]:
+                    tok = (item.get("data") or {}).get("previous_holder", {}).get("token")
+                    if tok:
+                        out.append((s, tok))
+        self._revocation_cache = (head, out)
+        return out
+
+    def is_fenced(self, entry: dict) -> bool:
+        """An entry signed with a token that an EARLIER entry revoked never takes effect.
+
+        Journal order decides: a writer paused between its lock check and its publish lands after
+        the break entry, so every reader, replay and the writer itself ignore it (ADR-015)."""
+        tok = entry.get("writer_token")
+        return bool(tok) and any(s < entry["seq"] and t == tok for s, t in self._revocations())
+
     def entries_after(self, seq: int) -> Iterable[dict]:
         for s in self.journal_seqs():
             if s > seq:
-                yield self.read_entry(s)
+                entry = self.read_entry(s)
+                if not self.is_fenced(entry):
+                    yield entry
 
     def applied_seq(self) -> int:
         try:
@@ -371,6 +398,8 @@ class Workspace:
         for entry in self.entries_after(applied):
             self._apply(entry)
             count += 1
+        if self.applied_seq() != head:  # trailing fenced entries: nothing to apply, advance past them
+            atomicio.atomic_write_json(self.meta_dir / "state.json", {"applied_seq": head})
         return count
 
     def _apply(self, entry: dict) -> None:
@@ -437,6 +466,10 @@ class Workspace:
             # Another process wrote this sequence: the single-writer invariant was violated.
             raise WorkspaceCorruptError(
                 f"journal entry {seq} was created by another writer; refusing to continue") from exc
+        if self.is_fenced(entry):
+            self.writable = False
+            raise LockLostError(f"fenced: entry {seq} was published after this session's writer lock was "
+                                "broken, so it is ignored by every reader and replay; nothing took effect")
         try:
             self._apply(entry)
         except BaseException as exc:  # commit point already passed: report it as committed
@@ -448,7 +481,7 @@ class Workspace:
         for s in reversed(self.journal_seqs()):
             entry = self.read_entry(s)
             if entry.get("txid") == txid:
-                return {"state": "committed", "seq": s}
+                return {"state": "fenced" if self.is_fenced(entry) else "committed", "seq": s}
         return {"state": "not-found"}
 
     def verify(self, repair: bool = False) -> dict:
@@ -467,6 +500,9 @@ class Workspace:
             entry = self.read_entry(s)
             if "digest" not in entry:
                 problems.append({"problem": "entry-without-digest", "seq": s})
+            if self.is_fenced(entry):
+                problems.append({"problem": "fenced-entry", "seq": s, "op": entry.get("op")})
+                continue
             for item in entry["records"]:
                 key = (item["kind"], item["id"])
                 expected[key] = None if item.get("delete") else {**item["data"], REV_FIELD: s}
