@@ -117,7 +117,8 @@ def test_unmanaged_archive_not_enumerated_during_open(tmp_path, monkeypatch):
         with Workspace.open(store) as ws:
             assert ws.list("project") == {}
 
-@pytest.mark.xfail(strict=True, reason="Known ADR-008 R2 TOCTOU: lock break between verification and journal publish")
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="Known ADR-008 R2 TOCTOU: lock break between verification and journal publish")
 def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeypatch):
     """Safety oracle: old writer must not publish after its lock was revoked.
 
@@ -138,15 +139,19 @@ def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeyp
             Workspace.break_writer_lock(store, token, reason="QA deterministic paused-writer race")
             after_break.append(Workspace.open(store).head_seq())
     try:
+        lock_lost = False
         with monkeypatch.context() as m:
             m.setattr(writer, "_check_lock_still_held", break_after_check)
-            with pytest.raises(LockLostError):
+            try:
                 writer.commit("qa.stale", [
                     RecordPut("settings", "workspace", {"stale_writer": True})
                 ])
+            except LockLostError:
+                lock_lost = True
         with Workspace.open(store) as reader:
             assert after_break, "the administrative break must have been injected"
-            assert reader.head_seq() == after_break[0]
+            assert lock_lost, "revoked writer incorrectly returned from commit"
+            assert reader.head_seq() == after_break[0], "revoked writer published a journal entry"
             assert not reader.get("settings", "workspace").get("stale_writer", False)
     finally:
         writer.close()
