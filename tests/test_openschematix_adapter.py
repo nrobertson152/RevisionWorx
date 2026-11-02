@@ -1,5 +1,6 @@
 """Contract tests for the isolated OpenSchematix source indexer."""
 import hashlib
+import os
 import json
 from unittest.mock import patch
 from pathlib import Path
@@ -100,6 +101,73 @@ class AdapterTests(unittest.TestCase):
                        compress_type=zipfile.ZIP_STORED)
         with self.assertRaises(InvalidProject):
             inspect(path)
+
+
+    def test_real_upstream_native_fixture(self):
+        fixture = Path(__file__).parent / "fixtures" / "openschematix" / "demo_project.schematix"
+        raw = fixture.read_bytes()
+        result = inspect(fixture)
+        self.assertEqual(result["file_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(len(result["sheets"]), 3)
+        self.assertEqual(len(result["components"]), 26)
+        self.assertEqual(len(result["bom_candidates"]), 5)
+        self.assertEqual(result["bom_status"], "candidate_only_not_equivalent_to_native_bom")
+        self.assertEqual(fixture.read_bytes(), raw)
+
+    def test_real_upstream_legacy_fixture(self):
+        fixture = Path(__file__).parent / "fixtures" / "openschematix" / "start_stop_latch.osch"
+        raw = fixture.read_bytes()
+        result = inspect(fixture)
+        self.assertEqual(len(result["sheets"]), 1)
+        self.assertEqual(len(result["components"]), 7)
+        self.assertEqual(len(result["bom_candidates"]), 0)
+        self.assertEqual(fixture.read_bytes(), raw)
+
+    def test_reject_archive_member_traversal(self):
+        path = self.project()
+        with zipfile.ZipFile(path, "a") as z:
+            z.writestr("../escape.json", "{}")
+        with self.assertRaisesRegex(InvalidProject, "unsafe ZIP member"):
+            inspect(path)
+
+    def test_reject_archive_member_backslash(self):
+        path = self.project()
+        with zipfile.ZipFile(path, "a") as z:
+            z.writestr("sheets\\\\other.json", "{}")
+        with self.assertRaisesRegex(InvalidProject, "unsafe ZIP member"):
+            inspect(path)
+
+    def test_reject_archive_duplicate_members(self):
+        path = self.project()
+        with zipfile.ZipFile(path, "a") as z:
+            z.writestr("manifest.json", "{}")
+        with self.assertRaisesRegex(InvalidProject, "duplicate ZIP"):
+            inspect(path)
+
+    def test_reject_missing_component_record(self):
+        path = self.legacy()
+        obj = json.loads(path.read_text())
+        obj["components"] = [None]
+        path = self.legacy(obj)
+        with self.assertRaises(InvalidProject):
+            inspect(path)
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symbolic links unavailable")
+    def test_reject_source_symlink(self):
+        target = self.legacy()
+        link = self.root / "linked.osch"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symbolic links not permitted")
+        with self.assertRaisesRegex(InvalidProject, "regular file"):
+            inspect(link)
+
+    def test_reject_excess_archive_members(self):
+        path = self.project()
+        with patch("revisionworx_integrations.openschematix.MAX_INSPECTED_MEMBERS", 3):
+            with self.assertRaisesRegex(InvalidProject, "member limit"):
+                inspect(path)
 
     def test_unknown_extension(self):
         path = self.root / "example.step"
