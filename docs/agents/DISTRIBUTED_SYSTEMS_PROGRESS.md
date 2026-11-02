@@ -112,3 +112,22 @@ No main-branch files modified; no merge performed.
 - Corrected docs/FILESYSTEM_COMPATIBILITY.md in commit `1067135066feb145fcd2ba966351f4dcfddcc945` to make explicit that the tested SQLite authority prototype does not exercise SMB/NFS file operations.
 - No production coordinator was introduced, no modifications to the Lead Architect's core branches, no merge, no release, no credentials or authenticated administration created.
 - Current blocker to additional **verified** cross-host results: an approved architecture and physical share test matrix; latest CI jobs remain pending. Next session must read the latest main orders and pending CI logs before further changes.
+
+## Session — 2026-11-01 ET, 20:40 onward: approved Windows/SMB coordinator research
+
+**Orders / review:** Read latest `main` `docs/agents/README.md`, `docs/agents/DISTRIBUTED_SYSTEMS_ORDERS.md`, existing progress log, draft PR #4, issues #5/#8 and new Director PR #4 instructions. **New architecture decision:** Director approved optional offline LAN coordinator for supported multi-user mode in issue #5, initially Windows-hosted with SMB shared content. Standalone single-user operation remains fully offline and coordinator-free. Claude recorded ADR-014 on `phase2-documents` and retains the production `CommitAuthority` seam.
+
+**Verified GitHub CI:** [run 41371802579](https://github.com/nrobertson152/RevisionWorx/actions/runs/41371802579) completed successfully. Inspected individual job logs: **14/14 authority tests passed** on each of Ubuntu Python 3.11, Ubuntu Python 3.13, Windows Python 3.11 and Windows Python 3.13. Actual `phase1-foundation` checkout: **2/2 regression probes passed**, reproducing BOTH (a) revoked writer publishing after administrative lock break (issue #8) and (b) LocalIndex rebuild containing a record newer than its saved journal cursor. These are confirmed real-code defects, not hypotheses. This CI does not test physical SMB, production coordinator, or PySide6 GUI.
+
+**New commits / deliverables:**
+- `75b53ed4` `prototype/coordinator_research.py`: isolated local-disk-only coordinator facade, persistent epoch guard, acquire/verify/release, administrative override, txid publication, ordered incremental change feed and gap detection.
+- `71c27a95` / `3dec1c5f` `prototype/test_coordinator_research.py`: eight additional research tests for acquire/release, stale writer, restart, missing/mismatched epoch guard, incremental cursor, sequence-gap quarantine and **documented same-epoch snapshot rollback vulnerability**. The rollback test intentionally shows that the simple guard is insufficient; it is NOT a production success criterion.
+- `086578e8` updated GitHub Actions matrix to run the new coordinator facade tests on Windows and Ubuntu. At this progress-log update, workflow run 41373765030 (head 3dec1c5f) was still **queued**. **Do not claim the eight new tests passed until logs confirm.**
+- `a3d57aa8` / `8117cd4b` `docs/COORDINATOR_INTEGRATION_CONTRACT.md`: proposed `CommitAuthority` interface, transaction/manifest durability, identity/authz and failure-closed requirements, recovery epoch boundary, ownership.
+- `79ec7220` `docs/WINDOWS_SMB_CERTIFICATION_PLAN.md`: physical two-host Windows/SMB rig, fault injection matrix, evidence collection and prerequisites.
+
+**Newly verified risk:** LocalIndex rebuild cursor watermark race reproduced in actual Phase 1 CI. Coordinator static epoch guard does **not** detect a same-epoch DB restore; do not use this model in production without nonrollbackable high-water fencing and an audited restore/quiescence process. Real SMB share durability and multi-file immutable content publication remain unimplemented/unverified. Authentication is not implemented; `actor_claim` is not an authenticated identity.
+
+**Coordination:** Posted updated interface proposal and discovered rollback limitation on architecture issue #5 for Claude. PR #4 remains draft. No core application files, production journal, merge, tag or release changed.
+
+**Next:** Review pending GitHub Actions run 41373765030 and fix any failures; prototype SHA-256 blob/manifest staging and crash recovery; design trusted nonrollbackable epoch/high-water restore mechanism; independently qualify Windows/SMB with two real hosts after test rig available. Keep all unsupported multi-user production claims blocked.
