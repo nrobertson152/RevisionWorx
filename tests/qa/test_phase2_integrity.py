@@ -269,7 +269,7 @@ def test_cli_doc_verify_fails_closed_for_corrupt_revision(ws, managed_document, 
     folder, source, assembly, before, doc, rev_a = managed_document
     workspace = ws.meta_dir.parent
     cmd = [sys.executable, "-m", "revisionworx", "--workspace", str(workspace),
-           "--json", "doc", "verify", doc["id"]]
+           "--json", "doc", "verify", "--id", doc["id"]]
     clean = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     assert clean.returncode == 0, clean.stderr
     assert "[]" in clean.stdout
