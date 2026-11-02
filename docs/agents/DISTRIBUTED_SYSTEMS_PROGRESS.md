@@ -279,3 +279,35 @@ Earlier runs 41388921867 and 41389001909 failed because our newly authored third
 **Unresolved hard gates:** independently nonrollbackable epoch/high-water root; lossless backup restore/journal/blob reconciliation; real Windows authenticated admin and protected transport; physical **two-host Windows/SMB** correctness, cache and power-loss tests (NONE EXECUTED); bundled Windows/Linux desktop artifact smoke; production LAN CommitAuthority integration and safe mode migration. Research SQLite currently uses local disk only and does not make SMB content durable or atomic with a journal.
 
 **Repository boundaries / next steps:** Maintain draft PR #4; no modifications to production Workspace, LocalIndex, documents.py, Claude branches or other repositories; no merges, retargets, force pushes or releases. Await Claude's ADR-017 full-command txid identity decision and independent QA's final ADR-019 acceptance. No speculative production coordinator service will be built without architecture approval.
+
+
+## Director follow-on completion, 2026-11-01 ET / 2026-11-02 early UTC
+
+Read latest main agent orders, README, PARALLEL_ASSIGNMENTS and Claude resume handoff, then current PR #4 [instruction 6569261694](https://github.com/nrobertson152/RevisionWorx/pull/4#issuecomment-6569261694), PR #7, issues #5/#8/#9/#10 and live CI. Scope remains solely distributed research/shared-filesystem-protocol. Claude owns actual Workspace/CommitAuthority; QA owns independent final acceptance.
+
+### Commits and tests added
+
+- 90a5aa7f: strict positive expected-failure assertion: unreadable orphan may not admit a new writer when a displaced owner was preflighted.
+- 9df169bd: explicit passing UNSAFE demonstration on frozen d656884, Ubuntu and Windows: B and C both publish effective records after B's orphan bytes become unreadable; B's token was never revoked. Added concurrent acquirer and orphan crash/restart coverage, changed/reordered/check-only txid tests, four adapter contract tests.
+- 3b9b478e: prototype/request_identity_research.py and 16 invariant tests for proposed full ordered request identity; docs/ADR017_FULL_REQUEST_IDENTITY_PROPOSAL.md with versioned digest and legacy-txid migration warning; matrix extended.
+- b2791702: atomic SQLite batch commit against concurrent administrator override, verified fail-closed generation revocation; mislabeled malformed orphan positive test explicitly renamed as an UNSAFE control; persistent counterexample doc.
+- 756c218d: two exact-source Ubuntu/Windows candidate acceptance jobs pinned to Claude's 2a2804820d4aca48b50026bdb7edfe8c241b1866, with positive new ADR-017/019 fixes and strict negative legacy/order/audit recovery oracles. Upstream new PreconditionIdentityContract inherited unchanged in adapter.
+- This progress update and handoff docs are documentation-only and do not trigger research matrix CI.
+
+### Independently verified
+
+**[GitHub Actions run 41391444478](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391444478) SUCCESS in all 10 jobs.** Research overlay 756c218ded575b665b2119e480b075330713268b; exact current source 2a2804820d4aca48b50026bdb7edfe8c241b1866. Local research 80/80 PASS on EACH Ubuntu 3.11, Ubuntu 3.13, Windows 3.11, Windows 3.13. Actual corrected Phase 2 Ubuntu/Windows Python 3.13: 7 tests each, **3 expected failures** (audited recovery crash, overall operations interleaving, legacy-txid proof), zero unexpected failures. Original/new unchanged upstream contract via test-only adapter: 16/16 PASS on Ubuntu Python 3.13. Frozen d656884 Ubuntu/Windows Python 3.13: 18 tests each, 4 expected failures and one explicitly passing UNSAFE malformed orphan reproduction; those are HISTORIC, not current acceptance. Old Phase 1 unsafe probes 2/2 reproduced.
+
+Research command: python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator prototype.test_record_batch_research prototype.test_request_identity_research.
+Candidate command: REVISIONWORX_PHASE2_CHECKOUT=/path/to/2a28048 python -m unittest -v prototype.test_phase2_new_fixes_acceptance.
+Contract command: REVISIONWORX_PHASE2_CHECKOUT=/path/to/2a28048 python -m pytest -v -q prototype/test_phase2_contract_adapter.py.
+
+### Findings / coordination
+
+P0 original d656884 malformed-orphan dual effective writer proof [CI 41390605906](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390605906) reported [issue #10 6569351511](https://github.com/nrobertson152/RevisionWorx/issues/10#issuecomment-6569351511) and PR #7; Claude corrected automatic acquisition in 2a28048. Our corrected-candidate local positive oracle PASS on both OS, but operator must externally confirm old writer stopped.
+
+**P1 new audited-recovery crash gap:** clear_orphaned_release moves .releasing evidence before journal audit. Fault-injected death leaves no audit and permits later writable acquisition. Both OS positive oracles deliberately expected failure. Reported to Claude [issue #10 6569464980](https://github.com/nrobertson152/RevisionWorx/issues/10#issuecomment-6569464980) and [PR #7 6569467656](https://github.com/nrobertson152/RevisionWorx/pull/7#issuecomment-6569467656). Requested audit-first idempotent recovery.
+
+P1/P2 ADR-017 remaining identity policy: current separate checks array does not encode check/write interleaving; historical journal without checks cannot verify complete old request. Request to Claude [PR #7 6569414410](https://github.com/nrobertson152/RevisionWorx/pull/7#issuecomment-6569414410), executable v2 canonical proposal and migration note. Current Phase 2 passes positive changed/reordered/check-only expectation tests and research adapter new conformance.
+
+Remaining severe blockers: both SQLite+ordinary witness may be rolled back together; no independently nonrollbackable trust root, authentic Windows LAN administration, authenticated transport, approved server, physical two-host SMB and power-cut durability (NONE EXECUTED), standalone/coordinator migration, native installed GUI or Director-authorized merges/releases. PR #4 stays draft, no production code/other agent branch modified. Await Claude/QA on new audit crash gap and versioned full txid identity policy.

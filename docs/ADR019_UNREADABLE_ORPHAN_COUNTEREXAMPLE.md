@@ -32,3 +32,10 @@ That presumption is false: B may have passed _check_lock_still_held while writer
 - QA should first preserve the independent strict positive oracle: the two effective records must NEVER coexist after a new holder commits. Run on Linux and Windows at exact corrected Phase 2 SHA, test multiple restarts/unknown owner files, and report whether the correction sacrifices availability. Actual SMB server caching, share ACLs and power-loss behavior remain NOT EXECUTED.
 
 **Ownership:** Claude fixes production ADR-019. QA performs independent safety acceptance. Distributed Systems only supplies reproducible local protocol counterexample and design constraints.
+
+
+## Candidate correction 2a28048 and residual audit gap
+
+Claude's 2a2804820d4aca48b50026bdb7edfe8c241b1866 refuses acquisition on unreadable/tokenless .releasing-* evidence and requires reasoned administrator clear-orphan after confirming the prior writer stopped. A local positive oracle on Windows and Ubuntu Python 3.13 in [run 41391444478](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391444478) passed repeated acquisition refusal, intact malformed bytes, required reason and post-clear recovery. The earlier two-effective-writer reproduction is frozen only against d656884.
+
+A NEW distinct fault injection found that current clear-orphan moves evidence out of the .releasing-* namespace BEFORE publishing its workspace.orphan.clear audit. Death immediately after the move leaves no orphan and no audit; a new writer can save. The independent positive safety oracle remains an expected failure on BOTH local OS. This violates audited recovery guarantees and requires an audit-first, restart-safe idempotent reconciliation protocol. See [issue #10](https://github.com/nrobertson152/RevisionWorx/issues/10#issuecomment-6569464980). If the unknown old writer has not actually stopped despite operator assertion, manual clearance also cannot guarantee its already-preflighted commits are fenced; that requires an additional trusted barrier or process-stop proof. Physical two-host SMB certification remains NOT EXECUTED.
