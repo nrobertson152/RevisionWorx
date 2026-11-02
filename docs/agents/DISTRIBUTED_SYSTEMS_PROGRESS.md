@@ -103,3 +103,12 @@ No main-branch files modified; no merge performed.
 2. Implement isolated multi-file immutable blob/manifest crash-recovery experiments with ordered journal and txid reconciliation; evaluate blob-store and authority DB acknowledgment boundary.
 3. Prototype backup-restore epoch/high-water prevention and administrative authorization semantics, without integrating into production.
 4. Define exact cross-host SMB/Samba/NFS qualification matrix after Project Director makes issue #5 architecture decision.
+
+### Final session coordination and verification checkpoint (2026-11-01 ET)
+
+- Reviewed completed GitHub Actions job logs from **run 41371405600**: four isolated authority matrix jobs succeeded (12 tests per environment: Windows/Python 3.11, Windows/Python 3.13, Ubuntu/Python 3.11, Ubuntu/Python 3.13). The real Phase 1 regression job succeeded (**1 test**, Ubuntu/Python 3.13.17), demonstrating the revoked writer's actual journal append. This is a confirmed source-and-runtime defect, not merely a theoretical race.
+- GitHub Actions runs for the latest **14-test** edition and the separate real Phase 1 LocalIndex rebuild watermark probe were still **queued**, so no newer cross-platform or cache-probe result is claimed. Pending runs include 41371619563 and 41371528485. Local Python 3.13.5 execution remains 14 passed, two opt-in Phase 1 tests skipped.
+- Opened GitHub issue #8 for the confirmed Phase 1 stale-writer post-revocation journal publication. Commented on architecture issue #5, and both Claude PRs #6 and #7, with verified evidence, ownership boundaries, and unresolved risks. Updated own draft PR #4.
+- Corrected docs/FILESYSTEM_COMPATIBILITY.md in commit `1067135066feb145fcd2ba966351f4dcfddcc945` to make explicit that the tested SQLite authority prototype does not exercise SMB/NFS file operations.
+- No production coordinator was introduced, no modifications to the Lead Architect's core branches, no merge, no release, no credentials or authenticated administration created.
+- Current blocker to additional **verified** cross-host results: an approved architecture and physical share test matrix; latest CI jobs remain pending. Next session must read the latest main orders and pending CI logs before further changes.
