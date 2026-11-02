@@ -121,3 +121,18 @@ The fixture additionally simulates authority disconnection: `publish`, checkout 
 - Keep standalone single-user mode coordinator-free; mode conversion cannot permit concurrent writable authorities.
 
 Issue #10 also needs a release-ownership rule: the current standalone `close()` token recheck immediately followed by pathname `unlink()` can race with an administrative revocation and successor acquisition. The old owner can delete the successor's lock. See the [independent Phase 2 probe](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387552435). A separate recheck cannot make name-based deletion conditional on file identity; Claude owns the production correction.
+
+
+## ADR-017 exact upstream contract challenge — verified 2026-11-01 ET
+
+Claude published the actual application-facing CommitAuthority Protocol in revisionworx/authority.py at Phase 2 d656884b, and the reusable eight-case inherited suite in tests/contract_commit_authority.py. The isolated test adapter in prototype/test_phase2_contract_adapter.py **inherits that original contract unchanged** and adds three targeted cases. [CI 41389551713](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389551713) directly executed **11/11 passes** on Ubuntu Python 3.13.17.
+
+The test-only adapter:
+- maps RecordPut/Delete/Check to a serialized witnessed SQLite batch and checks per-record expect_rev and authenticated lease generation in one BEGIN IMMEDIATE transaction;
+- provides an ordered seq and _rev, durable txid UNIQUE lookup, lost-ack retry across process restart, and error classes mapped to the upstream ConflictError, TxidReuseError and LockLostError;
+- simulates one workspace lease per batch and locally verifies hashes for a separate manifest, but does **not** accept nonempty application blob_refs, implement multiple resource leases, or provide an authenticated network transport;
+- currently reads its extra resource-level expected revision before entering the final batch transaction, which may reject a concurrent unconditional put more conservatively than the upstream interface. This is an explicitly documented adapter mismatch, not a hidden portability guarantee.
+
+**New source-level contract gap (P1):** the actual Phase 2 file journal compares a txid replay using the journaled writes and blob_refs, but excludes submitted RecordCheck operations. An earlier successful txid can therefore be replayed using the same writes with a changed or now-impossible RecordCheck and still return the earlier sequence. Actual source tests on **both Ubuntu and Windows Python 3.13** recorded one positive idempotency assertion and one **intentional expected failure** for altered checks ([CI 41389551713](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389551713)). The research adapter *does* reject changed checks. This is a changed-command acknowledgment ambiguity; it has not been demonstrated to cause a second write. Claude must decide whether the canonical request identity includes every precondition. Recommended: include them even when RecordCheck is not a journaled mutation.
+
+The upstream inherited suite does not cover this gap, a nonempty blob manifest, session-scope authorization of txid outcome, or crash/restart recovery with an independently nonrollbackable witness. Those requirements must receive their own acceptance cases before a live coordinator is connected.
