@@ -31,11 +31,12 @@ def _setup_committed_request(tmp_path):
     target = "root_" + "c" * 32
     txid = "d" * 32
     op_name = "qa.txid.check.identity"
+    guard_revs = {}
 
     def operations():
         return [
-            RecordCheck("root", guard_a, expect_rev=1),
-            RecordCheck("root", guard_b, expect_rev=1),
+            RecordCheck("root", guard_a, expect_rev=guard_revs[guard_a]),
+            RecordCheck("root", guard_b, expect_rev=guard_revs[guard_b]),
             RecordPut("root", target, {"id": target, "name": "one durable change"},
                       expect_rev=0),
         ]
@@ -48,16 +49,19 @@ def _setup_committed_request(tmp_path):
                 RecordPut("root", guard_b, {"id": guard_b, "name": "guard B"}, expect_rev=0),
             ],
         )
+        guard_revs[guard_a] = writer.get("root", guard_a)["_rev"]
+        guard_revs[guard_b] = writer.get("root", guard_b)["_rev"]
         seq = writer.commit(op_name, operations(), txid=txid)
         assert writer.transaction_outcome(txid) == {"state": "committed", "seq": seq}
         assert writer.get("root", target)["name"] == "one durable change"
         assert writer.verify()["problems"] == []
-    return location, guard_a, guard_b, target, txid, op_name, operations, seq
+        target_revision = writer.get("root", target)["_rev"]
+    return location, guard_a, guard_b, target, txid, op_name, operations, seq, target_revision
 
 
 def test_identical_txid_with_identical_checks_replays_after_restart(tmp_path):
     """Positive control: genuine lost-ACK retry retains prior result exactly."""
-    location, _, _, target, txid, op, operations, seq = _setup_committed_request(tmp_path)
+    location, _, _, target, txid, op, operations, seq, target_revision = _setup_committed_request(tmp_path)
 
     with Workspace.open(location, writable=True) as writer:
         before = writer.head_seq()
@@ -65,7 +69,7 @@ def test_identical_txid_with_identical_checks_replays_after_restart(tmp_path):
         assert writer.commit(op, operations(), txid=txid) == seq
         assert writer.head_seq() == before
         assert writer.transaction_outcome(txid) == {"state": "committed", "seq": seq}
-        assert writer.get("root", target)["_rev"] == 1
+        assert writer.get("root", target)["_rev"] == target_revision
         assert writer.verify()["problems"] == []
 
 
@@ -86,7 +90,7 @@ def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, mod
     exceptions remain failures; a real TxidReuseError is XPASS until the marker
     is removed after independent acceptance of Claude's corrected production.
     """
-    location, a, b, target, txid, op, operations, seq = _setup_committed_request(tmp_path)
+    location, a, b, target, txid, op, operations, seq, target_revision = _setup_committed_request(tmp_path)
     changed = operations()
     if modification == "alter_checked_revision":
         changed[0] = RecordCheck("root", a, expect_rev=0)
