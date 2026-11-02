@@ -150,9 +150,11 @@ class Controller:
         with self._write() as ws:
             return projects.create_project(ws, np)
 
-    def update_project(self, project_id: str, **changes) -> dict:
+    def update_project(self, project_id: str, expected_rev: int | None, **changes) -> dict:
+        """``expected_rev`` is the ``_rev`` of the record the user was shown; a newer change by
+        someone else raises ConflictError instead of being overwritten."""
         with self._write() as ws:
-            return projects.update_project(ws, project_id, **changes)
+            return projects.update_project(ws, project_id, expected_rev=expected_rev, **changes)
 
     # ------------------------------------------------------------------ background jobs
     def cancel(self) -> None:
@@ -214,7 +216,11 @@ class Controller:
 
 def describe_error(exc: BaseException) -> str:
     """Actionable, human-readable error text for dialogs."""
-    from ..workspace import WorkspaceLockedError
+    from ..workspace import CommittedNotApplied, ConflictError, WorkspaceLockedError
+    if isinstance(exc, ConflictError):
+        return f"{exc}\n\nSomeone else changed this item while you were viewing it. Reload and reapply your change."
+    if isinstance(exc, CommittedNotApplied):
+        return f"Your change was saved.\n\n{exc}"
     if isinstance(exc, WorkspaceLockedError):
         return (f"{exc}\n\nAnother RevisionWorx session is saving changes. Try again in a moment. "
                 "If that session crashed, an administrator can release the lock with "

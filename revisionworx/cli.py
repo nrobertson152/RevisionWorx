@@ -154,7 +154,7 @@ def cmd_project_set(args):
                                  ("description", args.description), ("status", args.status),
                                  ("mode", args.mode)) if v is not None}
     with _open(args, True) as ws:
-        rec = projects.update_project(ws, args.id, **changes)
+        rec = projects.update_project(ws, args.id, expected_rev=args.expect_rev, **changes)
         _emit(args, rec, f"Updated {_project_line(rec)}")
 
 
@@ -169,6 +169,18 @@ def cmd_index_rebuild(args):
     with _open(args, False) as ws, open_index(ws, args.cache_dir) as idx:
         seq = idx.rebuild()
         _emit(args, {"journal_seq": seq, **idx.coverage()}, f"Rebuilt local index at journal entry {seq}")
+
+
+def cmd_verify(args):
+    with _open(args, args.repair) as ws:
+        report = ws.verify(repair=args.repair)
+    lines = [f"Verified journal up to entry {report['head_seq']}: {len(report['problems'])} problem(s)"]
+    lines += [f"  {p}" for p in report["problems"][:200]]
+    if report["repaired"]:
+        lines.append("Records were rebuilt from the journal; displaced files are in .revisionworx/quarantine/.")
+    _emit(args, report, "\n".join(lines))
+    if report["problems"] and not report["repaired"]:
+        raise SystemExit(1)
 
 
 def cmd_lock_show(args):
@@ -228,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     for opt in ("name", "number", "customer", "description"):
         s.add_argument(f"--{opt}")
     s.add_argument("--status", choices=("active", "archived")); s.add_argument("--mode", choices=projects.MODES)
+    s.add_argument("--expect-rev", type=int, help="fail if the project changed since this _rev")
     s.set_defaults(fn=cmd_project_set)
 
     fl = sub.add_parser("files").add_subparsers(dest="sub", required=True)
@@ -236,6 +249,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ix = sub.add_parser("index").add_subparsers(dest="sub", required=True)
     ix.add_parser("rebuild").set_defaults(fn=cmd_index_rebuild)
+
+    s = sub.add_parser("verify", help="check records against the journal (admin)")
+    s.add_argument("--repair", action="store_true", help="rebuild records from the journal")
+    s.set_defaults(fn=cmd_verify)
 
     lk = sub.add_parser("lock").add_subparsers(dest="sub", required=True)
     lk.add_parser("show").set_defaults(fn=cmd_lock_show)

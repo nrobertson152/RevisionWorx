@@ -6,7 +6,7 @@ import pytest
 
 import proc_helpers
 from revisionworx import atomicio
-from revisionworx.workspace import (FORMAT_VERSION, ReadOnlyError, RecordPut, Workspace,
+from revisionworx.workspace import (FORMAT_VERSION, CommittedNotApplied, ReadOnlyError, RecordPut, Workspace,
                                     WorkspaceCorruptError, WorkspaceError, WorkspaceFormatError,
                                     WorkspaceLockedError)
 
@@ -33,10 +33,10 @@ def test_newer_format_is_refused_without_changes(share):
 def test_commit_and_read_back(share):
     with Workspace.create(share, "A") as ws:
         seq = ws.commit("t", [RecordPut("project", "prj_" + "a" * 32, {"name": "x"})])
-        assert ws.get("project", "prj_" + "a" * 32) == {"name": "x"}
+        assert ws.get("project", "prj_" + "a" * 32) == {"name": "x", "_rev": seq}
         assert ws.head_seq() == seq == ws.applied_seq()
     with Workspace.open(share) as ro:
-        assert ro.get("project", "prj_" + "a" * 32) == {"name": "x"}
+        assert ro.get("project", "prj_" + "a" * 32) == {"name": "x", "_rev": seq}
         with pytest.raises(ReadOnlyError):
             ro.commit("t", [])
 
@@ -116,19 +116,19 @@ def test_crash_after_journal_before_apply_is_recovered(share, monkeypatch):
     def crash(entry):
         raise RuntimeError("simulated power loss")
     monkeypatch.setattr(ws, "_apply", crash)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(CommittedNotApplied):  # caller is told the change IS saved
         ws.commit("t", [RecordPut("project", rid, {"name": "survives"})])
     monkeypatch.undo()
     lock_token = Workspace.read_writer_lock(share)["token"]
     # A reader immediately sees the committed change through the journal overlay.
     with Workspace.open(share) as reader:
         assert reader.applied_seq() < reader.head_seq()
-        assert reader.get("project", rid) == {"name": "survives"}
+        assert reader.get("project", rid)["name"] == "survives"
         assert rid in reader.list("project")
     Workspace.break_writer_lock(share, lock_token, reason="test crash")
     with Workspace.open(share, writable=True) as w2:
         assert w2.applied_seq() == w2.head_seq()
-        assert atomicio.read_json(share / ".revisionworx" / "records" / "project" / f"{rid}.json") == {"name": "survives"}
+        assert atomicio.read_json(share / ".revisionworx" / "records" / "project" / f"{rid}.json")["name"] == "survives"
     ws._lock_token = None
 
 

@@ -366,7 +366,7 @@ class App:
             return
         new = "active" if rec["status"] == "archived" else "archived"
         try:
-            self.ctl.update_project(pid, status=new)
+            self.ctl.update_project(pid, rec.get("_rev"), status=new)
         except Exception as exc:
             messagebox.showerror("Cannot change status", describe_error(exc))
         self.refresh()

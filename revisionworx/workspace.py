@@ -20,10 +20,22 @@ Commit protocol (see docs/ARCHITECTURE.md, ADR-004):
   5. ``state.json`` is advanced.
 A crash between 3 and 5 is repaired by replaying entries above ``applied_seq`` on next open.
 Readers overlay unapplied entries in memory so they never see a state older than the journal.
+
+Additional guards (Phase 1 reliability review, ADR-008):
+  * every materialised record carries ``_rev`` = sequence of the entry that last wrote it; a
+    put/delete may state ``expect_rev`` (0 = must not exist) and the whole entry is rejected with
+    :class:`ConflictError` if any expectation fails (optimistic concurrency, no lost updates);
+  * before publishing, the writer re-reads the lock and refuses with :class:`LockLostError` if its
+    token is gone (administrative break); each entry records ``writer_token``;
+  * each entry carries a SHA-256 ``digest`` of its canonical content, checked on every read;
+  * a failure after the commit point raises :class:`CommittedNotApplied`; callers may supply a
+    ``txid`` and later ask :meth:`Workspace.transaction_outcome`.
 """
 from __future__ import annotations
 
 import getpass
+import hashlib
+import json
 import os
 import re
 import socket
@@ -42,6 +54,14 @@ META_DIRNAME = ".revisionworx"
 _SEQ_RE = re.compile(r"^(\d{20})\.json$")
 _ID_RE = re.compile(r"^[a-z]{2,8}_[0-9a-f]{32}$|^[a-z0-9][a-z0-9_.-]{0,63}$")
 KINDS = {"root", "project", "template", "settings", "audit"}
+REV_FIELD = "_rev"
+
+
+def register_kind(kind: str) -> None:
+    """Allow a later subsystem (e.g. Phase 2 documents) to store its own record kind."""
+    if not re.match(r"^[a-z]{2,16}$", kind):
+        raise ValueError(f"invalid record kind {kind!r}")
+    KINDS.add(kind)
 
 
 class WorkspaceError(Exception):
@@ -68,6 +88,43 @@ class ReadOnlyError(WorkspaceError):
     pass
 
 
+class ConflictError(WorkspaceError):
+    """A record changed since the caller read it (or exists when it must not). Nothing was written."""
+
+    def __init__(self, kind: str, rid: str, expected: int, actual: int):
+        self.kind, self.id, self.expected, self.actual = kind, rid, expected, actual
+        what = "already exists" if expected == 0 else (
+            "no longer exists" if actual == 0 else "was changed by someone else")
+        super().__init__(f"{kind} {rid} {what} (expected revision {expected}, found {actual}); "
+                         "reload and try again")
+
+
+class LockLostError(WorkspaceError):
+    """This handle's writer lock was broken or replaced; it must not write any more."""
+
+
+class CommittedNotApplied(WorkspaceError):
+    """The change IS durably committed (journal entry exists) but materialising it failed.
+
+    It will be completed automatically on the next writable open. Callers must not retry it as if
+    it had failed."""
+
+    def __init__(self, seq: int, txid: str, cause: BaseException):
+        self.seq, self.txid, self.cause = seq, txid, cause
+        super().__init__(f"change {seq} (tx {txid}) is saved, but updating derived records failed: "
+                         f"{cause}. It will be completed when the workspace is next opened for writing.")
+
+
+def entry_digest(entry: dict) -> str:
+    body = {k: v for k, v in entry.items() if k != "digest"}
+    canon = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def strip_rev(data: dict) -> dict:
+    return {k: v for k, v in data.items() if k != REV_FIELD}
+
+
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
@@ -89,9 +146,26 @@ class RecordPut:
     kind: str
     id: str
     data: dict
+    expect_rev: int | None = None  # None: no check; 0: must not exist; n: must be at revision n
 
     def as_json(self) -> dict:
-        return {"kind": self.kind, "id": self.id, "data": self.data}
+        d = {"kind": self.kind, "id": self.id, "data": strip_rev(self.data)}
+        if self.expect_rev is not None:
+            d["expect_rev"] = self.expect_rev
+        return d
+
+
+@dataclass
+class RecordDelete:
+    kind: str
+    id: str
+    expect_rev: int | None = None
+
+    def as_json(self) -> dict:
+        d = {"kind": self.kind, "id": self.id, "delete": True}
+        if self.expect_rev is not None:
+            d["expect_rev"] = self.expect_rev
+        return d
 
 
 class Workspace:
@@ -266,6 +340,8 @@ class Workspace:
             raise WorkspaceCorruptError(f"journal entry {seq} is unreadable: {exc}") from exc
         if entry.get("seq") != seq:
             raise WorkspaceCorruptError(f"journal entry {path.name} claims seq {entry.get('seq')}")
+        if "digest" in entry and entry["digest"] != entry_digest(entry):
+            raise WorkspaceCorruptError(f"journal entry {seq} fails its SHA-256 digest check (altered?)")
         return entry
 
     def entries_after(self, seq: int) -> Iterable[dict]:
@@ -298,10 +374,14 @@ class Workspace:
         return count
 
     def _apply(self, entry: dict) -> None:
-        for put in entry["records"]:
-            kind_dir = self.meta_dir / "records" / put["kind"]
+        for op in entry["records"]:
+            kind_dir = self.meta_dir / "records" / op["kind"]
             kind_dir.mkdir(exist_ok=True)
-            atomicio.atomic_write_json(kind_dir / f"{put['id']}.json", put["data"])
+            target = kind_dir / f"{op['id']}.json"
+            if op.get("delete"):
+                target.unlink(missing_ok=True)
+            else:
+                atomicio.atomic_write_json(target, {**op["data"], REV_FIELD: entry["seq"]})
         atomicio.atomic_write_json(self.meta_dir / "state.json", {"applied_seq": entry["seq"]})
 
     def _require_writable(self) -> None:
@@ -310,27 +390,136 @@ class Workspace:
         if not self.writable:
             raise ReadOnlyError("workspace is open read-only")
 
-    def commit(self, op: str, puts: list[RecordPut], blob_refs: list[str] | None = None) -> int:
-        """Durably apply a set of record puts as one journal entry. Returns its sequence number."""
+    def _check_lock_still_held(self) -> None:
+        try:
+            holder = atomicio.read_json(self.meta_dir / "locks" / "writer.lock")
+        except (OSError, ValueError):
+            holder = None
+        if not holder or holder.get("token") != self._lock_token:
+            self.writable = False
+            raise LockLostError("this session no longer holds the workspace writer lock (it was broken "
+                                "by an administrator or replaced); reopen the workspace")
+
+    def _current_rev(self, kind: str, rid: str) -> int:
+        data = self.get(kind, rid)
+        return int(data.get(REV_FIELD, 0)) if data is not None else 0
+
+    def commit(self, op: str, ops: list, blob_refs: list[str] | None = None, txid: str | None = None) -> int:
+        """Durably apply record puts/deletes as one journal entry. Returns its sequence number.
+
+        Raises ConflictError (nothing written) if an ``expect_rev`` does not hold, LockLostError if
+        the writer lock was lost, and CommittedNotApplied if the entry was committed but could not be
+        materialised."""
         self._require_writable()
-        for put in puts:
-            if put.kind not in KINDS:
-                raise ValueError(f"unknown record kind {put.kind!r}")
-            if not _ID_RE.match(put.id):
-                raise ValueError(f"invalid record id {put.id!r}")
+        for item in ops:
+            if item.kind not in KINDS:
+                raise ValueError(f"unknown record kind {item.kind!r}")
+            if not _ID_RE.match(item.id):
+                raise ValueError(f"invalid record id {item.id!r}")
+        if txid is not None and not re.match(r"^[0-9a-f]{32}$", txid):
+            raise ValueError("txid must be 32 lowercase hex characters")
         if self.applied_seq() != self.head_seq():
             self.recover()
+        self._check_lock_still_held()
+        for item in ops:
+            if item.expect_rev is not None:
+                actual = self._current_rev(item.kind, item.id)
+                if actual != item.expect_rev:
+                    raise ConflictError(item.kind, item.id, item.expect_rev, actual)
         seq = self.head_seq() + 1
-        entry = {"seq": seq, "txid": uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
-                 "op": op, "records": [p.as_json() for p in puts], "blobs": blob_refs or []}
+        entry = {"seq": seq, "txid": txid or uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
+                 "op": op, "records": [p.as_json() for p in ops], "blobs": blob_refs or [],
+                 "writer_token": self._lock_token}
+        entry["digest"] = entry_digest(entry)
         try:
             atomicio.publish_exclusive(self._journal_dir() / f"{seq:020d}.json", atomicio.dumps_json(entry))
         except ExclusiveCreateError as exc:
             # Another process wrote this sequence: the single-writer invariant was violated.
             raise WorkspaceCorruptError(
                 f"journal entry {seq} was created by another writer; refusing to continue") from exc
-        self._apply(entry)
+        try:
+            self._apply(entry)
+        except BaseException as exc:  # commit point already passed: report it as committed
+            raise CommittedNotApplied(seq, entry["txid"], exc) from exc
         return seq
+
+    def transaction_outcome(self, txid: str) -> dict:
+        """Durable outcome of a transaction the caller tagged with ``txid``."""
+        for s in reversed(self.journal_seqs()):
+            entry = self.read_entry(s)
+            if entry.get("txid") == txid:
+                return {"state": "committed", "seq": s}
+        return {"state": "not-found"}
+
+    def verify(self, repair: bool = False) -> dict:
+        """Replay the whole journal and compare with the materialised records.
+
+        Reports entries without digests, records that differ from the journal, records missing, and
+        record files the journal never wrote. With ``repair`` (writable only), rewrites records from
+        the journal, moves unexplained files to ``quarantine/`` (never deletes them) and journals an
+        audit record of what was repaired."""
+        if repair:
+            self._require_writable()
+            self.recover()
+        expected: dict[tuple[str, str], dict | None] = {}
+        problems: list[dict] = []
+        for s in self.journal_seqs():
+            entry = self.read_entry(s)
+            if "digest" not in entry:
+                problems.append({"problem": "entry-without-digest", "seq": s})
+            for item in entry["records"]:
+                key = (item["kind"], item["id"])
+                expected[key] = None if item.get("delete") else {**item["data"], REV_FIELD: s}
+            for ref in entry.get("blobs", []):
+                kind, blob_id = ref.split("/", 1)
+                if not (self.meta_dir / "blobs" / kind / f"{blob_id}.json").is_file():
+                    problems.append({"problem": "missing-blob", "seq": s, "blob": ref})
+        on_disk: dict[tuple[str, str], Path] = {}
+        records = self.meta_dir / "records"
+        for kind_dir in sorted(records.iterdir()) if records.is_dir() else []:
+            for f in sorted(kind_dir.iterdir()):
+                if f.name.endswith(".json") and not f.name.startswith("."):
+                    on_disk[(kind_dir.name, f.name[:-5])] = f
+        for key, data in expected.items():
+            path = on_disk.pop(key, None)
+            if data is None:
+                if path is not None:
+                    problems.append({"problem": "deleted-but-present", "kind": key[0], "id": key[1]})
+                    on_disk[key] = path
+                continue
+            if path is None:
+                problems.append({"problem": "missing", "kind": key[0], "id": key[1]})
+                continue
+            try:
+                actual = atomicio.read_json(path)
+            except ValueError:
+                actual = None
+            if actual != data:
+                problems.append({"problem": "mismatch" if actual is not None else "unreadable",
+                                 "kind": key[0], "id": key[1]})
+        for key in on_disk:
+            if expected.get(key, "absent") == "absent":
+                problems.append({"problem": "not-in-journal", "kind": key[0], "id": key[1]})
+        report = {"head_seq": self.head_seq(), "problems": problems, "repaired": False}
+        fixable = [p for p in problems if p["problem"] in
+                   ("mismatch", "unreadable", "missing", "not-in-journal", "deleted-but-present")]
+        if repair and fixable:
+            quarantine = self.meta_dir / "quarantine" / uuid.uuid4().hex[:12]
+            for p in fixable:
+                key = (p["kind"], p["id"])
+                path = self.meta_dir / "records" / p["kind"] / f"{p['id']}.json"
+                if p["problem"] in ("not-in-journal", "deleted-but-present", "mismatch", "unreadable") \
+                        and path.exists():
+                    quarantine.mkdir(parents=True, exist_ok=True)
+                    os.replace(path, quarantine / f"{p['kind']}__{p['id']}.json")
+                if expected.get(key) is not None:
+                    path.parent.mkdir(exist_ok=True)
+                    atomicio.atomic_write_json(path, expected[key])
+            self.commit("workspace.verify.repair", [RecordPut("audit", new_id("aud"), {
+                "event": "records-repaired", "problems": fixable, "time": now_iso(), "by": current_actor(),
+                "quarantine": str(quarantine.relative_to(self.meta_dir)) if quarantine.exists() else None})])
+            report["repaired"] = True
+        return report
 
     # ------------------------------------------------------------------ blobs
     def write_blob(self, kind: str, data: Any) -> str:
@@ -348,11 +537,12 @@ class Workspace:
         return atomicio.read_json(self.meta_dir / "blobs" / kind / f"{blob_id}.json")
 
     # ------------------------------------------------------------------ reads
-    def _pending_overlay(self) -> dict[tuple[str, str], dict]:
-        overlay: dict[tuple[str, str], dict] = {}
+    def _pending_overlay(self) -> dict[tuple[str, str], dict | None]:
+        overlay: dict[tuple[str, str], dict | None] = {}
         for entry in self.entries_after(self.applied_seq()):
-            for put in entry["records"]:
-                overlay[(put["kind"], put["id"])] = put["data"]
+            for item in entry["records"]:
+                overlay[(item["kind"], item["id"])] = (
+                    None if item.get("delete") else {**item["data"], REV_FIELD: entry["seq"]})
         return overlay
 
     def get(self, kind: str, rid: str) -> dict | None:
@@ -376,12 +566,15 @@ class Workspace:
                     out[entry.name[:-5]] = atomicio.read_json(Path(entry.path))
         for (k, rid), data in self._pending_overlay().items():
             if k == kind:
-                out[rid] = data
+                if data is None:
+                    out.pop(rid, None)
+                else:
+                    out[rid] = data
         return out
 
     def settings(self) -> dict:
         s = default_settings()
-        s.update(self.get("settings", "workspace") or {})
+        s.update(strip_rev(self.get("settings", "workspace") or {}))
         return s
 
 

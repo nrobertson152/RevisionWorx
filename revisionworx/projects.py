@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import paths, scan
-from .workspace import RecordPut, Workspace, WorkspaceError, current_actor, new_id, now_iso
+from .workspace import RecordPut, Workspace, WorkspaceError, current_actor, new_id, now_iso, strip_rev
 
 MODES = ("indexed", "managed")
 PLATFORM_KEY = "windows" if os.name == "nt" else "posix"
@@ -41,7 +41,7 @@ def add_root(ws: Workspace, name: str, path: Path, other_platform_path: str | No
         paths_map["posix" if PLATFORM_KEY == "windows" else "windows"] = other_platform_path
     rid = new_id("root")
     ws.commit("root.add", [RecordPut("root", rid, {"id": rid, "name": name, "paths": paths_map,
-                                                   "created": now_iso()})])
+                                                   "created": now_iso()}, expect_rev=0)])
     return rid
 
 
@@ -108,7 +108,7 @@ def validate_template(t: dict) -> dict:
 
 
 def save_template(ws: Workspace, template: dict) -> str:
-    t = validate_template(template)
+    t = validate_template(strip_rev(template))
     ws.commit("template.save", [RecordPut("template", t["id"], t)])
     return t["id"]
 
@@ -184,7 +184,7 @@ def create_project(ws: Workspace, np: NewProject, allow_duplicate_number: bool =
     template = list_templates(ws).get(np.template_id)
     if template is None:
         raise ProjectError(f"unknown template {np.template_id!r}")
-    template = validate_template(template)
+    template = validate_template(strip_rev(template))
 
     target = paths.resolve_under_root(base, rel)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -206,7 +206,8 @@ def create_project(ws: Workspace, np: NewProject, allow_duplicate_number: bool =
               "root_id": root_id, "rel_path": rel, "status": "active", "origin": "created",
               "template_id": template["id"], "created": now_iso(), "created_by": current_actor(),
               "baseline": None}
-    ws.commit("project.create", [RecordPut("project", pid, record)])
+    seq = ws.commit("project.create", [RecordPut("project", pid, record, expect_rev=0)])
+    record["_rev"] = seq
     return record
 
 
@@ -264,11 +265,14 @@ def adopt_project(ws: Workspace, folder: Path, name: str, mode: str = "indexed",
               "created_by": current_actor(),
               "baseline": {"blob": blob_ref, "files": len(report.files), "hashed": report.hashed,
                            "complete": report.complete, "warnings": report.warnings()}}
-    ws.commit("project.adopt", [RecordPut("project", pid, record)], blob_refs=[blob_ref])
+    seq = ws.commit("project.adopt", [RecordPut("project", pid, record, expect_rev=0)], blob_refs=[blob_ref])
+    record["_rev"] = seq
     return record
 
 
-def update_project(ws: Workspace, project_id: str, **changes) -> dict:
+def update_project(ws: Workspace, project_id: str, expected_rev: int | None = None, **changes) -> dict:
+    """Change project metadata. Pass ``expected_rev`` (the ``_rev`` the user was looking at) so a
+    concurrent change by someone else is reported as a conflict instead of being overwritten."""
     allowed = {"name", "number", "customer", "description", "status", "mode"}
     bad = set(changes) - allowed
     if bad:
@@ -282,9 +286,10 @@ def update_project(ws: Workspace, project_id: str, **changes) -> dict:
         raise ProjectError(f"mode must be one of {MODES}")
     if changes.get("number") and changes["number"].casefold() != record.get("number", "").casefold():
         _check_number(ws, changes["number"], False)
-    new = {**record, **changes, "modified": now_iso()}
-    ws.commit("project.update", [RecordPut("project", project_id, new)])
-    return new
+    new = {**strip_rev(record), **changes, "modified": now_iso()}
+    rev = record.get("_rev") if expected_rev is None else expected_rev
+    seq = ws.commit("project.update", [RecordPut("project", project_id, new, expect_rev=rev)])
+    return {**new, "_rev": seq}
 
 
 def project_folder(ws: Workspace, record: dict) -> Path:
