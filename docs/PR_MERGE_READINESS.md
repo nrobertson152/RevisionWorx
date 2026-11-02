@@ -2,9 +2,9 @@
 
 **QA Engineer • 2026-11-01 ET • Evidence-based advisory, NOT merge or release approval**
 
-**Current extended implementation under test:** `d202b28305f765b4edead3dede211dd9e7a891a6`; independent QA overlay `f5b8a13064d8a482fa9492da73da333cf6615a15`. Historical `f3c54386` evidence below remains valid for that prior revision.
+**Current independently accepted local-filesystem candidate:** Phase 2 `d656884b39401134149273dd0121ef620b76eb8e`; QA overlay `1def701cd06e5e373ab37ca1d1d250cf13c55821`. [Full pinned matrix 41389199207](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199207) and [focused/stress 41389199197](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199197) both completed SUCCESS. Earlier `d202b283` and `f3c54386` results below are historical checkpoints, not the current head.
 
-## Latest extended independent acceptance — 2026-11-01 ET
+## Historical extended acceptance checkpoint — superseded by ADR-019 acceptance below
 
 **Pinned source SHAs:** Claude Phase 2 `d202b28305f765b4edead3dede211dd9e7a891a6` and QA `f5b8a13064d8a482fa9492da73da333cf6615a15`. The newer candidate incorporates the previously accepted #8/#9/#10 corrections and was tested with four additional negative-path assertions.
 
@@ -34,13 +34,16 @@ Two independently added ADR-019 acceptance tests **passed** on both OSes: a revo
 
 **Remaining acceptance gap:** one strict xfail tests *physical absence of a late journal file*; ADR-015 can instead retain a **logically fenced, ineffective** late artifact. This xfail is not physical-nonpublication success, and passing logical fences are not evidence of physical SMB correctness. Physical two-host Windows coordinator/SMB, installed native Windows/Linux desktop builds, backup/restore epochs and authenticated coordinator remain **NOT VERIFIED**. This is QA review evidence, not merge/release authorization.
 
+
+**Qualification separation:** The corrected #8/#9/#10 *local safety requirements* are accepted on the tested code. The physical fenced-artifact xfail is a distinct, intentionally unmet physical nonpublication property; it does **not** establish an effective stale mutation. Any subsequent Claude source change invalidates this exact-source acceptance until retested. PR #3 can be reviewed independently; no automated green job is authorization to merge, release or enable multi-user SMB.
+
 ## 1. Current engineering decision
 
 **PR #3 (independent QA infrastructure) is reviewable by Claude and the Director.** The new #8/#9/#10 corrective code on Claude's Phase 2 branch has passed the independent local-filesystem acceptance suite and the real Windows checkout stress specified below. This is **not** an approval to merge or release. A physically installed GUI and supported multi-user SMB deployment remain unqualified.
 
 | PR | Branch and current inspected SHA | Independent review disposition | Product release status |
 | --- | --- | --- | --- |
-| [#3 — QA](https://github.com/nrobertson152/RevisionWorx/pull/3) | `qa/testing-infrastructure`; QA test SHA `f5b8a13064d8a482fa9492da73da333cf6615a15` in current independently verified run; documentation-only commit follows in progress log | **Ready for Director/Claude review.** Tests, failpoints, CI and evidence, no changes to production code. Remains draft. | QA green status does not certify product. |
+| [#3 — QA](https://github.com/nrobertson152/RevisionWorx/pull/3) | `qa/testing-infrastructure`; independently executed QA test SHA `1def701cd06e5e373ab37ca1d1d250cf13c55821` (later documentation-only updates do not alter test code) | **Ready for Director/Claude review.** Tests, failpoints, CI and evidence, no changes to production code. Remains draft. | QA green status does not certify product. |
 | [#6 — Phase 1](https://github.com/nrobertson152/RevisionWorx/pull/6) | `phase1-foundation` `412e69ab90bb1d8b74c1a3cf5519f581e4420e63` | Phase 1 + QA PR integration runs on Linux/Windows; still needs approved integration order. | No installed-desktop or physical-share qualification. |
 | [#7 — Phase 2](https://github.com/nrobertson152/RevisionWorx/pull/7) | `phase2-documents` `d656884b39401134149273dd0121ef620b76eb8e` | **#8 effective revocation, #9 index consistency, #10 local Windows lock cleanup accepted under exact CI configurations.** Full suite and focused stress green except explicitly retained physical-artifact xfail. | Standalone *testable/reviewable*, but no product-release approval; multi-user **NOT qualified**. |
 
