@@ -81,9 +81,9 @@ def test_identical_txid_with_identical_checks_replays_after_restart(tmp_path):
 def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, modification, request):
     """Same writes and txid cannot launder altered checks into an earlier success.
 
-    Strict XFAIL is only for the current *wrongly accepted* replay. Unexpected
-    exceptions remain failures; a real TxidReuseError is XPASS until the marker
-    is removed after independent acceptance of Claude's corrected production.
+    Legacy journals without a persisted 'checks' identity retain a strict
+    expected failure. Corrected journals must raise TxidReuseError and PASS
+    normally; unrelated exceptions and incorrect outcomes fail acceptance.
     """
     location, a, b, target, txid, op, operations, seq, target_revision = _setup_committed_request(tmp_path)
     # Inspect the durable journal itself. Old ADR-017 omitted RecordCheck
@@ -113,7 +113,7 @@ def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, mod
         except TxidReuseError:
             assert writer.head_seq() == seq
             assert writer.transaction_outcome(txid) == {"state": "committed", "seq": seq}
-            assert writer.get("root", target)["_rev"] == 1
+            assert writer.get("root", target)["_rev"] == target_revision
             assert writer.verify()["problems"] == []
             return
         except Exception as exc:
