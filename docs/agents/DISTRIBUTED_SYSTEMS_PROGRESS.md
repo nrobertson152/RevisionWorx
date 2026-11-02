@@ -131,3 +131,23 @@ No main-branch files modified; no merge performed.
 **Coordination:** Posted updated interface proposal and discovered rollback limitation on architecture issue #5 for Claude. PR #4 remains draft. No core application files, production journal, merge, tag or release changed.
 
 **Next:** Review pending GitHub Actions run 41373765030 and fix any failures; prototype SHA-256 blob/manifest staging and crash recovery; design trusted nonrollbackable epoch/high-water restore mechanism; independently qualify Windows/SMB with two real hosts after test rig available. Keep all unsupported multi-user production claims blocked.
+
+## Session — 2026-11-01 ET, 21:55 onward: Windows CI triage, manifest prototype
+
+**Latest orders and architecture:** Continued exclusively on `research/shared-filesystem-protocol` after Director approved optional offline LAN coordinator for Windows/SMB multiuser research; Claude owns the production `CommitAuthority` seam. No core application files modified.
+
+**CI failure independently inspected:** [run 41373765030](https://github.com/nrobertson152/RevisionWorx/actions/runs/41373765030) finished **failure**: Ubuntu Python 3.11 and 3.13 jobs **passed** all 22 then-current tests; actual Phase 1 real-code probes **2/2 passed**; Windows Python 3.11 and 3.13 jobs **failed** with `PermissionError: [WinError 32]` while removing SQLite database files in `TemporaryDirectory.cleanup`. The Python sqlite3 connection context manager does not close the connection. [run 41380280216](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380280216) also failed on Windows after the partial test-only fix, confirming the separate `changes_after` read connection needed closing. Do not describe either run as green.
+
+**Committed fixes and new deliverables:**
+- `1dbbfe4f` explicitly closes test SQLite connections; `2b0068d7` explicitly closes `CoordinatorResearch.changes_after` SQLite read connection.
+- `bd5ad6eb` added `prototype/immutable_manifest_research.py`, isolated content-addressed SHA-256 staging and multi-file manifest verification before local authoritative commit. Uses hardlinks to avoid overwriting existing objects; not SMB certified.
+- `a82c5d12` added `prototype/test_immutable_manifest_research.py` (6 new tests): multi-file commit, idempotency, orphan staging, missing/corrupt content, stale writer and restage corruption.
+- `ce515c61` extended CI matrix to include immutable manifest research tests.
+- `6513253f` + `672bb43e` reject authoritative change-feed cursors greater than the stored commit high watermark, plus one regression test. `prototype/test_coordinator_research.py` now has 9 tests.
+- `d30d766f` updated prototype README with exact failed runs, known limitations, test commands and pending evidence.
+
+**Verification:** Last known successful cross-platform run [41371802579](https://github.com/nrobertson152/RevisionWorx/actions/runs/41371802579) passed 14/14 authority tests per Windows/Linux Python version and 2/2 actual Phase 1 regressions. New 29-test suite (14 authority + 9 coordinator + 6 manifest) has **not yet passed CI**; latest head workflow was queued when checked. The two Windows failure runs are recorded above. No physical two-host SMB test, no disk power-loss test, no authenticated admin and no rollback-safe epoch proof.
+
+**Outstanding critical design limitations:** (1) same-epoch backup restore can resurrect old checkout credentials; (2) staging on SMB and committing in local SQLite is not a single atomic transaction and needs verified SMB durability and quarantine/recovery; (3) production transport/authentication and actual Windows SMB host rig remain unimplemented. Fail closed for multi-user deployment.
+
+**Next:** inspect latest GitHub Actions results for 29-test head and fix failures; implement stronger restore fencing and explicit crash injection at blob staging/commit boundary in isolated prototype; coordinate tested interface with Claude via issue #5; keep PR #4 draft and no merge/release.
