@@ -60,10 +60,23 @@ class NativeBOMOracleTests(unittest.TestCase):
                 self.assertEqual(report["file_sha256"], hashlib.sha256(original).hexdigest())
                 self.assertEqual(source.read_bytes(), original, "oracle must never modify source")
 
-                adapter_refs = {(c["sheet_uid"], c["object_id"])
+                # Legacy .osch has no persistent project/sheet UID: native
+                # open_any creates a new wrapper project, while the adapter
+                # uses a file-digest-derived fallback. Match sheet positions
+                # and original component IDs, not fabricated global IDs.
+                native_order = {sheet.uid: index
+                                for index, sheet in enumerate(project.sheets)}
+                adapter_order = {sheet["uid"]: index
+                                 for index, sheet in enumerate(report["sheets"])}
+                adapter_refs = {(adapter_order[c["sheet_uid"]], c["object_id"])
                                 for c in report["components"]}
-                native_refs = {(uid, cid) for line in lines for uid, cid in line.refs}
+                native_refs = {(native_order[uid], cid)
+                               for line in lines for uid, cid in line.refs}
                 self.assertTrue(native_refs.issubset(adapter_refs))
+                if source.suffix == ".osch":
+                    self.assertIsNone(report["project_uid"])
+                else:
+                    self.assertEqual(report["project_uid"], project.uid)
                 self.assertTrue(all(type(line.quantity) is int and line.quantity > 0
                                     for line in lines))
                 self.assertTrue(all(line.refs for line in lines))
