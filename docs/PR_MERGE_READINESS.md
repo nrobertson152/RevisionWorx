@@ -1,5 +1,18 @@
 # RevisionWorx — QA acceptance and PR merge-readiness handoff
 
+## Latest P0/P1 independent acceptance — 2026-11-01 ET
+
+**Verified current source:** Phase 2 `2a2804820d4aca48b50026bdb7edfe8c241b1866` + QA `17ac2374b3234c495608300a6b0e9309b44d7143`, [GitHub Actions run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343). All four integrated jobs SUCCESS on Linux/Windows Python 3.11/3.13.
+
+Linux each Python: QA **46 passed / 3 skipped / 1 strict xfailed**, full **230 passed / 3 skipped / 1 strict xfailed**. Windows each Python: QA **49 passed / 1 strict xfailed**, full **232 passed / 1 skipped / 1 strict xfailed**.
+
+**P0 #10 accepted locally:** unreadable or tokenless `.releasing-*` orphan refuses C authority while B may have preflighted; evidence preserved. Test: `test_malformed_release_orphan_must_not_allow_two_effective_writers`. **P1 ADR-017 accepted locally:** unchanged txid/checks replay after restart returns same seq; changed, missing or reordered RecordChecks raise TxidReuseError without a new commit. Test: `tests/qa/test_txid_check_identity.py`.
+
+**Historical:** pre-fix `d656884b` allowed the tokenless orphan double-effective-write counterexample (research [run 41390605906](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390605906)) and omitted checks in txid identity (QA [run 41390455004](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390455004), three strict xfails). Corrected-source test markers now PASS normally; legacy source retains feature-gated expected failures.
+
+**Unresolved:** One strict XFAIL requires no *physical* late journal file, although the file is logically fenced. Legacy journal entries lack historical RecordCheck request identity and need an explicit versioned migration/retry decision; manual clear-orphan requires confirming the unknown former writer stopped. Native installed desktop, backup/restore, coordinator authentication and real two-host SMB remain NOT EXECUTED.
+
+
 ## New Phase 2 ADR-017 P1 handoff: altered RecordCheck replay is not identical (2026-11-01 ET)
 
 **Current exact application SHA:** `d656884b39401134149273dd0121ef620b76eb8e` (Claude PR #7). **Independent QA test SHA:** `ee0b6978fe0a5459932e27b45e177fa4e8841f6d`. [Pinned Linux/Windows Python 3.11/3.13 Phase 2 workflow 41390455004](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390455004) completed all four integrated jobs successfully, with **three new strict expected failures** proving a separate P1 contract defect. Each Linux QA/full suite: **42 passed/3 skipped/4 xfailed** and **224 passed/3 skipped/4 xfailed**. Each Windows QA/full suite: **45 passed/4 xfailed** and **226 passed/1 skipped/4 xfailed**. The additional xfail is the previously documented *physical* stale-journal artifact, not an effective stale write.

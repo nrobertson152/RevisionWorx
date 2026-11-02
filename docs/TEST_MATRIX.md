@@ -1,5 +1,18 @@
 # RevisionWorx — Risk-based QA acceptance matrix
 
+## Latest P0/P1 independent acceptance — 2026-11-01 ET
+
+**Verified current source:** Phase 2 `2a2804820d4aca48b50026bdb7edfe8c241b1866` + QA `17ac2374b3234c495608300a6b0e9309b44d7143`, [GitHub Actions run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343). All four integrated jobs SUCCESS on Linux/Windows Python 3.11/3.13.
+
+Linux each Python: QA **46 passed / 3 skipped / 1 strict xfailed**, full **230 passed / 3 skipped / 1 strict xfailed**. Windows each Python: QA **49 passed / 1 strict xfailed**, full **232 passed / 1 skipped / 1 strict xfailed**.
+
+**P0 #10 accepted locally:** unreadable or tokenless `.releasing-*` orphan refuses C authority while B may have preflighted; evidence preserved. Test: `test_malformed_release_orphan_must_not_allow_two_effective_writers`. **P1 ADR-017 accepted locally:** unchanged txid/checks replay after restart returns same seq; changed, missing or reordered RecordChecks raise TxidReuseError without a new commit. Test: `tests/qa/test_txid_check_identity.py`.
+
+**Historical:** pre-fix `d656884b` allowed the tokenless orphan double-effective-write counterexample (research [run 41390605906](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390605906)) and omitted checks in txid identity (QA [run 41390455004](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390455004), three strict xfails). Corrected-source test markers now PASS normally; legacy source retains feature-gated expected failures.
+
+**Unresolved:** One strict XFAIL requires no *physical* late journal file, although the file is logically fenced. Legacy journal entries lack historical RecordCheck request identity and need an explicit versioned migration/retry decision; manual clear-orphan requires confirming the unknown former writer stopped. Native installed desktop, backup/restore, coordinator authentication and real two-host SMB remain NOT EXECUTED.
+
+
 ## New independent P1 acceptance finding — ADR-017 RecordCheck replay identity (2026-11-01 ET)
 
 **Actual Phase 2** `d656884b39401134149273dd0121ef620b76eb8e` with **QA overlay** `ee0b6978fe0a5459932e27b45e177fa4e8841f6d`. [GitHub Actions run 41390455004](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390455004), all four disposable Phase 2 jobs **SUCCESS** on Linux/Windows × Python 3.11/3.13. Each Linux QA suite: **42 passed, 3 skipped, 4 strict xfailed**; full **224 passed, 3 skipped, 4 strict xfailed**. Each Windows QA suite: **45 passed, 4 strict xfailed**; full **226 passed, 1 skipped, 4 strict xfailed**. One of the four xfails is the historically retained physical nonpublication condition, three are **new P1 txid identity defects**. All counts are verified from actual job logs, not estimates.
@@ -51,11 +64,12 @@ Two independently added ADR-019 acceptance tests **passed** on both OSes: a revo
 | INDEX-04 | P0 | Cache rebuild with permanently unstable snapshots must fail closed without altering previous cache cursor/rows | **PASS LOCAL** deterministic retry-exhaustion injection, actual continuous-writer soak not qualified |
 | CHECKOUT-01 | P0 | Exact one winner in real local six-process checkout; others are conflicts; no orphan lock | **PASS LOCAL Windows Server 2025: 5/5 trials, 30 process attempts, 1 winner + 5 conflicts per trial, all exits zero** |
 | CHECKOUT-02 | P0 | Stale checkout tokens rejected and checkout history unaltered | **PASS LOCAL**, independent Phase 2 suite |
-| TXID-01 | P1 | Reusing a committed txid with changed, omitted or reordered RecordCheck preconditions must raise TxidReuseError; identical lost-ACK retry after restart must return original seq without mutation | **P1 DEFECT VERIFIED** Linux/Windows Python 3.11/3.13: positive identical replay PASS, altered-check variants three strict XFAIL, [run 41390455004](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390455004); Claude production contract correction required |
+| TXID-01 | P1 | Same txid plus altered, missing or reordered RecordCheck preconditions must raise TxidReuseError; exact retry after restart must not mutate | **PASS LOCAL** at Phase 2 `2a280482` + QA `17ac2374`, Linux/Windows Python 3.11/3.13 [run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343); legacy journal request-identity policy unresolved |
 | WINDOWS-LOCK-01 | P0 | Transient Windows writer.lock sharing violation gets bounded retry, verifies owner, removes own lock | **PASS LOCAL Windows**, #10 injected failure and successor acquisition |
 | WINDOWS-LOCK-02 | P0 | Persistent Windows lock release denial is reported and rightful lock remains held | **PASS LOCAL Windows**, bounded retry exhaustion and exclusive successor refusal |
 | WINDOWS-LOCK-03 | P0 | Writer must not unlink successor token after sharing violation and ownership reassignment | **PASS LOCAL Windows**, injection at ADR-019's actual atomic move |
 | LOCK-ADR019-01 | P0 | Old releaser A cannot delete successor B lock following administrative override | **PASS LOCAL Linux/Windows**, deterministic independent release-interleaving, B remains able to commit |
+| LOCK-ORPHAN-01 | P0 | Malformed `.releasing-*` file cannot grant C authority while preflighted B remains effective; retain evidence | **PASS LOCAL** at Phase 2 `2a280482` + QA `17ac2374`, Linux/Windows Python 3.11/3.13 [run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343); manual recovery and SMB unqualified |
 | LOCK-ADR019-02 | P0 | Crash-orphaned successor token must be fenced before new C can commit | **PASS LOCAL Linux/Windows**, single audit revocation, preserved evidence, no remaining .releasing file |
 | REV-01 | P0 | Historical revision SHA-256 and content immutable after check-in | **PASS LOCAL**, dedicated Phase 2 integrity tests |
 | REV-02 | P0 | Release supersedes prior release without rewriting old history; corrupt blob refuses release | **PASS LOCAL**, dedicated Phase 2 integrity tests |

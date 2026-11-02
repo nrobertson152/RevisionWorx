@@ -260,3 +260,22 @@ Before making changes, read this log, `CLAUDE.md`, `docs/REQUIREMENTS.md`, `docs
 **Documentation deliverables:** `3e823ca30982a4e133ba0aa9f173f55aa7c52410` updates `docs/TEST_MATRIX.md` with new P1 acceptance row and exact verified counts; `7fe8c1e30f2a4a58d2565e9629e6cba75dc25e34` adds the ADR-017 acceptance/implementation handoff to `docs/PR_MERGE_READINESS.md`. PR #3 and PR #7 are updated with confirmed evidence and the decision required from Claude. Documentation-only commits deliberately do not trigger redundant full CI.
 
 **Next exact work / real blocker:** Claude confirms full submitted-operation-list txid identity semantics (including checks) and implements a durable replay digest/representation in his Phase 2 branch. QA then independently executes same positive and strict-negative test cases on **new exact Phase 2 SHA**, removes xfails only after they become XPASS under strict mode for the correct reason, verifies restart/lost-ACK, runs focused Linux/Windows tests, and updates PR/issue handoffs. Other new director priorities: content-GC audit-first, revision-chain corruption, bounded verified read, outcome codes and phase1 backport remain for separate changed-source checkpoints. P0 current local #8/#9/#10 acceptance persists; installed desktop, backup restore, physical two-host SMB coordinator remain unverified. Never merge, release, tag or retarget without Director approval.
+
+
+## 2026-11-01 ET — New coordinator instructions, P0/P1 independent acceptance completed
+
+**Verified current source:** Phase 2 `2a2804820d4aca48b50026bdb7edfe8c241b1866` + QA `17ac2374b3234c495608300a6b0e9309b44d7143`, [GitHub Actions run 41391301343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41391301343). All four integrated jobs SUCCESS on Linux/Windows Python 3.11/3.13.
+
+Linux each Python: QA **46 passed / 3 skipped / 1 strict xfailed**, full **230 passed / 3 skipped / 1 strict xfailed**. Windows each Python: QA **49 passed / 1 strict xfailed**, full **232 passed / 1 skipped / 1 strict xfailed**.
+
+**P0 #10 accepted locally:** unreadable or tokenless `.releasing-*` orphan refuses C authority while B may have preflighted; evidence preserved. Test: `test_malformed_release_orphan_must_not_allow_two_effective_writers`. **P1 ADR-017 accepted locally:** unchanged txid/checks replay after restart returns same seq; changed, missing or reordered RecordChecks raise TxidReuseError without a new commit. Test: `tests/qa/test_txid_check_identity.py`.
+
+**Historical:** pre-fix `d656884b` allowed the tokenless orphan double-effective-write counterexample (research [run 41390605906](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390605906)) and omitted checks in txid identity (QA [run 41390455004](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390455004), three strict xfails). Corrected-source test markers now PASS normally; legacy source retains feature-gated expected failures.
+
+**Unresolved:** One strict XFAIL requires no *physical* late journal file, although the file is logically fenced. Legacy journal entries lack historical RecordCheck request identity and need an explicit versioned migration/retry decision; manual clear-orphan requires confirming the unknown former writer stopped. Native installed desktop, backup/restore, coordinator authentication and real two-host SMB remain NOT EXECUTED.
+
+**Test commits:** `eb704df3` added P1 check-identity controls; `ee0b6978` corrected guard fixture journal revision; `57c902fd` added P0 malformed orphan safety oracle; `58acb0d5` converted both acceptance tests from legacy strict xfail to normal PASS on fixed feature-capable source; `17ac2374` corrected the last QA-only post-rejection assertion. All code stayed within the existing QA branch.
+
+**CI error attribution:** initial `eb704df3` had a QA fixture assumption (`_rev=1`), later `57c902fd` had strict XPASS upon Claude fixing P0, and `58acb0d5` had a stale `_rev==1` assertion after correct TxidReuseError. These were test-marker/fixture errors, not proof of current production failures. Latest `17ac2374` full pinned matrix is SUCCESS.
+
+**Review and handoff:** New P0 and P1 acceptance is supported on current local Linux/Windows filesystems only. Claude owns legacy txid digest/version decision and manual orphan recovery semantics. QA docs/matrix and draft PR #3 updated; tell Claude via one PR #7 acceptance comment. No production source edits, merge, release or coordinator/SMB certification. Await actual new code before running another costly matrix.
