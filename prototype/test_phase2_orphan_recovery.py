@@ -93,6 +93,58 @@ class Phase2OrphanedReleaseSafety(unittest.TestCase):
             with Workspace.open(meta) as r:
                 self.assertTrue(r.get("project", "prj_" + "e" * 32)["valid"])
 
+
+    @unittest.expectedFailure
+    def test_unreadable_orphan_must_not_permit_preflighted_old_writer(self):
+        """UNSAFE hypothesis: unreadable displaced token means no journal fence.
+
+        B has already passed the final token check. A displaces its lock
+        into an unreadable .releasing-*; C acquires a fresh writer.lock.
+        If C only archives unreadable evidence, B's in-flight publication
+        can still land afterwards and take effect without revocation.
+        The safety oracle demands that B be fenced, not merely that B's
+        next preflight would fail.
+        """
+        Workspace, RecordPut, LockLostError, _ = self._load()
+        with tempfile.TemporaryDirectory() as directory:
+            a = Workspace.create(Path(directory) / "workspace", "UnreadableOrphan")
+            meta = a.meta_dir
+            Workspace.break_writer_lock(meta, a._lock_token, "admin replaces A")
+            b = Workspace.open(meta, writable=True)
+            b_token = b._lock_token
+            original_check = b._check_lock_still_held
+            successor = []
+            events = []
+            try:
+                def after_successful_preflight():
+                    original_check()
+                    events.append("B-checked")
+                    lock = meta / "locks" / "writer.lock"
+                    orphan = lock.with_name(".releasing-corrupted-holder")
+                    os.replace(lock, orphan)
+                    orphan.write_text("{unreadable-token", encoding="utf-8")
+                    with Workspace.open(meta, writable=True) as c:
+                        events.append("C-acquired")
+                        c.commit("C.earlier", [
+                            RecordPut("project", "prj_" + "c" * 32,
+                                      {"author": "C"})])
+                    events.append("C-committed")
+                b._check_lock_still_held = after_successful_preflight
+                with self.assertRaises(LockLostError):
+                    b.commit("B.after-preflight", [
+                        RecordPut("project", "prj_" + "b" * 32,
+                                  {"author": "B"})], txid="b" * 32)
+                self.assertEqual(events, ["B-checked", "C-acquired", "C-committed"])
+                with Workspace.open(meta) as reader:
+                    self.assertIsNone(reader.get("project", "prj_" + "b" * 32))
+                    self.assertIsNotNone(reader.get("project", "prj_" + "c" * 32))
+                    self.assertIn(b_token, Workspace._revoked_tokens(meta))
+            finally:
+                b._lock_token = None
+                b.close()
+                a._lock_token = None
+                a.close()
+
     def test_interrupted_orphan_revocation_fails_closed_until_admin_recovery(self):
         Workspace, RecordPut, LockLostError, WorkspaceLockedError = self._load()
         with tempfile.TemporaryDirectory() as directory:
