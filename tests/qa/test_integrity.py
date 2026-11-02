@@ -873,3 +873,91 @@ def test_crash_with_displaced_foreign_lock_revokes_orphan_before_new_writer(tmp_
         if "b" in owners:
             owners["b"].close()
     assert Workspace.read_writer_lock(store) is None
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError,
+    reason="P0 ADR-019 tokenless orphan can admit a new writer while the displaced old writer remains effective",
+)
+def test_malformed_release_orphan_must_not_allow_two_effective_writers(tmp_path, monkeypatch):
+    """Independent local fail-closed oracle for issue #10's malformed orphan gap.
+
+    Writer B passes token preflight. Its live lock is then displaced into a
+    corrupt .releasing-* orphan; C tries to acquire and commit before B resumes.
+    A safe implementation may refuse C (quarantine) or authoritatively fence B,
+    but both B and C must NEVER have effective, visible journal mutations.
+
+    This deliberately tests *effective records*, not merely lock-file existence.
+    No two-host SMB or spontaneous on-disk corruption is implied.
+    """
+    if not hasattr(Workspace, "_fence_orphaned_releases"):
+        pytest.skip("ADR-019 orphan recovery not present on original Phase 1")
+    store = tmp_path / "store"
+    a = Workspace.create(store, "QA malformed orphan custody")
+    Workspace.break_writer_lock(store, a._lock_token, "QA revoke original owner")
+    b_writer = Workspace.open(store, writable=True)
+    b_token = b_writer._lock_token
+    original_check = b_writer._check_lock_still_held
+    corrupted = (store / ".revisionworx" / "locks" / ".releasing-qa-malformed")
+    rid_b = "root_" + "b" * 32
+    rid_c = "root_" + "c" * 32
+    events = []
+    c_rejected = []
+    b_rejected = []
+
+    def interleave_corrupted_orphan():
+        original_check()
+        events.append("B-preflight")
+        lock = store / ".revisionworx" / "locks" / "writer.lock"
+        os.replace(lock, corrupted)
+        corrupted.write_bytes(b"{malformed QA injected holder bytes")
+        try:
+            with Workspace.open(store, writable=True) as c_writer:
+                events.append("C-acquired")
+                c_writer.commit("qa.c.after.malformed.orphan", [
+                    RecordPut("root", rid_c, {"id": rid_c, "owner": "C"})
+                ], txid="c" * 32)
+                events.append("C-committed")
+        except (workspace_mod.WorkspaceError, OSError) as exc:
+            c_rejected.append(type(exc).__name__)
+            events.append("C-refused")
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(b_writer, "_check_lock_still_held", interleave_corrupted_orphan)
+            try:
+                b_writer.commit("qa.b.after.corrupted.orphan", [
+                    RecordPut("root", rid_b, {"id": rid_b, "owner": "B"})
+                ], txid="b" * 32)
+                events.append("B-committed")
+            except workspace_mod.LockLostError:
+                b_rejected.append(True)
+                events.append("B-fenced")
+
+        if not events or events[0] != "B-preflight":
+            raise RuntimeError("QA malformed orphan preflight injection was not reached")
+        if not corrupted.exists() and not any(
+            p.name.startswith("writer.lock.orphaned-")
+            for p in (store / ".revisionworx" / "locks").iterdir()
+        ):
+            raise RuntimeError("QA orphan evidence was lost or never generated")
+
+        with Workspace.open(store) as reader:
+            b_visible = reader.get("root", rid_b) is not None
+            c_visible = reader.get("root", rid_c) is not None
+            assert not (b_visible and c_visible), (
+                "two effective writers after tokenless orphan: "
+                f"events={events}, token_b={b_token}, "
+                f"outcome_b={reader.transaction_outcome('b' * 32)}, "
+                f"outcome_c={reader.transaction_outcome('c' * 32)}"
+            )
+            if c_visible:
+                assert b_rejected or b_token in Workspace._revoked_tokens(
+                    store / ".revisionworx"
+                ), "a new effective writer must fence the displaced old token"
+    finally:
+        # Simulate abandoned handles; never unlink a successor's lock on cleanup.
+        b_writer._lock_token = None
+        b_writer.close()
+        a._lock_token = None
+        a.close()
