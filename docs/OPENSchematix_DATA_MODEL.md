@@ -45,3 +45,21 @@ The adapter now exposes two read-only entry points:
 Recommended future Phase 2 handoff (subject to Lead Architect approval): retrieve a verified immutable source revision through the document service, pass those raw bytes and the registered document's original suffix to `inspect_bytes`, require result `file_sha256 == revision.sha256`, then attach `revision_id`, `document_id`, extractor version and observation time in the **disposable local index**. A path in `.revisionworx/content/sha256/...` lacks a suffix and must not be passed to `inspect(path)` as a workaround. The adapter must not import or write `revisionworx.workspace`, `documents.py`, GUI, or SQLite. Phase 4 is responsible for explicit manufacturer-candidate to managed-part identity mapping. A source drawing's title-block revision is never a PDM revision ID.
 
 No native BOM authority is added by either entry point. Both return the same explicitly incomplete `bom_candidates` and `bom_status` fields.
+
+## Native BOM comparison and unresolved candidate semantics (OpenSchematix 1.1.0)
+
+**Source of native behavior:** `OpenSchematix/openschematix/bom.py` at upstream commit `74e4c79`, specifically `purchasable`, `designator_groups`, `unit_slot`, `devices`, `device_lines`, and `generate`. This is source-code analysis; no claim of full adapter parity follows.
+
+| Concern | Native `bom.generate` | Current `bom_candidates` | Required for parity |
+| --- | --- | --- | --- |
+| Eligibility | `in_bom` and symbol registry/prefix; excludes nonphysical symbol IDs and unknown symbols | `in_bom` and explicit part number | Load the native symbol registry and project custom-symbol scope |
+| Physical quantity | Counts physical devices; shared designator may merge coil/contact units across sheets if slots are distinct | Always `null` (unknown) | Implement device grouping, terminal slot disambiguation and conflict behavior |
+| Duplicate identifiers | If unit slots clash, split devices; never silently reduce quantity | Not detected | Replicate `unit_slot` and validation warnings |
+| Part identity | With part number: manufacturer + part number; without: symbol + description + rating + canonical params | Only explicit manufacturer + part number | Resolve symbolic part identities and parameters |
+| Multi-part device | A single designator may contribute to multiple BOM lines when its units carry different part numbers | Independent candidates, no physical grouping | Preserve multiple BOM lines and accurate device counts |
+| Sheet filtering | Device selected if any unit is on requested sheets; identity uses *all* units | All indexed sheets; no filter | Reproduce global-device identity with selected-sheet references |
+| Provenance | `BomLine.refs` contains (sheet UID, component ID); designators and sheet names retained | Source instance strings and unresolved verification | Preserve native refs while keeping source IDs separate from managed part IDs |
+
+**Real example baselines:** `demo_project.schematix`: 3 sheets/26 instances, native 16 lines vs 5 candidates; `start_stop_latch.osch`: 1 sheet/7 instances, native 5 lines vs 0 candidates; `hydraulic_cylinder_circuit.osch`: 1 sheet/9 instances, native 7 lines vs 0 candidates. Native counts were reported by the Lead Architect after calling upstream `projectio.open_any` and `bom.generate`. Candidate counts are asserted by our GitHub Actions fixture tests. The difference is expected: most purchasable devices can lack a manufacturer part number. Neither count alone establishes a quantity or identity match.
+
+**Prohibited inference:** candidate count must not be used as native line count, quantity, completeness, purchasing eligibility or a verified company part match. Cross-project where-used on these candidates is a *potential manufacturer-part match*, not an authoritative engineering dependency. Full native BOM support requires independent upstream oracle tests, including duplicate designators, multiunit contacts, terminal blocks, excluded symbols, custom libraries and sheet filtering.
