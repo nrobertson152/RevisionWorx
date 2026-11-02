@@ -56,3 +56,12 @@ Before making changes, read this log, `CLAUDE.md`, `docs/REQUIREMENTS.md`, `docs
 - Tests executed this session: none (documentation-only change).
 - Unresolved issues: existing release blockers and independent execution requirements remain unchanged.
 - Next steps: independently run the QA and baseline test suites, document exact results, and update draft PR #3; communicate architectural implications to the Lead Architect through issue #1.
+
+## 2026-11-01 — Standing orders and fixture regression hardening
+- Read standing orders from `main`: `docs/agents/README.md` and `docs/agents/QA_ORDERS.md`; inspected QA branch, PR #3 and its comments, current Phase 1 source, QA fixtures and requirements.
+- Changed `tests/qa/test_fixture_contract.py`: added same-size/same-mtime content mutation and file rename/deletion detection checks. Test commit: `2d0d6729e14df19af9556210ad673759cc1ca34b`.
+- **Execution attempt:** `git clone --depth 1 --branch qa/testing-infrastructure https://github.com/nrobertson152/RevisionWorx.git /tmp/revisionworx-qa && python -m pytest -q` failed before checkout because this execution environment could not resolve `github.com`. **No tests executed; no passing result claimed for the new checks.**
+- Existing verified results remain limited to the standalone fixture and generator smoke previously reported in PR #3. The full Phase 1 suite and new regression checks are still unverified in this session.
+- Risk: QA fixtures currently use `os.walk(..., followlinks=False)`; directory symlink metadata may be omitted, so non-destructive archive checks need a dedicated symlink regression and potential fixture correction. This is a QA oracle risk, not a production-code finding.
+- Next: obtain an executable checkout; run the complete baseline and QA suites; inspect fixture symlink behavior; capture exact environment/results; update PR #3 and coordinate any architectural defects through issue #1.
+- This session modifies QA tests and this progress log only. No core source, release, merge, or branch history rewrite.
