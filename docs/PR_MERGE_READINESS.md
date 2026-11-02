@@ -1,5 +1,16 @@
 # RevisionWorx — QA acceptance and PR merge-readiness handoff
 
+## New Phase 2 ADR-017 P1 handoff: altered RecordCheck replay is not identical (2026-11-01 ET)
+
+**Current exact application SHA:** `d656884b39401134149273dd0121ef620b76eb8e` (Claude PR #7). **Independent QA test SHA:** `ee0b6978fe0a5459932e27b45e177fa4e8841f6d`. [Pinned Linux/Windows Python 3.11/3.13 Phase 2 workflow 41390455004](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390455004) completed all four integrated jobs successfully, with **three new strict expected failures** proving a separate P1 contract defect. Each Linux QA/full suite: **42 passed/3 skipped/4 xfailed** and **224 passed/3 skipped/4 xfailed**. Each Windows QA/full suite: **45 passed/4 xfailed** and **226 passed/1 skipped/4 xfailed**. The additional xfail is the previously documented *physical* stale-journal artifact, not an effective stale write.
+
+**Contract:** ADR-017 says an identical `txid` and identical submitted content may replay the original result; different content must raise `TxidReuseError`. Current `Workspace.commit` excludes `RecordCheck` from both durable journal records and its txid comparison. Reusing the same `txid` and `RecordPut` with *changed check revision*, *removed check*, or *reordered checks* returns the original committed sequence instead of refusing the materially changed request. A genuinely identical retry after workspace close/open correctly returns the original sequence without a new write. There is no demonstrated duplicate write or authoritative data loss; the defect is **incorrect replay acknowledgment/command identity**, a P1 coordinator-contract issue.
+
+**Independent test:** `tests/qa/test_txid_check_identity.py`, three `xfail(strict=True, raises=AssertionError)` altered-request oracles plus one passing lost-ACK/restart control. **Fix owner:** Claude. Confirm that canonical txid request identity includes the *full ordered operation list* (`RecordCheck` as well as puts/deletes) and persists durably across restart. Ensure `TxidReuseError` is raised for changed checks *before* a fresh precondition evaluation; a truly identical retry returns the original outcome. QA will test the corrected exact Phase 2 SHA on Linux/Windows, including reordered/removed/altered checks, restart and original transaction outcome, before removing strict-xfail markers.
+
+**Release disposition:** QA infrastructure PR #3 is reviewable. Phase 2 protocol correctness remains **P1 open**, requiring Claude's decision and correction before final acceptance of the ADR-017 semantics. The previously accepted local #8/#9/#10 fixes are unchanged. Installed native desktop/backup and physical SMB coordinator qualification remain unexecuted; no merge or release permission granted.
+
+
 **QA Engineer • 2026-11-01 ET • Evidence-based advisory, NOT merge or release approval**
 
 **Current independently accepted local-filesystem candidate:** Phase 2 `d656884b39401134149273dd0121ef620b76eb8e`; QA overlay `1def701cd06e5e373ab37ca1d1d250cf13c55821`. [Full pinned matrix 41389199207](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199207) and [focused/stress 41389199197](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199197) both completed SUCCESS. Earlier `d202b283` and `f3c54386` results below are historical checkpoints, not the current head.
