@@ -311,3 +311,54 @@ P0 original d656884 malformed-orphan dual effective writer proof [CI 41390605906
 P1/P2 ADR-017 remaining identity policy: current separate checks array does not encode check/write interleaving; historical journal without checks cannot verify complete old request. Request to Claude [PR #7 6569414410](https://github.com/nrobertson152/RevisionWorx/pull/7#issuecomment-6569414410), executable v2 canonical proposal and migration note. Current Phase 2 passes positive changed/reordered/check-only expectation tests and research adapter new conformance.
 
 Remaining severe blockers: both SQLite+ordinary witness may be rolled back together; no independently nonrollbackable trust root, authentic Windows LAN administration, authenticated transport, approved server, physical two-host SMB and power-cut durability (NONE EXECUTED), standalone/coordinator migration, native installed GUI or Director-authorized merges/releases. PR #4 stays draft, no production code/other agent branch modified. Await Claude/QA on new audit crash gap and versioned full txid identity policy.
+
+## Current follow-up — Director PR #4 orders 6569573586, executed 2026-11-02 ~00:10–00:27 ET
+
+**Assignment:** Distributed Systems Engineer, existing `research/shared-filesystem-protocol` / draft PR #4. Read latest main README/orders/Parallel Assignments/Claude handoff plus live coordination issues and PRs. Actual Claude candidate evolved from `2a280482` to `366d4355abcde7543122551fadaab01ac9832e01` (ADR-019 audit-first and ADR-021 versioned request identity). Frozen Claude reliability backport remains `36d1957fe8d7800659b488106ef6cec1fa0c6267`.
+
+### Real engineering work pushed on this branch
+
+- `924917fe`: new `prototype/test_phase2_orphan_clear_protocol.py` with deterministic state/crash matrix: before audit, audit committed before evidence move, after evidence move, spawned independent-process `os._exit(74)`, retry/restart, failed filesystem move, audit/source validation, two overlapping administrator requests and pathname/content interference.
+- `742f218e`, `2692551a`: adjusted positive safety oracles to the newly implemented audit-first resume semantics; the next acquisition may legitimately complete *already durably audited* evidence, rather than requiring indefinite quarantine. Left unsatisfied invariants marked expectedFailure.
+- `731f5af8`, `a35b391c`: isolated `BatchAuthorityResearch` permits check-only requests with one journal marker and no data mutation; rejects nonfinite JSON prepublication; tests idempotent replay and no side effects.
+- `a073c7cb`: aligned domain separator of the reference `request_digest` to Claude's actual ADR-021 `revisionworx/commit-request/v2\0` prefix.
+- `5db88938`, `df7df652`: inherited upstream RequestIdentityV2Contract unchanged in adapter; added `prototype/test_phase2_identity_interop.py` comparing *real deployed digests* against our serializer and an actual persisted journal and legacy `IdentityUnverifiable` outcome.
+- `d081b5db`: focused Windows/Linux CI jobs pinned to actual `366d4355`, preserving older 2a280 and d656 historical jobs distinctly.
+- `3a57437c`: added explicit **passing unsafe reproduction** of two admins publishing separate `workspace.orphan.clear` audits for one original orphan under a deterministic overlap; separate expected-failure exactly-one safety oracle.
+- `0025c060`, `cfce3c82`: new `prototype/test_phase1_backport_release_race.py` and Windows/Linux exact source CI pinned to frozen `36d1957`, with strict positive ownership xfail and passing successor-lock-deletion defect reproduction.
+- `eff229c9`: updated ADR-017 identity specification with exact adopted prefix, source/reference byte equivalence, legacy outcome and migration limits; `77c4844b` risk-ranked handoff; `825eda40` integration contract.
+
+### Verified complete CI and exact source SHAs
+
+**[GitHub Actions run 41393842114](https://github.com/nrobertson152/RevisionWorx/actions/runs/41393842114), research code SHA `cfce3c82b0f45e57ea1645b0f3ddf6e6665554cb`, 14/14 jobs SUCCESS** (all job logs independently inspected):
+
+- Ubuntu Python 3.11: **81/81 local research PASS**.
+- Ubuntu Python 3.13: **81/81 PASS**.
+- Windows Python 3.11: **81/81 PASS**.
+- Windows Python 3.13: **81/81 PASS**.
+- Ubuntu Python 3.13 actual current Phase 2 `366d4355`: **16 local tests, 2 expected failures** (admin double-audit and byte-swap between hash check/move), no unexpected failures; explicit passing unsafe reproductions demonstrate each defect.
+- Windows Python 3.13 actual current Phase 2 `366d4355`: **16 local tests, 2 expected failures**, zero unexpected failures, both passing unsafe demonstrations.
+- Unmodified upstream `CommitAuthorityContract`, `PreconditionIdentityContract` and `RequestIdentityV2Contract` inherited by the local witnessed adapter: **20/20 pass**, Ubuntu Python 3.13.
+- Actual frozen `phase1-backport-8-9-10` @ `36d1957`, Ubuntu Python 3.13: **2 cases, 1 expected failure**, 1 passing UNSAFE old-owner/successor lock deletion.
+- Same actual frozen backport on Windows Python 3.13: **2 cases, 1 expected failure**, 1 passing UNSAFE bug reproduction.
+- Historic Phase 2 `2a28048`: Ubuntu and Windows each **7 cases, 3 expected failures**, a frozen previous-head baseline, not current candidate.
+- Historic Phase 2 `d656884`: Ubuntu/Windows each **18 cases, 4 expected failures**, plus passing unsafe demonstrations of original unreadable orphan/txid bugs.
+- Historic Phase 1 source probes: 2/2 passing OLD defect reproductions, not safety acceptance.
+
+**Commands:**
+`python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator prototype.test_record_batch_research prototype.test_request_identity_research`;
+`REVISIONWORX_PHASE2_CHECKOUT=<path-to-366d435> python -m unittest -v prototype.test_phase2_orphan_clear_protocol prototype.test_phase2_identity_interop`;
+`REVISIONWORX_PHASE2_CHECKOUT=<path-to-366d435> python -m pytest -v -q prototype/test_phase2_contract_adapter.py`;
+`REVISIONWORX_BACKPORT_CHECKOUT=<path-to-36d1957> python -m unittest -v prototype.test_phase1_backport_release_race`.
+
+### Risk classification and communication
+
+- **Verified local acceptance (not production certification):** ADR-019 audit-first commit before evidence disposition passes before/after journal interruption and independent-process death/restart. ADR-021 exact production request hashes match research for full operation order, Unicode, blob refs, null expectations and `_rev`; historical txids lacking a request digest raise `IdentityUnverifiable` without write and outcome lookup remains valid.
+- **Open P1 under concurrent/untrusted filesystem mutation:** audit binds an orphan file's SHA-256 when read but an independent pathname `os.replace` later moves potentially different bytes; deterministic injected mutation caused mismatched archived evidence and permitted writer acquisition. Paired strict safety xfail and passing unsafe proof on both OS. This is not measured ordinary Windows NTFS or SMB failure. Needs a reviewed trust model and a crash-safe pending intent through post-move verification.
+- **Open P2 audit uniqueness:** deterministic overlapping admin clears can each append a different durable audit for the same orphan name/hash although only one evidence file exists. Separate explicit passing unsafe proof and expected-failure positive exactly-one oracle on both OS. This is audit/custody inconsistency, not demonstrated duplicate engineering changes.
+- **Backport P0:** exact older `phase1-backport-8-9-10` `36d1957` retains token-check followed by path unlink, physically deletes successor lock in deterministic Windows/Linux test. Do not fast-forward or merge this obsolete candidate. Reported on [PR #6](https://github.com/nrobertson152/RevisionWorx/pull/6#issuecomment-6569794832).
+- **Coordination:** both new admin risks and positive ADR-021 interoperability reported on [Claude PR #7](https://github.com/nrobertson152/RevisionWorx/pull/7#issuecomment-6569784602). All production core modifications and QA final approval remain Claude/QA responsibility.
+
+### Remaining hard gates and stop
+
+No independently nonrollbackable epoch/high-water trust root; test-authorized principals are NOT Windows SSPI/AD; no physical two-host SMB power-cut/ACL/reconnect tests (**NOT EXECUTED**); no deployed LAN coordinator or service, no integrated production batch bridge, no safe physical backup-restore reconciliation; no standalone migration or installed interactive GUI acceptance. **No production source, other agent branch, other repository, merges, releases, retargets, force pushes or tags changed.** PR #4 remains draft. Next step only when Claude reviews source-identity and audit-CAS design; do not fabricate approval or add a speculative live service.
