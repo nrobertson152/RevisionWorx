@@ -161,3 +161,7 @@ No main-branch files modified; no merge performed.
 - `8f76bf09`: `docs/COORDINATOR_RESTORE_FENCING_PROTOCOL.md` describes controlled quiescence, independent nonrollbackable high-water authority, epoch rotation, manifest/journal reconciliation, read-only quarantine, audit and recovery fault matrix. This is a design proposal; no production restore mechanism implemented.
 
 **Critical remaining blockers:** (1) same-epoch database restore still resurrects credentials in prototype, (2) local SQLite authority and SMB content are separate durability domains, (3) no authenticated admin or transport, (4) no physical two-host Windows/SMB and power-loss testing, (5) no production integration. Continue research only on assigned branch, coordinate through issue #5, keep PR #4 draft and do not merge/release.
+
+### Verification closure — 2026-11-01 ET
+
+[GitHub Actions run 41380924556](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380924556) **COMPLETED SUCCESS**. All four independent matrix jobs (Ubuntu Python 3.11/3.13, Windows Python 3.11/3.13) ran **31 tests each, 31 passed, 0 failed**, confirmed by inspected job logs. Actual `phase1-foundation` defect probes **2/2 passed**. This closes the previous pending-test status for the two new spawned-process manifest crash cases. It does **not** close production rollback/SMB durability/authentication issues.
