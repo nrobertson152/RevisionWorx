@@ -279,6 +279,28 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(InvalidProject):
             inspect(path)
 
+    def test_reject_duplicate_legacy_json_keys(self):
+        path = self.legacy()
+        raw = path.read_text()
+        self.assertTrue(raw.startswith("{"))
+        path.write_text('{"format":"OpenSchematix",' + raw[1:], encoding="utf-8")
+        with self.assertRaisesRegex(InvalidProject, "duplicate JSON key"):
+            inspect(path)
+
+    def test_reject_duplicate_native_json_keys(self):
+        path = self.project()
+        with zipfile.ZipFile(path, "r") as archive:
+            records = [(info.filename, archive.read(info), info.compress_type)
+                       for info in archive.infolist()]
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, payload, compression in records:
+                if name == "manifest.json":
+                    self.assertTrue(payload.startswith(b"{"))
+                    payload = b'{"format":"OpenSchematix Project",' + payload[1:]
+                archive.writestr(name, payload, compress_type=compression)
+        with self.assertRaisesRegex(InvalidProject, "duplicate JSON key"):
+            inspect(path)
+
     def test_unknown_extension(self):
         path = self.root / "example.step"
         path.write_text("{}")
