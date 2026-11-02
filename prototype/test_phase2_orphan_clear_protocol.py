@@ -91,7 +91,6 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
             self._clear(reason="")
         self.assertTrue(self.orphan.exists())
 
-    @unittest.expectedFailure
     def test_failure_before_audit_must_leave_guard_in_place(self):
         """POSITIVE safety requirement; frozen baseline moves evidence too early."""
         with patch.object(self.ws.Workspace, "_publish_admin_entry",
@@ -101,7 +100,6 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
         self.assertEqual(len(self._clear_audits()), 0)
         self._assert_no_writer()
 
-    @unittest.expectedFailure
     def test_durable_audit_must_precede_attempted_evidence_move(self):
         """At the move linearization point, audit already needs to be durable."""
         real = self.ws.os.replace
@@ -132,7 +130,6 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
         self.assertEqual(kept[0].read_bytes(), ORPHAN_BYTES)
         self.assertEqual(len(self._clear_audits()), 1)
 
-    @unittest.expectedFailure
     def test_after_evidence_move_crash_must_leave_durable_audit(self):
         """Move happened, then process died. Never acknowledge unaudited relief."""
         real = self.ws.os.replace
@@ -156,7 +153,6 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].read_bytes(), ORPHAN_BYTES)
 
-    @unittest.expectedFailure
     def test_independent_process_death_after_move_has_persisted_audit(self):
         """Spawned process os._exit, not just exception unwinding (Windows/Linux)."""
         ctx = mp.get_context("spawn")
