@@ -29,8 +29,7 @@ Any token recheck immediately before the `publish_exclusive` call still leaves a
 A reproducible harness is `prototype/test_phase1_lock_race.py`. It injects a pause in the
 real `Workspace._check_lock_still_held`, runs the actual administrative break, resumes
 the writer, and searches the authoritative journal for both events. To run it, supply a
-separate `phase1-foundation` checkout using `REVISIONWORX_PHASE1_CHECKOUT`. A
-skipped test without the checkout is **not evidence** that the race was reproduced.
+separate `phase1-foundation` checkout using `REVISIONWORX_PHASE1_CHECKOUT`. The locally skipped regression was subsequently **executed against actual Phase 1 source** in GitHub Actions run 41371405600, with 1/1 test passing and the stale writer's post-override commit confirmed. This is a high-severity reproduced defect.
 
 This does not render Phase 1's local single-writer file journal useless: it documents
 a specific limitation. It **does** block a claim that shared-file multiwriter authority
@@ -109,7 +108,7 @@ test before opening a defect report.
 Local Linux CPython 3.13.5: `python -m unittest -v prototype.test_authority` initially
 passed 10 tests, then was extended to **14 passing tests** covering mandatory
 `expected_revision`, simultaneous override-versus-publication, and independent-process crashes before and after the SQLite commit point. The real Phase 1
-test and cache watermark probes were **skipped** locally without a separate checkout. GitHub Actions workflow
+test and cache watermark probes were **skipped** locally without a separate checkout. The **lock-break probe subsequently passed against real Phase 1 in GitHub Actions run 41371405600**. The cache-watermark probe is still awaiting CI evidence. GitHub Actions workflow
 `.github/workflows/distributed-authority-research.yml` was added to execute
 the prototype on Linux/Windows and the opt-in Phase 1 reproduction from its actual
 Git branch; record workflow results separately when completed.
