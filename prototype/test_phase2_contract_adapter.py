@@ -21,7 +21,7 @@ SOURCE = Path(os.environ["REVISIONWORX_PHASE2_CHECKOUT"]).resolve()
 sys.path.insert(0, str(SOURCE))
 sys.path.insert(0, str(SOURCE / "tests"))
 
-from contract_commit_authority import CommitAuthorityContract  # noqa: E402
+from contract_commit_authority import CommitAuthorityContract, PreconditionIdentityContract  # noqa: E402
 from revisionworx.workspace import (ConflictError, LockLostError, RecordCheck,  # noqa: E402
                                     RecordDelete, RecordPut, TxidReuseError)
 from prototype.record_batch_research import (BatchAuthorityResearch,  # noqa: E402
@@ -154,6 +154,11 @@ def revoke():
 
 class TestWitnessedBatchAdapter(CommitAuthorityContract):
     """EXACT source contract is inherited, not copied or weakened."""
+    pass
+
+
+class TestFullPreconditionIdentityAdapter(PreconditionIdentityContract):
+    """Unmodified new ADR-017 upstream precondition identity conformance."""
     pass
 
 
