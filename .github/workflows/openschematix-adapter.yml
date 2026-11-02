@@ -32,3 +32,14 @@ jobs:
         env:
           OPENSCHEMATIX_ORACLE_SOURCE: ${{ github.workspace }}/external/openschematix
         run: python -m unittest discover -s tests -p 'test_openschematix_native_oracle.py' -v
+      - name: Checkout pinned RevisionWorx Phase 2 draft source
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: 47d81658764cd6bde60e391ac9aac24e722317e8
+          path: external/revisionworx-phase2
+          persist-credentials: false
+      - name: Verify immutable revision adapter boundary against Phase 2
+        env:
+          REVISIONWORX_PHASE2_SOURCE: ${{ github.workspace }}/external/revisionworx-phase2
+        run: python -m unittest discover -s tests -p 'test_openschematix_phase2_contract.py' -v
