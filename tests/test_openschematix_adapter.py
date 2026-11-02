@@ -322,6 +322,62 @@ class AdapterTests(unittest.TestCase):
                 inspect(path)
         self.assertGreaterEqual(calls, 2)
 
+    def test_unknown_symbol_cannot_be_promoted_to_verified_part(self):
+        path = self.legacy()
+        doc = json.loads(path.read_text())
+        doc["components"][0]["symbol"] = "user:missing-symbol"
+        self.legacy(doc)
+        result = inspect(path)
+        self.assertEqual(result["components"][0]["symbol_id"], "user:missing-symbol")
+        self.assertEqual(result["dependencies"][0]["verification"], "unresolved")
+        self.assertIsNone(result["dependencies"][0]["quantity"])
+        self.assertEqual(result["coverage"]["symbol_libraries"], "not_resolved")
+        self.assertEqual(result["bom_status"], "candidate_only_not_equivalent_to_native_bom")
+
+    def test_embedded_custom_symbols_warn_without_interpreting_source(self):
+        path = self.project()
+        with zipfile.ZipFile(path, "r") as archive:
+            records = [(info.filename, archive.read(info), info.compress_type)
+                       for info in archive.infolist()]
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, payload, compression in records:
+                if name == "manifest.json":
+                    manifest = json.loads(payload)
+                    manifest["symbols"] = [
+                        {"id": "user:custom", "path": "symbols/0001.osym"}]
+                    payload = json.dumps(manifest).encode()
+                archive.writestr(name, payload, compress_type=compression)
+            # Deliberately malformed embedded symbol. This adapter does NOT
+            # parse it and must never claim authoritative purchasability.
+            archive.writestr("symbols/0001.osym", "{not valid JSON")
+        raw = path.read_bytes()
+        report = inspect(path)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertTrue(any("Embedded custom symbols not interpreted" in w
+                            for w in report["warnings"]))
+        self.assertEqual(report["coverage"]["symbol_libraries"], "not_resolved")
+        self.assertEqual(report["bom_status"], "candidate_only_not_equivalent_to_native_bom")
+
+    def test_schema3_boundary_fill_does_not_change_component_index(self):
+        path = self.project(schema=3)
+        with zipfile.ZipFile(path, "r") as archive:
+            records = [(info.filename, archive.read(info), info.compress_type)
+                       for info in archive.infolist()]
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, payload, compression in records:
+                if name == "sheets/s1.json":
+                    sheet = json.loads(payload)
+                    sheet["shapes"] = [{"id": 50, "kind": "hatch",
+                        "rings": [[[100, 100], [300, 100], [300, 200], [100, 200]]]}]
+                    payload = json.dumps(sheet).encode()
+                archive.writestr(name, payload, compress_type=compression)
+        original = path.read_bytes()
+        result = inspect(path)
+        self.assertEqual(result["sheet_schema"], 3)
+        self.assertEqual(result["sheets"][0]["component_count"], 1)
+        self.assertEqual(result["components"][0]["symbol_id"], "el.coil.iec")
+        self.assertEqual(path.read_bytes(), original)
+
     def test_unknown_extension(self):
         path = self.root / "example.step"
         path.write_text("{}")
