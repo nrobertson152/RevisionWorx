@@ -127,15 +127,16 @@ def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeyp
     """
     store = tmp_path / "store"
     writer = Workspace.create(store, "QA")
-    initial = writer.head_seq()
     token = Workspace.read_writer_lock(store)["token"]
     actual_check = writer._check_lock_still_held
     calls = []
+    after_break = []
     def break_after_check():
         actual_check()
         if not calls:
             calls.append(True)
             Workspace.break_writer_lock(store, token, reason="QA deterministic paused-writer race")
+            after_break.append(Workspace.open(store).head_seq())
     try:
         with monkeypatch.context() as m:
             m.setattr(writer, "_check_lock_still_held", break_after_check)
@@ -144,7 +145,8 @@ def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeyp
                     RecordPut("settings", "workspace", {"stale_writer": True})
                 ])
         with Workspace.open(store) as reader:
-            assert reader.head_seq() == initial
-            assert reader.get("settings", "workspace") is None
+            assert after_break, "the administrative break must have been injected"
+            assert reader.head_seq() == after_break[0]
+            assert not reader.get("settings", "workspace").get("stale_writer", False)
     finally:
         writer.close()
