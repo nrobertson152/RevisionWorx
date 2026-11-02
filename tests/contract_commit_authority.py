@@ -55,6 +55,20 @@ class CommitAuthorityContract:
             authority.commit("t", [RecordPut("project", B, {"v": 9})], txid=T1)
         assert authority.get("project", B) is None
 
+    def test_outcomes_are_classified(self, authority, revoke):
+        from revisionworx.authority import classify
+        authority.commit("t", [RecordPut("project", A, {"v": 1})], txid=T1)
+        for ops, txid, code in (([RecordPut("project", A, {"v": 2}, expect_rev=0)], None, "conflict"),
+                                ([RecordPut("project", B, {"v": 1})], T1, "txid-reuse")):
+            with pytest.raises(Exception) as info:
+                authority.commit("t", ops, txid=txid)
+            assert classify(info.value) == code
+        revoke(authority)
+        with pytest.raises(Exception) as info:
+            authority.commit("t", [RecordPut("project", B, {"v": 1})])
+        assert classify(info.value) == "fenced"
+        assert classify(RuntimeError("x")) == "error"
+
     def test_fencing_after_revocation(self, authority, revoke):
         revoke(authority)
         with pytest.raises(LockLostError):

@@ -396,6 +396,12 @@ afterwards and is only evidence.
   - treats every revision record (including unapplied entries) as a reference;
   - keeps objects younger than 1 h;
   - an `--apply` run is journaled as an audit record *before* it deletes anything.
+- **Conflict classification:** `authority.classify(exc)` maps exceptions to stable codes for a
+  coordinator wire protocol.
+  - `conflict`, `txid-reuse`, `fenced` and `busy` mean nothing took effect.
+  - `committed` means it did.
+  - `corrupt` and `error` require a `transaction_outcome(txid)` query.
+  - Covered by the conformance suite.
 - Not yet done: `Workspace` itself is not split into reader and authority. That refactor waits
   until QA accepts `325b7a8`, so code under review is not churned.
 

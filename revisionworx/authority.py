@@ -42,3 +42,28 @@ class CommitAuthority(Protocol):
     def list(self, kind: str) -> dict[str, dict]: ...
 
     def entries_after(self, seq: int) -> Iterable[dict]: ...
+
+
+# Stable outcome codes for a coordinator wire protocol (ADR-017). Order matters: subclasses first.
+OUTCOME_CODES = (
+    ("TxidReuseError", "txid-reuse"),         # same txid, different content; nothing written
+    ("ConflictError", "conflict"),            # an expect_rev / RecordCheck failed; nothing written
+    ("LockLostError", "fenced"),              # write authority revoked; no effect (may leave artifact)
+    ("CommittedNotApplied", "committed"),     # durable; derived state completes on recovery
+    ("WorkspaceLockedError", "busy"),         # another writer holds authority; retry later
+    ("ReadOnlyError", "read-only"),
+    ("WorkspaceCorruptError", "corrupt"),     # authoritative data inconsistent; writes refused
+    ("WorkspaceFormatError", "unsupported-format"),
+)
+
+
+def classify(exc: BaseException) -> str:
+    """Map an exception from ``commit`` to a stable outcome code; ``error`` if unclassified.
+
+    ``conflict``, ``txid-reuse``, ``fenced`` and ``busy`` guarantee nothing took effect;
+    ``committed`` guarantees it did; ``error``/``corrupt`` require ``transaction_outcome(txid)``."""
+    names = {c.__name__ for c in type(exc).__mro__}
+    for name, code in OUTCOME_CODES:
+        if name in names:
+            return code
+    return "error"

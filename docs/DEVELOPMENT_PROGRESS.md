@@ -85,7 +85,11 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 - **Backport:** prepared on `phase1-backport-8-9-10` @ `36d1957`; PR #6 itself is unchanged.
   Director decision pending (see the log above).
 - **ADR-018:** verified bounded revision-content read for the OpenSchematix adapter.
-- **Tests:** full suite **171 passed, 1 skipped (Qt)**. No CI was triggered.
+- Added stable outcome classification (`authority.classify`) to the CommitAuthority contract, for the
+  coordinator wire protocol.
+- **Tests:** full suite **172 passed, 1 skipped (Qt)** (Linux, Python 3.13.18). No CI was triggered.
+- **Next:** after QA accepts `03b3800`, split `Workspace` into reader and file-journal
+  `CommitAuthority` behind the conformance suite. Fast-forward PR #6 if the director approves.
 
 ### 2026-11-02 (session 5) — CommitAuthority contract, idempotent txid (ADR-017)
 - QA (PR #3) and Distributed Systems (PR #4) are verifying `325b7a8`. PR #6 is left unchanged, as
