@@ -117,10 +117,22 @@ claim is made.
 - **Actual Phase 2 draft:** isolated temporary-workspace integration tests
   against `phase2-documents` pinned at `47d81658764cd6bde60e391ac9aac24e722317e8`;
   [run 41381903865](https://github.com/nrobertson152/RevisionWorx/actions/runs/41381903865).
-- **Latest regression additions:** source-file race injection and native
-  multiunit/part-key assertions require latest-head CI confirmation.
-- No Windows runtime validation; no SMB/NFS safety claim. Issue #8 and
-  the separate multi-user authority design are outside adapter scope.
+- **Expanded current matrix:** [run 41382647720](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382647720)
+  at code/workflow commit `11abac8534231c6d7b029d29d75af8cd976a8f84`:
+  Linux Python 3.11 and 3.13 each **36 standalone + 4 native oracle + 3
+  actual Phase 2 contract = 43 passed**; Windows Python 3.11 and 3.13
+  each **36 standalone + 4 native oracle = 40 passed**. All four jobs
+  succeeded (**166 test executions**); the Windows Phase 2 contract step
+  was intentionally skipped because Windows authoritative storage is a
+  separate unverified core concern.
+- **Additional identity fixtures:** tests confirm copied native projects
+  retain identical project/sheet/object IDs while the PDM assigns different
+  document/revision IDs; native legacy `.osch` wrapper UIDs change between
+  opens even for identical bytes. Strict malformed/embedded symbol warning
+  and schema-3 fill cases have been exercised without claiming symbol BOM
+  classification. A deterministic live-file edit is rejected.
+- No SMB/NFS or Windows **core storage** safety claim. Issue #8 and the
+  separate multi-user authority design are outside adapter scope.
 
 **Claude decisions needed before integration:**
 1. Approve/adjust the immutable content-read boundary and where the exact

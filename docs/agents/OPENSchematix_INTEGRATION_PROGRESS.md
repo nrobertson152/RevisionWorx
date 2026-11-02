@@ -173,3 +173,24 @@
 1. Request Claude review of `docs/OPENSchematix_CLAUDE_HANDOFF.md` and architecture decisions above through PR #2.
 2. Only if authorized, prototype native headless BOM import under an explicitly separate `native_bom` contract with verified quantities/refs and symbol registry; never relabel `bom_candidates`.
 3. Expand Windows/large-archive and custom symbol fixture coverage before production readiness. Re-run pinned CI if any adapter code changes.
+
+## Windows adapter matrix and copied-source identity coverage — 2026-11-01
+
+**Role/branch:** OpenSchematix Integration Engineer on `integration/openschematix`; PR #2 remains draft. Work remained isolated; no commits in Claude's core branches or upstream OpenSchematix.
+
+**New commits and changed files:**
+- `d5c46545e031fe7924132e1449166354ac871de7` — three tests in `tests/test_openschematix_adapter.py`: unknown source symbol never becomes a verified part, malformed embedded custom-symbol member produces unresolved coverage warning without rewriting, schema-3 boundary fill does not corrupt the component inventory.
+- `39173731472d48560766fcb0affcdfd26e50b198` — native oracle regression proves legacy wrapper project/sheet UIDs are regenerated on repeated opens of identical `.osch` bytes, whereas hash-based observation stays identical.
+- `0cc8534181fec18fd828d339531462146b426939` — real Phase 2 registry test demonstrates duplicate native `.schematix` files have identical source UIDs and content SHA-256, but **different authoritative `doc_*` and `rev_*` IDs**. Global identity must incorporate PDM IDs, not raw source instance IDs.
+- `11abac8534231c6d7b029d29d75af8cd976a8f84` — `.github/workflows/openschematix-adapter.yml` now also verifies Linux and Windows, Python 3.11 and 3.13. Windows runs *only* standalone adapter and upstream native oracle tests; the actual Phase 2 storage contract remains deliberately Linux-only.
+
+**Independently checked CI evidence at exact SHA `11abac8534231c6d7b029d29d75af8cd976a8f84`:** [GitHub Actions run 41382647720](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382647720) completed successfully, with all four job conclusions SUCCESS and full unittest output inspected:
+- Linux Python 3.11: **36/36 adapter + 4/4 native oracle + 3/3 actual Phase 2 contract = 43/43 passed**.
+- Linux Python 3.13: **36/36 adapter + 4/4 native oracle + 3/3 actual Phase 2 contract = 43/43 passed**.
+- Windows Python 3.11: **36/36 adapter + 4/4 native oracle = 40/40 passed**; Phase 2 skipped intentionally.
+- Windows Python 3.13: **36/36 adapter + 4/4 native oracle = 40/40 passed**; Phase 2 skipped intentionally.
+- **Total across jobs: 166 passing test executions**. These are not 166 distinct test methods. No failures were reported. Test results apply to the exact stated code SHA.
+
+**Evidence-backed scope:** Native OpenSchematix `bom.generate` is verified against three real examples (16/5/7 lines); explicit unresolved candidate groups remain 5/0/0 with unknown quantities. Native K1's 3 units count as 1 physical device; Z1/Z2/Z4 group as quantity 3. The five explicit demo manufacturer-part keys match their native part-number-bearing line identities; this is **not full native BOM parity**. Phase 2 immutable content indexing is tested on disposable workspaces but not integrated into the authoritative storage services.
+
+**Remaining blockers/next tasks:** Await Claude approval of the read-only `inspect_bytes` content handoff, observation storage/refresh and PDM SHA ownership; await Director/Claude restacking of PR #2 with draft PRs #6/#7 and resolution of `docs/DEVELOPMENT_PROGRESS.md` overlap. No managed part identity inference, complete native BOM import, SMB/NFS production claim, or Windows core storage testing. Keep PR draft; no merge, release, or unauthorized retarget. Updated `docs/OPENSchematix_CLAUDE_HANDOFF.md` with the latest evidence and restrictions.
