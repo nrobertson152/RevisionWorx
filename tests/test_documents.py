@@ -545,3 +545,22 @@ def test_gc_removes_only_old_unreferenced_objects(ws, proj, monkeypatch):
     assert done["removed"] and not store.exists(orphan) and store.exists(a["sha256"])
     assert [x for x in ws.list("audit").values() if x["event"] == "content-gc"][0]["removed"][0]["sha256"] == orphan
     assert D.verify_revisions(ws) == [] and ws.verify()["problems"] == []
+
+
+def test_history_walks_chain_without_listing_all_revisions(ws, proj, monkeypatch):
+    doc, a = reg(ws, proj, "02 CAD/Parts/bracket.ipt")
+    _new_rev(ws, doc, b"v2", "v2")
+    other, _ = reg(ws, proj, "03 Drawings/Native/bracket.idw")
+    real_list = ws.list
+
+    def no_full_scan(kind):
+        assert kind != "revision", "history must not list every revision in the workspace"
+        return real_list(kind)
+    monkeypatch.setattr(ws, "list", no_full_scan)
+    assert [r["label"] for r in D.history(ws, doc["id"])] == ["A", "B"]
+    assert [r["label"] for r in D.history(ws, other["id"])] == ["A"]
+    monkeypatch.undo()
+    d = ws.get("document", doc["id"])  # corrupt the count: detected, not silently trusted
+    ws.commit("t", [RecordPut("document", doc["id"], {**d, "rev_count": 5})])
+    with pytest.raises(Exception, match="records 5 revisions"):
+        D.history(ws, doc["id"])

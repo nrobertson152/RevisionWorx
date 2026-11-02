@@ -214,9 +214,10 @@ Implementation notes beyond the original design:
   actor who released it. Document owner is a free-text field.
 - Local index schema v2 adds `documents` (+FTS), `revisions` and `checkouts`. An older cache is
   discarded and rebuilt; it holds no authoritative data.
-- Scaling note: `ws.list("revision")` reads every revision record. This is fine for thousands, not
-  for hundreds of thousands; queries should move to the index or per-document record directories
-  before the Phase 8 benchmarks.
+- Scaling: a document's history (and therefore check-in and label checks) walks its
+  `previous_rev_id` chain in O(its revisions), and cross-checks the chain against `rev_count`.
+  Whole-workspace scans remain only in admin operations (`verify_revisions`, `doc gc`,
+  `save_lifecycle`) and in `drawing_register`, which lists documents.
 
 ### ADR-010 Document registry — IMPLEMENTED (`documents.py`, tests `tests/test_documents.py`)
 - New record kinds `doctype`, `document`, `revision`, `checkout`, `lifecycle` (registered via

@@ -80,7 +80,9 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 - Fixed a non-idempotent `txid` retry (reproduced first: the same txid produced 2 entries).
 - Added orphan content GC (`doc gc`): dry run by default, grace period, referenced objects never
   removed, audited.
-- **Tests:** full suite **169 passed, 1 skipped (Qt)**. No CI was triggered.
+- Document history now walks the revision chain (O(revisions of the document)), with loop, break
+  and count checks, instead of listing all revisions.
+- **Tests:** full suite **170 passed, 1 skipped (Qt)**. No CI was triggered.
 
 ### 2026-11-01 (session 4) — issues #8 (rev. 2), #9, #10
 - **#8 pre-audit gap closed:** revocation is now a journal entry, the single linearization point
@@ -247,7 +249,7 @@ against the application, so I ran them; nothing in their branches was modified.
   administrative release.
 - **Orphan content objects** from interrupted check-ins accumulate until GC exists. They are
   harmless but use space.
-- **Revision listing reads all revision records**, which is a scaling limit (see ARCHITECTURE).
+- Admin-only operations (verify, gc, lifecycle change) still scan all revisions.
 
 ## Next concrete tasks
 1. **The director has allowlisted PyPI.** Install PySide6 and run `QT_QPA_PLATFORM=offscreen python -m pytest`, which includes `tests/test_qt_gui.py`.

@@ -172,8 +172,23 @@ def _check_number(ws: Workspace, number: str, allow_duplicate: bool, exclude: st
 
 
 def revisions_of(ws: Workspace, doc_id: str) -> list[dict]:
-    return sorted((r for r in ws.list("revision").values() if r["document_id"] == doc_id),
-                  key=lambda r: r["number"])
+    """A document's revisions, oldest first, by walking the ``previous_rev_id`` chain from its
+    latest revision: O(revisions of this document), not O(all revisions in the workspace)."""
+    doc = ws.get("document", doc_id)
+    out, rid, seen = [], doc.get("latest_rev_id") if doc else None, set()
+    while rid:
+        if rid in seen:
+            raise WorkspaceError(f"revision chain of document {doc_id} loops at {rid}")
+        seen.add(rid)
+        rev = ws.get("revision", rid)
+        if rev is None or rev["document_id"] != doc_id:
+            raise WorkspaceError(f"revision chain of document {doc_id} is broken at {rid}; run 'verify'")
+        out.append(rev)
+        rid = rev.get("previous_rev_id")
+    out.reverse()
+    if doc and len(out) != doc.get("rev_count", len(out)):
+        raise WorkspaceError(f"document {doc_id} records {doc['rev_count']} revisions but its chain has {len(out)}")
+    return out
 
 
 def _next_label(ws: Workspace, doc: dict, number: int, label: str | None) -> str:
