@@ -1,5 +1,7 @@
 # RevisionWorx — Engineering Assignment Orders
 
+**LATEST DIRECTOR ASSIGNMENTS:** [Parallel Agent Assignments — 2026-11-01](PARALLEL_ASSIGNMENTS.md). These RevisionWorx-only instructions supersede earlier task priorities where Claude's newly implemented #8/#9/#10 fixes change the required work. Recheck live SHA before testing. No other repositories may be modified.
+
 These are the current standing orders issued by the Project Director for the three independent ChatGPT specialists. **Assignment names replace all alphabetic agent labels.** Claude remains Lead Architect.
 
 | Assignment | Orders | Development branch | Progress file |

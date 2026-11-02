@@ -1,5 +1,7 @@
 # RevisionWorx — Claude Lead Architect Resume Handoff
 
+**UPDATED AFTER CLAUDE'S NEW COMMIT:** PR #7 now has candidate fixes #8/#9/#10 at `325b7a801de15c082616781fe086bbd95cb350b6`, locally 161 passed/1 Qt skipped, **independent QA and Windows acceptance pending**. Previous descriptions of those defects below are historical pre-fix evidence, not current proof of failure. Read [Parallel Agent Assignments](PARALLEL_ASSIGNMENTS.md) for current RevisionWorx-only agent work; do not modify other projects.
+
 **Director preparation:** 2026-11-01 (ET). This is a coordination document, **not** merge or release approval. Review latest live GitHub state and the existing `docs/DEVELOPMENT_PROGRESS.md` on `phase2-documents` before editing; do not repeat completed Phase 1/2 implementation.
 
 ## Current architecture and branch map

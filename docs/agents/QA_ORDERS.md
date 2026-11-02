@@ -1,5 +1,7 @@
 # Standing Orders — QA Engineer
 
+**LATEST ORDERS:** [RevisionWorx Parallel Assignments](PARALLEL_ASSIGNMENTS.md) — independently retest Claude's new PR #7 fix SHA `325b7a8` for #8/#9/#10. Earlier strict xfail status is a historical baseline, not proof of the new code. RevisionWorx repository only.
+
 **Assignment:** Independent quality assurance, test architecture, regression verification and data integrity.
 **Branch:** `qa/testing-infrastructure`
 **Progress log:** `docs/agents/QA_PROGRESS.md`

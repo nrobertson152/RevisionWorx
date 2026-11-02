@@ -1,5 +1,7 @@
 # Standing Orders — OpenSchematix Integration Engineer
 
+**LATEST ORDERS:** [RevisionWorx Parallel Assignments](PARALLEL_ASSIGNMENTS.md) — produce RevisionWorx PR #2/#3/#4/#6/#7 integration and release-readiness report; preserve the existing read-only adapter scope. No external repository work or release.
+
 **Assignment:** Read-only OpenSchematix interoperability, BOM and dependency extraction.
 **Branch:** `integration/openschematix`
 **Progress log:** `docs/agents/OPENSchematix_INTEGRATION_PROGRESS.md`

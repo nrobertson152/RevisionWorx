@@ -1,5 +1,7 @@
 # Standing Orders — Distributed Systems Engineer
 
+**LATEST ORDERS:** [RevisionWorx Parallel Assignments](PARALLEL_ASSIGNMENTS.md) — review ADR-015 rev. 2 and ADR-016 at Claude's new `325b7a8` for protocol/engineering-data integrity. Existing research remains isolated; no other repository changes.
+
 **Assignment:** Shared-filesystem coordination, transaction safety, locking and recovery.
 **Branch:** `research/shared-filesystem-protocol`
 **Progress log:** `docs/agents/DISTRIBUTED_SYSTEMS_PROGRESS.md`
