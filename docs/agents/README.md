@@ -29,3 +29,7 @@ The Director approved an **optional on-premises Windows-hosted LAN coordinator w
 ### Agent coordination and stop conditions
 
 Record exact SHA, OS/Python, run/job links, commands, pass/skip/xfail and unresolved concerns in each PR/progress log. Strict expected failures are **open requirements**, not fixes; distinguish unsafe-behavior reproduction from safety acceptance. Communicate new material evidence through existing GitHub issues/PRs without duplicating repeated status comments. Claude owns production `CommitAuthority`, `Workspace`, `documents.py`, `LocalIndex` and architecture decisions; specialists own isolated, assigned work only. When remaining work is blocked on Claude's design decision, produce a succinct reviewable handoff and stop adding speculative features. No merges, releases or retargeting without Director approval.
+
+## Resume coordination (2026-11-01)
+
+**All agents must read [`CLAUDE_RESUME_HANDOFF.md`](CLAUDE_RESUME_HANDOFF.md) from latest `main` before the next work cycle**, in addition to their standing orders and the current live GitHub PR/issue/CI state. The handoff explains Claude's production-fix responsibilities, agent verification interfaces and cost-conscious CI execution. Focus on actionable #8/#9/#10 defect closure and approved API decisions; do not trigger redundant full CI merely to publish a progress note. OpenSchematix-HPS-Edition and other repositories are **outside the scope** of these RevisionWorx orders.
