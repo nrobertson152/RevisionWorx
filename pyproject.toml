@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "revisionworx"
+dynamic = ["version"]
+description = "Offline, accountless engineering PDM that integrates with OpenSchematix"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+dependencies = []          # standard library only (Tkinter needed for the GUI)
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Development Status :: 2 - Pre-Alpha",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+revisionworx = "revisionworx.cli:main"
+
+[project.gui-scripts]
+revisionworx-gui = "revisionworx.gui.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "revisionworx.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["revisionworx*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "gui: needs importable tkinter and a display (real or Xvfb); skipped otherwise",
+]
