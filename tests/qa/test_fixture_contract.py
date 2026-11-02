@@ -36,3 +36,42 @@ def test_fingerprint_detects_file_deletion_and_rename(tmp_path):
     assert fingerprint(root) != fixture["before"]
     target.with_name("items-renamed.csv").unlink()
     assert fingerprint(root) != fixture["before"]
+
+def test_fingerprint_tracks_directory_symlink_target_without_traversing(tmp_path):
+    import os
+    import pytest
+    root = tmp_path / "Engineering"
+    fixture = populate(root, "customer")
+    project = fixture["projects"][0]
+    first = project / "Models"
+    second = project / "BOM"
+    link = project / "linked-directory"
+    try:
+        link.symlink_to(first, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    initial = fingerprint(root)
+    key = link.relative_to(root).as_posix()
+    assert initial[key] == ("symlink", os.readlink(link))
+    link.unlink()
+    link.symlink_to(second, target_is_directory=True)
+    changed = fingerprint(root)
+    assert changed[key] == ("symlink", os.readlink(link))
+    assert changed != initial
+    assert not any(path.startswith(key + "/") for path in changed)
+
+
+def test_fingerprint_detects_directory_symlink_deletion(tmp_path):
+    import pytest
+    root = tmp_path / "Engineering"
+    fixture = populate(root, "year")
+    project = fixture["projects"][0]
+    link = project / "linked-directory"
+    try:
+        link.symlink_to(project / "Models", target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    initial = fingerprint(root)
+    assert link.relative_to(root).as_posix() in initial
+    link.unlink()
+    assert fingerprint(root) != initial
