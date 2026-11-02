@@ -1,4 +1,5 @@
 """Research-only coordinator facade tests; no Windows SMB physical host certification."""
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -47,12 +48,12 @@ class CoordinatorResearchTests(unittest.TestCase):
     def test_backup_restore_db_without_guard_fails_closed(self):
         cred = self.c.acquire("cad", "alice")
         backup = self.root / "snapshot.db"
-        with sqlite3.connect(self.db) as source, sqlite3.connect(backup) as target:
+        with closing(sqlite3.connect(self.db)) as source, closing(sqlite3.connect(backup)) as target:
             source.backup(target)
         self.c.release("cad", cred)
         # Restore the old snapshot through SQLite backup API while retaining
         # the same epoch guard: a KNOWN GAP, not a successful fencing test.
-        with sqlite3.connect(backup) as source, sqlite3.connect(self.db) as target:
+        with closing(sqlite3.connect(backup)) as source, closing(sqlite3.connect(self.db)) as target:
             source.backup(target)
         restored = CoordinatorResearch(self.db, self.guard)
         self.assertEqual(restored.verify("cad", cred), 0)
@@ -87,8 +88,9 @@ class CoordinatorResearchTests(unittest.TestCase):
         cred = self.c.acquire("cad", "alice")
         for i in range(3):
             self.c.publish("cad", cred, f"tx{i}", f"payload{i}", expected_revision=i)
-        with sqlite3.connect(self.db) as db:
+        with closing(sqlite3.connect(self.db)) as db:
             db.execute("DELETE FROM commits WHERE sequence=2")
+            db.commit()
         with self.assertRaises(Fenced):
             self.c.changes_after(1)
 
