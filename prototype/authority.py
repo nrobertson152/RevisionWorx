@@ -100,7 +100,7 @@ class Authority:
                        (resource, old, old + 1, previous_owner, reason, actor))
             return old + 1
 
-    def publish(self, resource, owner, generation, txid, payload, expected_revision=None):
+    def publish(self, resource, owner, generation, txid, payload, *, expected_revision):
         """Linearization point: authority/expect_rev test and commit row in ONE transaction.
 
         Identical txid replays are idempotent even if the owner was later revoked.
@@ -109,6 +109,8 @@ class Authority:
         """
         if not txid:
             raise ValueError("txid required")
+        if not isinstance(expected_revision, int) or expected_revision < 0:
+            raise ValueError("nonnegative expected_revision required")
         with self._transaction() as db:
             old = db.execute("""SELECT resource, generation, payload, expected_revision
                              FROM commits WHERE txid=?""", (txid,)).fetchone()
@@ -121,7 +123,7 @@ class Authority:
             if row is None or (row[0], row[1]) != (generation, owner):
                 raise Fenced("stale publication authority")
             revision = row[2]
-            if expected_revision is not None and revision != expected_revision:
+            if revision != expected_revision:
                 raise Fenced("record revision conflict")
             new_revision = revision + 1
             db.execute("""INSERT INTO commits(txid, resource, generation, payload,
