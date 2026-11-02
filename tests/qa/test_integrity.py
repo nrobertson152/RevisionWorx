@@ -423,3 +423,55 @@ def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
             admin_thread.join(5)
         writer._lock_token = None
         writer.close()
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError,
+    reason="Issue #9: LocalIndex.rebuild can drop a record deleted after the sampled watermark",
+)
+def test_index_rebuild_does_not_omit_pre_watermark_records_due_to_late_delete(tmp_path, monkeypatch):
+    """Delete-side acceptance oracle for the same non-atomic cache rebuild.
+
+    If the index claims journal sequence N, a record that existed at N must
+    remain projected until a delete at N+1 is included in the cursor. An index
+    rebuilt from newer materialized records cannot truthfully claim N.
+    """
+    if not hasattr(workspace_mod, "RecordDelete"):
+        pytest.skip("Original Phase 1 did not yet expose journaled RecordDelete")
+    from revisionworx.index import LocalIndex
+    from revisionworx.workspace import new_id
+
+    store = tmp_path / "store"
+    rid = new_id("root")
+    with Workspace.create(store, "QA index deleted record") as ws:
+        ws.commit("qa.root.before.rebuild", [
+            RecordPut("root", rid, {"id": rid, "name": "present at watermark"})
+        ])
+        with LocalIndex(ws, cache_dir=tmp_path / "cache") as index:
+            original_head = ws.head_seq
+            baseline_seq = original_head()
+            removed_seq = []
+
+            def head_then_delete():
+                seq = original_head()
+                if not removed_seq:
+                    monkeypatch.setattr(ws, "head_seq", original_head)
+                    current_rev = ws.get("root", rid)["_rev"]
+                    deleted = ws.commit("qa.root.after.snapshot.delete", [
+                        workspace_mod.RecordDelete("root", rid, expect_rev=current_rev)
+                    ])
+                    removed_seq.append(deleted)
+                return seq
+
+            with monkeypatch.context() as m:
+                m.setattr(ws, "head_seq", head_then_delete)
+                index.rebuild()
+            if removed_seq != [baseline_seq + 1]:
+                raise RuntimeError("QA deleted-record injection did not complete as expected")
+            present = index.db.execute(
+                "SELECT id FROM roots WHERE id=?", (rid,)
+            ).fetchone() is not None
+            assert present or index.cursor_seq() >= removed_seq[0], (
+                f"cache omitted root {rid} at cursor {index.cursor_seq()} "
+                f"although delete was published at seq {removed_seq[0]}"
+            )
