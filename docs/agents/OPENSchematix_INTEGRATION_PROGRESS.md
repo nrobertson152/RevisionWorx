@@ -120,3 +120,16 @@
 - `inspect_bytes(raw,suffix)` remains a proposed Phase 2 boundary awaiting Claude approval. Immutable revision SHA must be checked by the caller; no authoritative part/dependency writes are implemented.
 - Issue #8 confirms a separate stale-writer fencing defect in Phase 1. Do not imply RevisionWorx is multiuser-safe or that the integration fixes it.
 - Check GitHub Actions for 24/24 Python 3.11 and 3.13 success at exact latest head; fix any further failure. Coordinate approval of the immutable bytes interface and PR retargeting with Claude. Retain draft PR and no merge/release until approved.
+
+## Continued implementation and verified 30-case matrix — 2026-11-01
+
+**Assignment/branch:** OpenSchematix Integration Engineer, `integration/openschematix`; draft PR #2. Reread standing orders, current progress and latest Director PR instructions. Verified previous 24-case matrix at exact commit `6dcfdb0e2e88a38b8077421ab6665e21dc8e88e8`: [GitHub Actions run 41373844070](https://github.com/nrobertson152/RevisionWorx/actions/runs/41373844070), Python 3.11/3.13 both successful.
+
+**Deliverables:**
+- Commit `c63a4b8e918485b89390dfd1670f9f2a28807898`: six additional tests in `tests/test_openschematix_adapter.py` for per-member ZIP inflation cap, total ZIP inflation cap, truncated ZIP, mismatched manifest/sheet UID, unsupported legacy schema and nonfinite component coordinates.
+- Commit `02e07431371d3c004ebecf9cbcbcd18997a8c194`: precise proposed immutable-revision extraction and provenance contract in `docs/OPENSchematix_INTEGRATION.md`, explicitly separating authoritative revision SHA and document identity from disposable read-only observations and unresolved manufacturer-part candidates.
+- **Verified executable tests:** [GitHub Actions run 41380278928](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380278928) on code commit `c63a4b8e`: **30/30 passed** on Linux Python 3.11 and **30/30 passed** on Linux Python 3.13. GitHub job metadata confirms both succeeded; 3.11 log explicitly states `Ran 30 tests ... OK`. The later documentation-only commit does not modify tested code.
+
+**Open risks:** No full native BOM generation or multiunit device equivalence; native BOM 16/5/7 versus candidate 5/0/0 remains intentionally distinct. No production managed-part mapping or authoritative dependency publication. Native custom symbol registry and external libraries are not indexed. No Windows-specific adapter execution. Existing Phase 1 stale-writer issue #8 is outside this integration. No source changes to OpenSchematix or core RevisionWorx.
+
+**Next actions:** Seek Claude approval of proposed immutable-content handoff, SHA responsibility and observation storage; coordinate PR base/stacking with Phase 1/2; add native BOM parity only with tested upstream symbol metadata and explicit authorization. Maintain draft PR, no merge, tag or release.
