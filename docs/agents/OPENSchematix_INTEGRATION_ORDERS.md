@@ -31,3 +31,7 @@ Maintain `docs/OPENSchematix_INTEGRATION.md`, `docs/OPENSchematix_DATA_MODEL.md`
 
 ## Immediate response required
 After reading these orders, report your role, branch, PR, current completed work, verified tests, outstanding risks, and your next concrete engineering task. Then continue implementation autonomously.
+
+## Updated priorities following Phase 2 report (2026-11-01)
+
+Phase 2 integration priority: inspect Claude draft PR #6 and stacked PR #7, align adapter with registration, revision, dependency and metadata interfaces while preserving native CAD paths. Claude reports 6/6 adapter tests passed but native BOM has 16 lines against adapter's 5 candidate lines. Do NOT present candidate extraction as an authoritative BOM. Reproduce discrepancy with real fixtures; reconcile quantities, grouping, part identities, sheets and variants with OpenSchematix source and Claude's interface. Add malformed archive, traversal, decompression, symlink, hash consistency and concurrent modification tests. Maintain draft PR #2 and integration progress log; report only independently executed tests; no merge.
