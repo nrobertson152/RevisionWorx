@@ -29,7 +29,7 @@ from prototype.record_batch_research import (BatchAuthorityResearch,  # noqa: E4
                                              BatchRecordConflict,
                                              BatchResourceConflict,
                                              BatchTxidConflict)
-from prototype.witnessed_coordinator import TestIdentityProvider  # noqa: E402
+from prototype.witnessed_coordinator import TestIdentityProvider as FixtureIdentityProvider  # noqa: E402
 
 assert Path(sys.modules["revisionworx.workspace"].__file__).resolve() == SOURCE / "revisionworx" / "workspace.py"
 
@@ -41,7 +41,7 @@ class ResearchCommitAuthorityAdapter:
     """Owns one test lease and delegates record CAS to witnessed SQLite batches."""
 
     def __init__(self, root):
-        self.idp = TestIdentityProvider({"test": ("secret", "engineer"),
+        self.idp = FixtureIdentityProvider({"test": ("secret", "engineer"),
                                          "admin": ("admin-secret", "administrator")}, _KEY)
         self.principal = self.idp.authenticate("test", "secret")
         self.admin = self.idp.authenticate("admin", "admin-secret")
@@ -181,3 +181,18 @@ def test_admission_after_fencing_fails_closed(authority, revoke):
                          [RecordPut("project", A, {"v": "revoked"})],
                          txid="f" * 32)
     assert authority.transaction_outcome("f" * 32) == {"state": "not-found"}
+
+
+def test_altered_recordcheck_is_txid_reuse_in_research_adapter(authority):
+    """Extra oracle missing from upstream contract: check inputs affect request identity."""
+    rid = "prj_" + "d" * 32
+    ops = [RecordCheck("settings", "workspace", 0),
+           RecordPut("project", rid, {"name": "A"}, expect_rev=0)]
+    # Our research adapter requires settings to be absent, which it is initially.
+    first = authority.commit("create", ops, txid="c" * 32)
+    with pytest.raises(TxidReuseError):
+        authority.commit("create", [
+            RecordCheck("settings", "workspace", 999),
+            RecordPut("project", rid, {"name": "A"}, expect_rev=0)],
+            txid="c" * 32)
+    assert authority.transaction_outcome("c" * 32) == {"state": "committed", "seq": first}
