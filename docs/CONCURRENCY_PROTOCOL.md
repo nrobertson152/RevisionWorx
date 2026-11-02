@@ -20,7 +20,7 @@ WORKING -> STAGING -> PREPARED -> COMMITTED -> MATERIALIZED -> INDEXED
                   \-> ABORTED       \-> RECOVERY_REQUIRED
 ```
 
-1. Acquire globally serialized commit authority; recheck lock tokens, fencing generations, epoch and all expected base heads.
+1. Obtain authoritative commit serialization, then check the checkout token, fencing generation, workspace epoch and all expected record revisions **within the very same atomic transaction as authoritative commit publication**. A separate check-before-publish is vulnerable to revocation races.
 2. Write every CAD blob and revision manifest to unique temporary objects; fsync, verify SHA-256 and atomically rename each to an immutable content-addressed path. Flush parent directories where supported.
 3. Store one immutable manifest covering the full multi-document change (metadata, BOMs, dependencies, lifecycle status, audit, content references), validate all referenced blobs.
 4. Persist PREPARED record with txid, old heads and manifest digest.
@@ -32,7 +32,7 @@ WORKING -> STAGING -> PREPARED -> COMMITTED -> MATERIALIZED -> INDEXED
 
 Absent COMMIT: prepared data is not visible and may be collected after a safe retention interval. Present COMMIT and valid immutable objects: transaction is authoritative; rebuild projections idempotently. COMMIT with missing/corrupt objects, diverged heads or a journal gap: fail closed, require operator repair. Reconnect checks workspace epoch, checkout fencing and object hashes; never overwrite based on cached locks.
 
-The isolated prototype has an intentional safety limitation: its mkdir mutex can be left behind by a crash; removing it while a live writer remains active would break exclusivity. It is therefore not suitable for production without a stronger service or proven fencing protocol.
+The actual isolated prototype uses a **local-only SQLite** serialized authority model, not a mkdir mutex. It demonstrates atomic generation validation and commit-row insertion; real blob/manifest durability, a recoverable network service, epoch management across backup restore, and authenticated administrative override are unimplemented. This proposal requires Project Director approval (issue #5), and no file-share-only atomic fencing proof exists.
 
 ```mermaid
 sequenceDiagram
