@@ -1,5 +1,6 @@
 """Reproducible local SQLite / independent-process authority tests; NOT share certification."""
 import multiprocessing as mp
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -26,6 +27,22 @@ def publisher(path, ready, proceed, queue, name, generation):
                                                  "tx-from-paused-worker", "data", expected_revision=0)))
     except Fenced:
         queue.put(("fenced", None))
+
+
+def crash_before_transaction_commit(path, ready):
+    authority = Authority(path)
+    with authority._transaction() as db:
+        db.execute("UPDATE authority SET generation=generation+1, owner=NULL WHERE resource=?",
+                   ("drawing",))
+        ready.set()
+        os._exit(31)  # simulate process death with uncommitted SQLite transaction
+
+
+def crash_after_transaction_commit(path, generation):
+    authority = Authority(path)
+    authority.publish("drawing", "alice", generation, "committed-but-unacknowledged",
+                      "content", expected_revision=0)
+    os._exit(32)  # commit succeeded but response was never delivered
 
 
 class AuthorityTests(unittest.TestCase):
@@ -126,6 +143,34 @@ class AuthorityTests(unittest.TestCase):
             self.authority.publish("drawing", "alice", generation, "bad", None, expected_revision=0)
         self.assertEqual(self.authority.snapshot("drawing")[2], 0)
         self.assertEqual(self.authority.outcome("bad")["state"], "not-found")
+
+    def test_process_crash_before_commit_rolls_back(self):
+        generation = self.authority.acquire("drawing", "alice")
+        ctx = mp.get_context("spawn")
+        ready = ctx.Event()
+        child = ctx.Process(target=crash_before_transaction_commit,
+                            args=(str(self.path), ready))
+        child.start()
+        self.assertTrue(ready.wait(20))
+        child.join(20)
+        self.assertEqual(child.exitcode, 31)
+        self.assertEqual(self.authority.snapshot("drawing")[:2], (generation, "alice"))
+        self.assertEqual(self.authority.audits("drawing"), [])
+
+    def test_process_crash_after_commit_is_idempotent(self):
+        generation = self.authority.acquire("drawing", "alice")
+        ctx = mp.get_context("spawn")
+        child = ctx.Process(target=crash_after_transaction_commit,
+                            args=(str(self.path), generation))
+        child.start()
+        child.join(20)
+        self.assertEqual(child.exitcode, 32)
+        self.assertEqual(self.authority.outcome("committed-but-unacknowledged")["state"],
+                         "committed")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation,
+                         "committed-but-unacknowledged", "content", expected_revision=0),
+                         "already-committed")
+        self.assertEqual(self.authority.snapshot("drawing")[2], 1)
 
     def test_required_expected_revision(self):
         generation = self.authority.acquire("drawing", "alice")
