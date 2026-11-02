@@ -459,6 +459,25 @@ exists. Adding more token re-checks only narrows the window.
   the action.
 - The displaced writer B stops at its next preflight, since `writer.lock` no longer holds its token.
 - Residual risk: an administrator clearing the orphan while B is mid-commit, past preflight.
+- **Rev. 2: audit-first, crash-resumable clear** (Distributed Systems run 41391444478, reproduced
+  first). Rev. 1 moved the evidence *before* journaling the audit, so dying in between left neither
+  orphan nor audit, and the next writer acquired.
+
+  Now `clear_orphaned_release`:
+  1. **publishes** the audit first (reason, file name, SHA-256 of the exact bytes, planned evidence
+     name); that audit is the authorisation;
+  2. **then** moves the file to the planned evidence name.
+
+  Crash windows:
+
+  | Crash point | Result |
+  |---|---|
+  | Before or during audit publication | Orphan intact, acquisition still refused, no audit. |
+  | After the audit, before the move | The next acquisition (or re-running the command) completes the move under that audit, exactly once. |
+  | During the move | `os.replace` is atomic. |
+  | After the move | A retry is a no-op. |
+
+  Changed bytes are never covered by an older audit; they need a new, separately audited decision.
   Documented; the same class as any manual override.
 
 **Preserved:**

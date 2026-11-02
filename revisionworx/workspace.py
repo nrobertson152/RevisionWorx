@@ -371,6 +371,14 @@ class Workspace:
                 holder = {}
             tok = holder.get("token")
             if not tok:
+                try:
+                    digest = hashlib.sha256(orphan.read_bytes()).hexdigest()
+                except FileNotFoundError:
+                    continue
+                audit = next((x for x in Workspace._orphan_clear_audits(meta)
+                              if x["file"] == orphan.name and x["file_sha256"] == digest), None)
+                if audit is not None and Workspace._complete_orphan_clear(meta, audit):
+                    continue  # an administrator authorised this exact file; finish the disposition
                 # We cannot tell whose lock this was, so we cannot fence its holder: refuse to become
                 # a writer (fail closed) and give our just-acquired lock back.
                 Workspace(meta, {"workspace_id": "release"}, False, own_token)._unlink_own_lock(
@@ -407,23 +415,53 @@ class Workspace:
 
     @classmethod
     def clear_orphaned_release(cls, location: Path, name: str, reason: str) -> None:
-        """Administrative resolution of an unreadable orphaned ``.releasing-*`` file (ADR-019).
+        """Administrative resolution of an unreadable orphaned ``.releasing-*`` file (ADR-019, rev. 2).
 
         Use only after confirming the writer it may have belonged to is stopped: its token is unknown,
-        so it cannot be fenced. The file is kept as evidence and the action is journaled."""
+        so it cannot be fenced. Audit-first and crash-resumable:
+          1. the audit (reason, file name, SHA-256 of its exact bytes, planned evidence name) is
+             published to the journal FIRST; it is the authorisation;
+          2. the file is then moved to that evidence name.
+        A crash before 1 leaves the orphan in place (acquisition stays refused). A crash between 1 and 2
+        is completed by the next acquisition or by re-running this command, which reuses the existing
+        audit (exactly once). Bytes that differ from the audited digest are never covered by it."""
         if not reason.strip():
             raise WorkspaceError("a reason is required")
         meta = cls.meta_dir_for(location)
         if not re.match(r"^\.releasing-[0-9a-f]{1,64}$", name):
             raise WorkspaceError(f"{name!r} is not an orphaned release file")
         src = meta / "locks" / name
-        if not src.is_file():
-            raise WorkspaceError(f"{name} does not exist")
-        evidence = meta / "locks" / f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}"
-        os.replace(src, evidence)
-        cls._publish_admin_entry(meta, "workspace.orphan.clear", {
-            "event": "orphaned-release-cleared", "file": name, "evidence": evidence.name,
-            "reason": reason, "time": now_iso(), "by": current_actor()})
+        try:
+            digest = hashlib.sha256(src.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            if any(a["file"] == name for a in cls._orphan_clear_audits(meta)):
+                return  # already cleared (idempotent retry after completion)
+            raise WorkspaceError(f"{name} does not exist") from None
+        audit = next((a for a in cls._orphan_clear_audits(meta)
+                      if a["file"] == name and a["file_sha256"] == digest), None)
+        if audit is None:
+            audit = {"event": "orphaned-release-cleared", "file": name, "file_sha256": digest,
+                     "evidence": f"writer.lock.orphaned-{uuid.uuid4().hex[:12]}", "reason": reason,
+                     "time": now_iso(), "by": current_actor()}
+            cls._publish_admin_entry(meta, "workspace.orphan.clear", audit)
+        cls._complete_orphan_clear(meta, audit)
+
+    @classmethod
+    def _orphan_clear_audits(cls, meta: Path) -> list[dict]:
+        probe = cls(meta, {"workspace_id": "probe"}, False, None)
+        return [a for a in probe.list("audit").values() if a.get("event") == "orphaned-release-cleared"]
+
+    @staticmethod
+    def _complete_orphan_clear(meta: Path, audit: dict) -> bool:
+        """Move an audited orphan to its evidence name if its bytes still match the audit."""
+        src = meta / "locks" / audit["file"]
+        try:
+            if hashlib.sha256(src.read_bytes()).hexdigest() != audit["file_sha256"]:
+                return False
+            os.replace(src, meta / "locks" / audit["evidence"])
+        except FileNotFoundError:
+            pass
+        return True
 
     @classmethod
     def _publish_admin_entry(cls, meta: Path, op: str, audit_data: dict, revokes: str | None = None) -> int:
