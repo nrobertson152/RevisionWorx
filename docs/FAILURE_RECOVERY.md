@@ -5,25 +5,27 @@ No entry below claims SMB, NFS or NAS testing. H=possible authority/data loss, M
 | Failure | Detection and expected response | Recovery | Risk | Automated verification |
 |---|---|---|---|---|
 | Crash during checkout mutex creation | acquisition timeout, fail closed | Quiesce all writers, audit and quarantine mutex | H if blindly removed | Outstanding |
-| Crash holding checkout | durable record persists | Audited admin revoke; fence previous generation | M | Token check tested locally |
-| Simultaneous checkouts | authoritative lock conflict | One winner, other retries later | L if tested share | Eight independent processes passed locally |
+| Crash holding checkout | durable record persists | Audited admin revoke; fence previous generation | M | Local SQLite model tested; real share unverified |
+| Simultaneous checkouts | authoritative lock conflict | One winner, other retries later | L if tested share | Six independent processes passed locally with SQLite authority |
 | Partial content write | no committed manifest | Discard orphan after reachability/retention analysis | L | Outstanding |
-| Crash during PREPARED | no COMMIT, no new revision | Ignore uncommitted transaction | L | Local fault-injection passed |
-| Crash after COMMIT before projection | committed marker but stale HEAD | Recover from committed manifest before reads | M | Local fault-injection passed |
+| Crash during PREPARED | no COMMIT, no new revision | Ignore uncommitted transaction | L | Not yet implemented/tested with immutable multi-file manifest |
+| Crash after COMMIT before projection | committed marker but stale HEAD | Recover from committed manifest before reads | M | Not yet implemented/tested with actual projection |
 | Network failure before/after COMMIT | unknown acknowledgment | Query txid and reconcile idempotently | H until resolved | Real network outstanding |
 | Server reboot / NAS failover | lock cache/durability uncertainty | Freeze writers, validate markers, objects, epoch | H | Real hardware outstanding |
 | Disk full | short write/fsync failures | No COMMIT; reclaim capacity and reconcile | M/H | Outstanding |
 | ACL or permission change | access denied | Stop mutation, repair policy, verify | M | Outstanding |
-| Corrupted journal | parse/digest/gap mismatch | Read-only quarantine, restore or rebuild verified projection | H | Missing-event gap tested locally |
+| Corrupted journal | parse/digest/gap mismatch | Read-only quarantine, restore or rebuild verified projection | H | No test executed on this prototype |
 | Concurrent submissions | serialize, verify base | Reject stale base, recheckout | L | Checkout only tested |
-| Stale client | epoch/fencing/base mismatch | Reconcile without silent overwrite | M | Token invalidation tested locally |
-| Missing metadata | manifest or journal integrity failure | Rebuild projections or restore backup | H | Event gap tested |
+| Stale client | epoch/fencing/base mismatch | Reconcile without silent overwrite | M | Stale generation rejected in local SQLite prototype; no cross-host test |
+| Missing metadata | manifest or journal integrity failure | Rebuild projections or restore backup | H | Not tested |
 | External deletion/modification | targeted hash and existence verification | Restore authoritative blob, warn about native CAD | H | Outstanding |
 | Backup restored while live clients exist | epoch/sequence may diverge | Quiesce, atomic restore, new epoch, invalidate caches | H | Outstanding |
 
 ## Local prototype evidence
 
-Executed `cd prototype && python -m unittest -v`: **5 tests passed** in approximately four seconds on a local POSIX filesystem. Tests cover eight independent process checkout contention, fencing after release, simple publication and ordered event replay, incomplete PREPARED crash, and post-COMMIT recovery with administrator-simulated mutex removal. No tests on two physical hosts, Windows, SMB, Samba, NFS, NAS, power loss or disk-full were run. Simulating mutex removal after confirmed process death is not evidence of a safe generalized administrative workflow.
+Executed `python -m unittest -v prototype.test_authority` from an isolated local checkout on Linux, Python 3.13.5: **10 tests passed, 0 failed**, approximately five seconds. Coverage includes six-process checkout contention, a paused writer revoked across processes, atomic generation and revision precondition checks, txid replay, audit persistence across restart, and SQL constraint rollback. The opt-in `prototype.test_phase1_lock_race` harness ran **one skipped** because a Phase 1 checkout could not be fetched into the execution environment; the underlying real-code defect remains to be independently reproduced at runtime.
+
+Earlier entries claiming five tested POSIX mkdir/COMMIT-marker prototype cases were **incorrect**: no such prototype was committed or executed. They are withdrawn. No physical Windows/SMB/Samba/NFS/NAS, power-cut, server crash, network partition, authenticated override or real multi-file manifest test was executed. A SQLite model is not a certified distributed product.
 
 ## Operational requirement
 
