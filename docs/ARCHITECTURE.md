@@ -402,6 +402,10 @@ afterwards and is only evidence.
   - `committed` means it did.
   - `corrupt` and `error` require a `transaction_outcome(txid)` query.
   - Covered by the conformance suite.
+- **Precondition identity (Distributed Systems finding, reproduced first):** `RecordCheck` preconditions
+  are now journaled in each entry (`checks`, covered by the digest) and are part of the txid
+  identity. The same txid with different preconditions raises `TxidReuseError`. Entries written
+  before this change compare as having no checks.
 - Not yet done: `Workspace` itself is not split into reader and authority. That refactor waits
   until QA accepts `325b7a8`, so code under review is not churned.
 
@@ -446,6 +450,16 @@ exists. Adding more token re-checks only narrows the window.
   `writer.lock.orphaned-*` evidence.
 - The same rule covers a live releaser racing an acquirer: whichever party notices first fences the
   token exactly once. The releaser tolerates its private file having been taken into custody.
+
+**Unreadable orphan (Distributed Systems counterexample, run 41390605906; reproduced first):**
+- A malformed `.releasing-*` file hides whose lock it held, so the scanner cannot fence that writer.
+- Acquisition now **fails closed**: the new writer gives back its just-acquired lock and raises.
+  Nobody can write until an administrator confirms the possible writer is stopped and runs
+  `revisionworx lock clear-orphan <file> --reason …`. That keeps the file as evidence and journals
+  the action.
+- The displaced writer B stops at its next preflight, since `writer.lock` no longer holds its token.
+- Residual risk: an administrator clearing the orphan while B is mid-commit, past preflight.
+  Documented; the same class as any manual override.
 
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.

@@ -370,7 +370,16 @@ class Workspace:
             except (OSError, ValueError):
                 holder = {}
             tok = holder.get("token")
-            if tok and tok != own_token:
+            if not tok:
+                # We cannot tell whose lock this was, so we cannot fence its holder: refuse to become
+                # a writer (fail closed) and give our just-acquired lock back.
+                Workspace(meta, {"workspace_id": "release"}, False, own_token)._unlink_own_lock(
+                    locks / "writer.lock")
+                raise WorkspaceCorruptError(
+                    f"orphaned lock-release file {orphan.name} is unreadable, so its writer cannot be "
+                    "revoked; nobody may write until an administrator confirms that writer is stopped and "
+                    "runs 'revisionworx lock clear-orphan'")
+            if tok != own_token:
                 if revoked is None:
                     revoked = Workspace._revoked_tokens(meta)
                 if tok not in revoked:
@@ -395,6 +404,45 @@ class Workspace:
             return atomicio.read_json(lock)
         except FileNotFoundError:
             return None
+
+    @classmethod
+    def clear_orphaned_release(cls, location: Path, name: str, reason: str) -> None:
+        """Administrative resolution of an unreadable orphaned ``.releasing-*`` file (ADR-019).
+
+        Use only after confirming the writer it may have belonged to is stopped: its token is unknown,
+        so it cannot be fenced. The file is kept as evidence and the action is journaled."""
+        if not reason.strip():
+            raise WorkspaceError("a reason is required")
+        meta = cls.meta_dir_for(location)
+        if not re.match(r"^\.releasing-[0-9a-f]{1,64}$", name):
+            raise WorkspaceError(f"{name!r} is not an orphaned release file")
+        src = meta / "locks" / name
+        if not src.is_file():
+            raise WorkspaceError(f"{name} does not exist")
+        evidence = meta / "locks" / f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}"
+        os.replace(src, evidence)
+        cls._publish_admin_entry(meta, "workspace.orphan.clear", {
+            "event": "orphaned-release-cleared", "file": name, "evidence": evidence.name,
+            "reason": reason, "time": now_iso(), "by": current_actor()})
+
+    @classmethod
+    def _publish_admin_entry(cls, meta: Path, op: str, audit_data: dict, revokes: str | None = None) -> int:
+        probe = cls(meta, atomicio.read_json(meta / "workspace.json"), False, None)
+        probe._check_journal()
+        audit = RecordPut("audit", new_id("aud"), audit_data, expect_rev=0)
+        for _attempt in range(1000):
+            seq = probe.head_seq() + 1
+            entry = {"seq": seq, "txid": uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
+                     "op": op, "records": [audit.as_json()], "blobs": [], "writer_token": None}
+            if revokes:
+                entry["revokes"] = revokes
+            entry["digest"] = entry_digest(entry)
+            try:
+                atomicio.publish_exclusive(meta / "journal" / f"{seq:020d}.json", atomicio.dumps_json(entry))
+                return seq
+            except ExclusiveCreateError:
+                continue
+        raise WorkspaceError("could not publish an administrative journal entry (journal contention)")
 
     @classmethod
     def _publish_revocation(cls, meta: Path, holder: dict, reason: str, evidence: str) -> int:
@@ -589,13 +637,16 @@ class Workspace:
         if self.applied_seq() != self.head_seq():
             self.recover()
         self._check_lock_still_held()
-        if txid is not None:  # idempotent retry (ADR-017): same txid + same content -> same result
+        checks = [{"kind": c.kind, "id": c.id, "expect_rev": c.expect_rev}
+                  for c in ops if isinstance(c, RecordCheck)]
+        if txid is not None:  # idempotent retry (ADR-017): same txid + same request -> same result
             payload = {"op": op, "records": [p.as_json() for p in ops if not isinstance(p, RecordCheck)],
-                       "blobs": blob_refs or []}
+                       "blobs": blob_refs or [], "checks": checks}
             for s_ in reversed(self.journal_seqs()):
                 prior = self.read_entry(s_)
                 if prior.get("txid") == txid:
-                    if {"op": prior["op"], "records": prior["records"], "blobs": prior["blobs"]} != payload:
+                    if {"op": prior["op"], "records": prior["records"], "blobs": prior["blobs"],
+                        "checks": prior.get("checks", [])} != payload:
                         raise TxidReuseError(f"txid {txid} was already used for a different change (entry {s_})")
                     if self.is_fenced(prior):
                         raise LockLostError(f"fenced: txid {txid} (entry {s_}) never took effect")
@@ -611,7 +662,7 @@ class Workspace:
         seq = self.head_seq() + 1
         writes = [p for p in ops if not isinstance(p, RecordCheck)]
         entry = {"seq": seq, "txid": txid or uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
-                 "op": op, "records": [p.as_json() for p in writes], "blobs": blob_refs or [],
+                 "op": op, "records": [p.as_json() for p in writes], "blobs": blob_refs or [], "checks": checks,
                  "writer_token": self._lock_token}
         entry["digest"] = entry_digest(entry)
         try:

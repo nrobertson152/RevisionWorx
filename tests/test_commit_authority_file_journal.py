@@ -2,7 +2,7 @@
 """The file journal (standalone mode) against the CommitAuthority contract."""
 import pytest
 
-from contract_commit_authority import CommitAuthorityContract
+from contract_commit_authority import CommitAuthorityContract, PreconditionIdentityContract
 from revisionworx.workspace import Workspace
 
 
@@ -21,5 +21,5 @@ def revoke(share):
     return _revoke
 
 
-class TestFileJournal(CommitAuthorityContract):
+class TestFileJournal(CommitAuthorityContract, PreconditionIdentityContract):
     pass

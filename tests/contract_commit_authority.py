@@ -75,3 +75,16 @@ class CommitAuthorityContract:
             authority.commit("t", [RecordPut("project", A, {"v": "stale"})], txid=T2)
         assert authority.transaction_outcome(T2)["state"] in ("not-found", "fenced")
         assert authority.get("project", A) is None
+
+
+class PreconditionIdentityContract:
+    """DS finding (PR #7): a txid identifies the WHOLE request, including RecordCheck preconditions."""
+
+    def test_same_txid_different_precondition_is_reuse(self, authority):
+        s = authority.commit("t", [RecordPut("project", A, {"v": 1})])
+        authority.commit("t", [RecordPut("project", B, {"v": 1}), RecordCheck("project", A, s)], txid=T1)
+        with pytest.raises(TxidReuseError):  # same writes, different precondition
+            authority.commit("t", [RecordPut("project", B, {"v": 1}), RecordCheck("project", A, s + 99)],
+                             txid=T1)
+        assert authority.commit("t", [RecordPut("project", B, {"v": 1}), RecordCheck("project", A, s)],
+                                txid=T1)  # identical request still replays
