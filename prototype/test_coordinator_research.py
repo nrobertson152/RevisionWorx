@@ -1,6 +1,5 @@
 """Research-only coordinator facade tests; no Windows SMB physical host certification."""
 from pathlib import Path
-import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -47,15 +46,14 @@ class CoordinatorResearchTests(unittest.TestCase):
 
     def test_backup_restore_db_without_guard_fails_closed(self):
         cred = self.c.acquire("cad", "alice")
-        with sqlite3.connect(self.db) as db:
-            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         backup = self.root / "snapshot.db"
-        shutil.copy2(self.db, backup)
+        with sqlite3.connect(self.db) as source, sqlite3.connect(backup) as target:
+            source.backup(target)
         self.c.release("cad", cred)
-        # Restore an older DB snapshot but keep a *newer* epoch guard. Epoch
-        # is intentionally stable during normal operation, so this cannot
-        # detect a same-epoch rollback. Documented limitation.
-        shutil.copy2(backup, self.db)
+        # Restore the old snapshot through SQLite backup API while retaining
+        # the same epoch guard: a KNOWN GAP, not a successful fencing test.
+        with sqlite3.connect(backup) as source, sqlite3.connect(self.db) as target:
+            source.backup(target)
         restored = CoordinatorResearch(self.db, self.guard)
         self.assertEqual(restored.verify("cad", cred), 0)
 
