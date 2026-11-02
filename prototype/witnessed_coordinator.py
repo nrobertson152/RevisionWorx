@@ -302,4 +302,4 @@ class WitnessedCoordinatorResearch:
             self._verify(db)
             return db.execute("""SELECT old_generation,new_generation,prior_owner,
                               reason,actor_claim,outcome,time_utc FROM audits
-                              WHERE resource=? ORDER BY id""", (resource,)).fetchall()
+                              WHERE resource=? ORDER BY sequence""", (resource,)).fetchall()
