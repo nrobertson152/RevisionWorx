@@ -25,6 +25,35 @@ PHASE2 = os.environ.get("REVISIONWORX_PHASE2_CHECKOUT")
 
 @unittest.skipUnless(PHASE2, "requires actual phase2-documents checkout")
 class Phase2AdministrativeBreakOrderingProbe(unittest.TestCase):
+    def test_post_audit_stale_entry_is_correctly_fenced(self):
+        """Positive ADR-015 control: a stale append AFTER the audit is rejected."""
+        source = Path(PHASE2).expanduser().resolve()
+        sys.path.insert(0, str(source))
+        from revisionworx.workspace import LockLostError, RecordPut, Workspace
+
+        with tempfile.TemporaryDirectory() as td:
+            stale = Workspace.create(Path(td) / "project", "PostAuditFence")
+            token = Workspace.read_writer_lock(stale.meta_dir)["token"]
+            original_check = stale._check_lock_still_held
+            rid = "prj_" + "9" * 32
+
+            def check_then_admin_break():
+                original_check()
+                Workspace.break_writer_lock(stale.meta_dir, token, "post-audit positive control")
+
+            try:
+                stale._check_lock_still_held = check_then_admin_break
+                with self.assertRaises(LockLostError):
+                    stale.commit("test.post.audit.fenced", [
+                        RecordPut("project", rid, {"id": rid, "name": "should never take effect"})],
+                        txid="b" * 32)
+                with Workspace.open(stale.meta_dir) as reader:
+                    self.assertEqual(reader.transaction_outcome("b" * 32)["state"], "fenced")
+                    self.assertIsNone(reader.get("project", rid))
+            finally:
+                stale._lock_token = None
+                stale.close()
+
     def test_writer_publishes_between_lock_rename_and_audit(self):
         source = Path(PHASE2).expanduser().resolve()
         if not (source / "revisionworx" / "workspace.py").is_file():
