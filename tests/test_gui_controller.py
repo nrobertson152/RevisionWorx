@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-import ast
 import time
 from pathlib import Path
 
@@ -117,25 +116,3 @@ def test_project_with_unreachable_root_reports_folder_error(ctl):
         root["paths"] = {"windows": "Z:/eng"} if root["paths"].get("posix") else {"posix": "/mnt/eng"}
         ws.commit("t", [RecordPut("root", rec["root_id"], root)])
     assert "folder_error" in ctl.project(rec["id"])
-
-
-def test_gui_module_is_syntactically_valid():
-    """The Tk view cannot run without tkinter; at least prove it parses and has an entry point."""
-    src = Path(ctl_mod.__file__).with_name("app.py").read_text()
-    tree = ast.parse(src)
-    assert any(isinstance(n, ast.FunctionDef) and n.name == "main" for n in tree.body)
-
-
-@pytest.mark.gui
-def test_gui_starts_and_lists_projects(ctl):
-    tk = pytest.importorskip("tkinter")
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display")
-    from revisionworx.gui.app import App
-    ctl.create_project(NewProject(name="Visible"))
-    app = App(root, ctl)
-    app.refresh()
-    assert len(app.tree.get_children()) == 1
-    root.destroy()

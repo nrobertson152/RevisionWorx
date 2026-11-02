@@ -23,12 +23,13 @@ small and medium engineering departments, for Windows and Linux. Licensed GPL-3.
   files are verified by content.
 
 ## Running from source
-Python 3.10+ with no other runtime dependencies. The GUI needs Tkinter
-(Debian/Ubuntu: `sudo apt install python3-tk`).
+Python 3.10+. The core and command line have no other runtime dependencies. The desktop window
+needs PySide6 (Qt 6, LGPL-3.0): `pip install "PySide6-Essentials>=6.5"`.
 
 ```bash
 python -m revisionworx --help                       # command line
-python -m revisionworx.gui.app [WORKSPACE_FOLDER]   # desktop window
+python -m revisionworx.gui.app [WORKSPACE_FOLDER]   # desktop window (PySide6)
+python -m revisionworx verify                       # check records against the journal
 ```
 
 Example:
@@ -45,8 +46,8 @@ python -m revisionworx status
 
 ## Development
 ```bash
-pip install pytest
-python -m pytest            # GUI test is skipped automatically when Tkinter/display are missing
+pip install pytest "PySide6-Essentials>=6.5"
+QT_QPA_PLATFORM=offscreen python -m pytest   # Qt tests are skipped (not passed) without PySide6
 ```
 Read `CLAUDE.md` and `docs/` before contributing: requirements, architecture decisions and the
 verified progress log live there.

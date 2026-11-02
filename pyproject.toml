@@ -9,7 +9,7 @@ description = "Offline, accountless engineering PDM that integrates with OpenSch
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"
-dependencies = []          # standard library only (Tkinter needed for the GUI)
+dependencies = []          # core and CLI: standard library only
 classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
@@ -19,7 +19,8 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+gui = ["PySide6-Essentials>=6.5"]   # LGPL-3.0 (GPL-compatible); see docs/ARCHITECTURE.md ADR-009
+dev = ["pytest", "PySide6-Essentials>=6.5"]
 
 [project.scripts]
 revisionworx = "revisionworx.cli:main"
@@ -37,5 +38,5 @@ include = ["revisionworx*"]
 testpaths = ["tests"]
 addopts = "--strict-markers"
 markers = [
-    "gui: needs importable tkinter and a display (real or Xvfb); skipped otherwise",
+    "qt: needs PySide6; runs offscreen (QT_QPA_PLATFORM=offscreen); skipped when PySide6 is missing",
 ]
