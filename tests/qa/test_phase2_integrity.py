@@ -294,3 +294,33 @@ def test_cli_export_does_not_overwrite_existing_destination(ws, managed_document
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     assert result.returncode != 0
     assert destination.read_bytes() == b"KEEP EXISTING USER CONTENT"
+
+
+def test_restore_historic_revision_creates_new_revision_without_rewriting_history(ws, managed_document):
+    """Reverting engineering content must append a new revision, never alter history."""
+    folder, source, assembly, before, doc, rev_a = managed_document
+    original_name = source.name
+    original_assembly = assembly.read_bytes()
+    original = source.read_bytes()
+
+    first = D.checkout(ws, doc["id"])
+    source.write_bytes(b"Second design with a different hole pattern")
+    rev_b = D.checkin(ws, doc["id"], first["token"], "New hole pattern")
+    assert rev_b["sha256"] != rev_a["sha256"]
+
+    second = D.checkout(ws, doc["id"])
+    D.restore_to_working(ws, doc["id"], second["token"], rev_a["id"])
+    assert source.read_bytes() == original
+    rev_c = D.checkin(ws, doc["id"], second["token"], "Restore first design as a new revision")
+    assert rev_c["id"] not in {rev_a["id"], rev_b["id"]}
+    assert rev_c["label"] == "C"
+    assert rev_c["restored_from"] == rev_a["id"]
+    assert rev_c["previous_rev_id"] == rev_b["id"]
+    assert rev_c["sha256"] == rev_a["sha256"]
+    assert [r["label"] for r in D.history(ws, doc["id"])] == ["A", "B", "C"]
+    assert ws.get("revision", rev_b["id"])["sha256"] == rev_b["sha256"]
+    assert ws.get("document", doc["id"])["rev_count"] == 3
+    assert source.name == original_name
+    assert assembly.read_bytes() == original_assembly
+    assert D.verify_revisions(ws, doc["id"]) == []
+    assert ws.verify()["problems"] == []
