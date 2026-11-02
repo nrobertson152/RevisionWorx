@@ -21,7 +21,8 @@ SOURCE = Path(os.environ["REVISIONWORX_PHASE2_CHECKOUT"]).resolve()
 sys.path.insert(0, str(SOURCE))
 sys.path.insert(0, str(SOURCE / "tests"))
 
-from contract_commit_authority import CommitAuthorityContract, PreconditionIdentityContract  # noqa: E402
+from contract_commit_authority import (CommitAuthorityContract, PreconditionIdentityContract,
+                                       RequestIdentityV2Contract)  # noqa: E402
 from revisionworx.workspace import (ConflictError, LockLostError, RecordCheck,  # noqa: E402
                                     RecordDelete, RecordPut, TxidReuseError)
 from prototype.record_batch_research import (BatchAuthorityResearch,  # noqa: E402
@@ -161,6 +162,10 @@ class TestFullPreconditionIdentityAdapter(PreconditionIdentityContract):
     """Unmodified new ADR-017 upstream precondition identity conformance."""
     pass
 
+
+class TestVersionedFullRequestAdapter(RequestIdentityV2Contract):
+    """Unchanged Claude ADR-021 full-request identity contract."""
+    pass
 
 def test_reuse_after_lost_ack_and_restart(tmp_path):
     first = ResearchCommitAuthorityAdapter(tmp_path)
