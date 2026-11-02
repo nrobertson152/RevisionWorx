@@ -176,7 +176,7 @@ def test_real_qt_documents_tab_reports_authoritative_checkout_conflict(qapp, tmp
         qapp.processEvents()
         assert len(dialogs) == 1
         assert "checked out" in dialogs[0][1].lower()
-        assert "another session" not in dialogs[0][1].lower() or dialogs[0][1]
+        assert "already checked out" in dialogs[0][1].lower()
         with Workspace.open(share) as reader:
             assert reader.head_seq() == before
             assert reader.get("checkout", doc_id)["token"] == foreign["token"]
