@@ -78,12 +78,7 @@ def test_identical_txid_with_identical_checks_replays_after_restart(tmp_path):
     "remove_check",
     "reorder_checks",
 ])
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="P1 ADR-017 gap: committed txid identity omits RecordCheck inputs",
-)
-def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, modification):
+def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, modification, request):
     """Same writes and txid cannot launder altered checks into an earlier success.
 
     Strict XFAIL is only for the current *wrongly accepted* replay. Unexpected
@@ -91,6 +86,16 @@ def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, mod
     is removed after independent acceptance of Claude's corrected production.
     """
     location, a, b, target, txid, op, operations, seq, target_revision = _setup_committed_request(tmp_path)
+    # Inspect the durable journal itself. Old ADR-017 omitted RecordCheck
+    # request identity and should be strict xfail; the corrected format has a
+    # 'checks' field and must PASS as a normal safety acceptance test.
+    with Workspace.open(location) as reader:
+        if "checks" not in reader.read_entry(seq):
+            request.node.add_marker(pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="legacy ADR-017 journal omits RecordCheck txid identity",
+            ))
     changed = operations()
     if modification == "alter_checked_revision":
         changed[0] = RecordCheck("root", a, expect_rev=0)

@@ -876,8 +876,9 @@ def test_crash_with_displaced_foreign_lock_revokes_orphan_before_new_writer(tmp_
 
 
 @pytest.mark.xfail(
+    condition=not hasattr(Workspace, "clear_orphaned_release"),
     strict=True, raises=AssertionError,
-    reason="P0 ADR-019 tokenless orphan can admit a new writer while the displaced old writer remains effective",
+    reason="legacy ADR-019 tokenless orphan admits an effective second writer",
 )
 def test_malformed_release_orphan_must_not_allow_two_effective_writers(tmp_path, monkeypatch):
     """Independent local fail-closed oracle for issue #10's malformed orphan gap.
