@@ -13,3 +13,9 @@ These are the current standing orders issued by the Project Director for the thr
 These standing orders supplement `CLAUDE.md` and repository requirements. The Project Director approves merges and releases. Agents must report material conflicts to the Lead Architect.
 
 The existing Phase 1 implementation is on `phase1-foundation`; inspect it when evaluating actual behavior. Do not assume that Phase 1 is merged to `main`.
+
+## Current assignment execution and evidence discipline
+
+Each role's **Active Director priorities** section is the current task queue; historical results in PR descriptions and progress logs are background, not a substitute for checking the newest branch head and CI. Before adding work, inspect active workflows and cancel/supersede only in accordance with existing workflow policy; avoid successive documentation-only commits that repeatedly cancel unverified test runs. Prefer a cohesive code/test batch, then wait for CI results before issuing a definitive verification report. A queued, running, cancelled, or failed run is not a pass. Record both the tested code SHA and the test/CI SHA when using disposable cross-branch overlays.
+
+When reporting a known defect, distinguish a **passing reproduction of unsafe behavior** from a **passing safety acceptance test**; a strict xfail marks an open requirement, not a resolved defect. Report independent evidence once in the appropriate existing issue/PR rather than duplicating comments. Claude owns production integration; agents supply verified tests, isolated prototypes, and documented interface proposals. No specialist may merge, release, retarget another owner's PR, or independently approve multi-user safety.
