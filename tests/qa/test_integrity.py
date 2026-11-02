@@ -202,3 +202,56 @@ def test_second_process_cannot_take_active_writer_lock(tmp_path):
         ])
     with Workspace.open(store) as reader:
         assert reader.get("settings", "workspace")["reacquired"] is True
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError,
+    reason="Known LocalIndex.rebuild() snapshot/cursor mismatch: newer records can be indexed under older cursor",
+)
+def test_index_rebuild_does_not_include_records_newer_than_its_watermark(tmp_path, monkeypatch):
+    """Index projection must not claim a cursor older than any records it contains.
+
+    Inject a durable authoritative write immediately after rebuild captures
+    head_seq. Production currently reads a later materialised record snapshot
+    without also advancing the index cursor. This is a *local deterministic*
+    repro, not proof of shared-filesystem behavior. Keep xfail until corrected.
+    """
+    from revisionworx.index import LocalIndex
+    from revisionworx.workspace import new_id
+
+    store = tmp_path / "store"
+    with Workspace.create(store, "QA index watermark") as ws:
+        with LocalIndex(ws, cache_dir=tmp_path / "cache") as index:
+            original_head = ws.head_seq
+            injected_id = new_id("root")
+            injected_seq = []
+            old_head = original_head()
+
+            def head_then_commit():
+                seq = original_head()
+                if not injected_seq:
+                    # Avoid recursively invoking the failpoint while committing.
+                    monkeypatch.setattr(ws, "head_seq", original_head)
+                    committed = ws.commit("qa.index.concurrent", [
+                        RecordPut("root", injected_id,
+                                  {"id": injected_id, "name": "newer than cursor"},
+                                  expect_rev=0)
+                    ])
+                    injected_seq.append(committed)
+                return seq
+
+            with monkeypatch.context() as m:
+                m.setattr(ws, "head_seq", head_then_commit)
+                index.rebuild()
+
+            assert injected_seq == [old_head + 1]
+            included = index.db.execute(
+                "SELECT id FROM roots WHERE id=?", (injected_id,)
+            ).fetchone() is not None
+            cursor = index.cursor_seq()
+            # A cursor may represent an older consistent snapshot, or the new
+            # commit may be indexed if the cursor advances with it. Never mix.
+            assert not included or cursor >= injected_seq[0], (
+                f"cache includes seq {injected_seq[0]} record {injected_id} "
+                f"while publishing older cursor {cursor}"
+            )
