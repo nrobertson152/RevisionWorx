@@ -201,7 +201,7 @@ def inspect(path: str | Path) -> dict:
                 for info in infos:
                     n = info.filename
                     # Treat all members as untrusted, including ignored symbols/revisions.
-                    if (not n or n.startswith("/") or "\\\\" in n or ":" in n
+                    if (not n or n.startswith("/") or "\\" in n or ":" in n
                             or any(p in ("", ".", "..") for p in n.split("/"))
                             or info.file_size < 0 or info.compress_size < 0):
                         raise InvalidProject("unsafe ZIP member path or size")
