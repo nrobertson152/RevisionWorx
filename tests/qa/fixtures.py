@@ -13,9 +13,13 @@ STRUCTURES = {
 
 def fingerprint(root: Path) -> dict:
     result = {}
-    for directory, _, files in os.walk(root, followlinks=False):
+    for directory, subdirs, files in os.walk(root, followlinks=False):
         current = Path(directory)
         result[current.relative_to(root).as_posix() or "."] = ("directory",)
+        for name in subdirs:
+            link = current / name
+            if link.is_symlink():
+                result[link.relative_to(root).as_posix()] = ("symlink", os.readlink(link))
         for name in files:
             file = current / name
             rel = file.relative_to(root).as_posix()
