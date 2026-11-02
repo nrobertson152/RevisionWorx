@@ -235,3 +235,47 @@ No main-branch files modified; no merge performed.
 - Latest PR #4 changed-filename audit verified **28 files**, all within `.github/workflows/distributed-authority-research.yml`, `docs/` and `prototype/`. **No** `revisionworx/workspace.py`, `revisionworx/index.py`, `revisionworx/documents.py`, other agent branches, merges, tags or releases were modified.
 - Sent one consolidated technical decision request to Claude through [architecture issue #5](https://github.com/nrobertson152/RevisionWorx/issues/5#issuecomment-6569024688): batch interface/lease boundaries, administrative identity, external nonrollbackable trust root and #10 release ownership. Separate exact issue #10 reproduction [comment](https://github.com/nrobertson152/RevisionWorx/issues/10#issuecomment-6568943617) includes source SHA and interleaving. Updated draft PR #4's body and handoff.
 - Per Director's stop condition, refrain from speculative production integrations while awaiting Claude's interface and recovery decisions. Physical two-host Windows/SMB certification, secure auth and lossless restore reconciliation remain blocked by missing approved implementation and rig; any safety/production readiness claim is unsupported.
+
+
+## Session — 2026-11-01 ET, 23:08 onward: Director follow-on ADR-019 / ADR-017 conformance
+
+**Current orders re-read:** latest main docs/agents/README.md, docs/agents/DISTRIBUTED_SYSTEMS_ORDERS.md, docs/agents/PARALLEL_ASSIGNMENTS.md, docs/agents/CLAUDE_RESUME_HANDOFF.md, CLAUDE.md. Inspected live PRs #2/#3/#4/#6/#7 and issues #5/#8/#9/#10. Most recent direct PR #4 instructions are [comment 6569057109](https://github.com/nrobertson152/RevisionWorx/pull/4#issuecomment-6569057109) (independent ADR-019 safety and actual ADR-017 contract) and [comment 6569097906](https://github.com/nrobertson152/RevisionWorx/pull/4#issuecomment-6569097906) (updated Phase 2 source to d656884, orphaned release custody). **Only** the existing research/shared-filesystem-protocol branch modified; Claude remains owner of production revisions.
+
+### Concrete commits and actual files
+
+- 039e1a73: replaced the obsolete issue #10 demonstration with **positive safety acceptance** on real ADR-019 (no successor lock deletion; third-writer B fencing and C ownership; revoked writer never mutates successor).
+- 4f4a67c5: extended isolated BatchAuthorityResearch with named conflict types, optional unconditional put/delete expected revisions (matching ADR-017 semantics), and complete command opcode in txid request identity.
+- bebde84e: added prototype/test_phase2_contract_adapter.py, inheriting upstream tests/contract_commit_authority.py **unchanged** through a test-only adapter over the witnessed local SQLite batch research. No live service or production integration.
+- db3995e2: added a focused Ubuntu/Python 3.13 exact upstream pytest conformance job and pinned Phase 2 checkout. The code-to-code test installs pytest into the CI runner only.
+- 7363403b: corrected our test oracle to inspect the **durable revocation journal entry** rather than assuming that audit projection had already materialized.
+- e147a2d2: added actual Phase 2 test_phase2_txid_check_reuse.py with positive identical replay and **expected-failure** test for reusing same txid/writes while changing RecordCheck. Changed preconditions are omitted by the current file journal's idempotency payload.
+- 46683b6b: research adapter positive test confirms changed RecordCheck **is** rejected with TxidReuseError, and renamed fixture provider to avoid pytest collecting it as a test class.
+- c511efb7: expanded actual-source ADR-019 safety and ADR-017 identity job to **Ubuntu and Windows** Python 3.13.
+- 7fef1078: new prototype/test_phase2_orphan_recovery.py with **three** independent positive safety tests: recover abandoned release by revoking its token exactly once; preserve malformed private evidence; interrupt revocation, fail closed, require admin break and restore.
+- 6e646ccc: pinned both actual Phase 2 and direct-contract CI jobs to **d656884b39401134149273dd0121ef620b76eb8e**, incorporating Claude's new crash-after-rename orphan recovery.
+- d4415c0b: revised independent third-writer oracle to allow either the releaser or orphan-scanning acquirer to journal the one effective revocation and preserve evidence. Earlier source at 541abe took one route; d656884 can take the other. It is a test-expectation update, **not** an application fix.
+- 0c01af28, 3a3dfcb2: updated risk-ranked docs/DISTRIBUTED_SYSTEMS_HANDOFF.md and ADR-017 docs/COORDINATOR_INTEGRATION_CONTRACT.md with exact evidence and decision requirements.
+
+### Independent verified test evidence
+
+**[GitHub Actions run 41389551713](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389551713) SUCCESS.** Research overlay **d4415c0b34932febbd9a0a0d7bc097eef1043fcd**, actual Phase 2 pinned **d656884b39401134149273dd0121ef620b76eb8e**:
+- Ubuntu Python 3.11 **63/63** research prototype tests passed.
+- Ubuntu Python 3.13 **63/63** passed.
+- Windows Python 3.11 **63/63** passed.
+- Windows Python 3.13 **63/63** passed.
+- Ubuntu Python 3.13 real Phase 2 **11 tests, 1 expected failure, no unexpected failures**, including three new orphan custody/recovery cases.
+- Windows Python 3.13 real Phase 2 **11 tests, 1 expected failure, no unexpected failures**.
+- Ubuntu Python 3.13 inherited **unchanged upstream** CommitAuthorityContract against our test-only adapter: **11/11 passed**, including three research-only extensions.
+- Ubuntu Python 3.13 real old Phase 1 probes **2/2 passed as historical defect reproductions**, NOT safety acceptance.
+
+The *one expected failure per Phase 2 OS* is **open ADR-017 txid identity ambiguity**: a retry that changes RecordCheck while keeping txid and write-records identical returns an earlier committed sequence instead of TxidReuseError. This is currently P1 interface ambiguity, **not demonstrated data loss**. Exact reproduction and request for Claude decision posted to [PR #7 comment 6569196260](https://github.com/nrobertson152/RevisionWorx/pull/7#issuecomment-6569196260). The research adapter correctly rejects this changed precondition.
+
+Earlier runs 41388921867 and 41389001909 failed because our newly authored third-writer test assumed the changed journal audit was already materialized; corrected by reading the authoritative journal. Run 41389488005 failed only because the new upstream d656884 uses the **orphaned** audit/evidence route rather than the earlier **displaced** route; corrected in d4415c0b and then verified in run 41389551713. Prior failed runs are not misrepresented as green or hidden.
+
+### Architecture and release position
+
+**Risk-ranked protocol review** and exact local test evidence in docs/DISTRIBUTED_SYSTEMS_HANDOFF.md, signed batch source/contract mismatch in docs/COORDINATOR_INTEGRATION_CONTRACT.md. ADR-019 source-level successor protection and orphan custody satisfy the *modeled local Windows/Ubuntu* interleavings. A crash during orphan scanning can strand the provisional successor's lock; this is a fail-closed **availability** cost requiring audited admin recovery, not proof of arbitrary crash-safe reboot on actual SMB.
+
+**Unresolved hard gates:** independently nonrollbackable epoch/high-water root; lossless backup restore/journal/blob reconciliation; real Windows authenticated admin and protected transport; physical **two-host Windows/SMB** correctness, cache and power-loss tests (NONE EXECUTED); bundled Windows/Linux desktop artifact smoke; production LAN CommitAuthority integration and safe mode migration. Research SQLite currently uses local disk only and does not make SMB content durable or atomic with a journal.
+
+**Repository boundaries / next steps:** Maintain draft PR #4; no modifications to production Workspace, LocalIndex, documents.py, Claude branches or other repositories; no merges, retargets, force pushes or releases. Await Claude's ADR-017 full-command txid identity decision and independent QA's final ADR-019 acceptance. No speculative production coordinator service will be built without architecture approval.
