@@ -466,6 +466,59 @@ exists. Adding more token re-checks only narrows the window.
   That is unavailability, not corruption.
 - Atomic rename and exclusive create on SMB are unverified. There is no multi-host claim.
 
+### ADR-020 Incremental in-memory journal index — IMPLEMENTED on branch `perf-journal-index` (isolated from ADR-019 review)
+**Bottleneck (profiled, 20 commits at N=1,500).** Each commit re-read and re-verified the whole
+journal about twice:
+- `_revocations()` was rebuilt from scratch whenever the head moved, which is every commit (once at
+  preflight, once at the post-publish fence check);
+- the txid idempotency check was a reverse scan;
+- `head_seq()` listed the journal directory.
+
+The result was O(n) per commit and O(n²) to build a journal.
+
+**Design principle.** The journal stays the only authority. A derived structure may speed lookups up,
+but it must never be able to *invent or hide* an outcome.
+- **Per-handle, in-memory index:** `txid -> seq` plus the ordered revocations. It is built only from
+  digest-verified entries and extended incrementally to the current head. The watermark advances
+  only after an entry is fully indexed, so an interrupted build resumes correctly.
+- **Invalidation:** the index is discarded and rebuilt when the journal is shorter than what was
+  indexed, or when the last indexed entry's digest changed (a restored or replaced journal of equal
+  or greater length).
+- **A txid hit is confirmed** by re-reading that entry; any mismatch forces one full rebuild. A miss
+  is trustworthy because the index is complete up to the head it just probed.
+- **`head_seq()` probes forward** from the last known head (the journal is contiguous and
+  append-only) and falls back to a full scan if that head vanished. `entries_after` iterates the
+  contiguous range and reports a missing entry as corruption instead of skipping it.
+- **No persisted index (decision).** A corrupted or stale on-disk cache could *omit a revocation*, and
+  that is authority-relevant (ADR-015). So each process pays one O(n) build on its first lookup.
+  Revisit only with an integrity-anchored format.
+
+**Measurements** (Linux, Python 3.13.18, local tmpfs; `python tools/bench_journal.py 200 2000 10000`):
+
+| N | commit with txid (before → after) | 100 commits (before → after) | head_seq (before → after) |
+|---|---|---|---|
+| 200 | 19.7 → 7.6 ms | 2,212 → 805 ms | 0.2 → <0.1 ms |
+| 2,000 | 175.7 → 9.8 ms | 13,387 → 873 ms | 3.1 → 0.1 ms |
+| 10,000 | build did not finish in 600 s → 9.0 ms | → 696 ms | → <0.1 ms |
+
+- First txid lookup on a fresh handle (index build): 88 ms at 2,000 and 367 ms at 10,000 entries.
+  The old cold scan at 2,000 was 65 ms, so the first lookup is slower.
+- Subsequent lookups: about 0.07 ms each.
+- Writable open is still O(n): it runs the gap check, which is unchanged on purpose.
+
+**Tests:** `tests/test_journal_index.py`.
+- Reads per commit are bounded at N=5 and N=400. This is a deterministic complexity guard; the old
+  code did about 2N reads per commit.
+- Retry, conflict, restart and concurrent advancement.
+- A corrupted index claiming or hiding a txid; a missing index; an index ahead of the journal.
+- Interrupted build; restored journal of equal length; missing entry; fencing through the index;
+  head fallback after the journal shrinks.
+
+**Dependency:** this changes `workspace.py` functions used by the lock code under ADR-019 review
+(`_revocations`, `head_seq`). It is therefore kept off `phase2-documents` until ADR-019 is
+independently accepted. It must then be rebased or merged and re-reviewed (QA plus Distributed
+Systems).
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).

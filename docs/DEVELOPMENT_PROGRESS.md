@@ -73,6 +73,13 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-02 (session 8) — journal/txid performance (ADR-020), isolated branch `perf-journal-index`
+- Profiled: every commit re-read the whole journal about twice. Fixed with an incremental,
+  confirmed, in-memory index and a forward-probing head.
+- Commit with txid at N=2,000: 176 → 10 ms; at 10,000: about 9 ms. The build no longer goes O(n²).
+- **Tests:** full suite on the branch **189 passed, 1 skipped (Qt)**. The races were repeated 3×.
+- Kept off `phase2-documents` because it touches lock-adjacent code under ADR-019 review.
+
 ### 2026-11-02 (session 7) — P0: successor-lock deletion race fixed (ADR-019), awaiting QA
 - **Reproduced first:** `tests/test_lock_release_race.py::test_paused_releaser_never_deletes_successor_lock`
   failed on `d202b28` (B's lock deleted).

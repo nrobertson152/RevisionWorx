@@ -468,8 +468,57 @@ class Workspace:
             raise WorkspaceCorruptError(f"journal has gaps (missing entries {missing}); writes refused")
 
     def head_seq(self) -> int:
-        seqs = self.journal_seqs()
-        return seqs[-1] if seqs else 0
+        """Highest journal sequence. Probes forward from the last known head (the journal is
+        contiguous and append-only, ADR-020); falls back to a full directory scan if that head no
+        longer exists (journal replaced or restored)."""
+        hint = getattr(self, "_head_hint", 0)
+        jdir = self._journal_dir()
+        if hint and (jdir / f"{hint:020d}.json").is_file():
+            while (jdir / f"{hint + 1:020d}.json").is_file():
+                hint += 1
+        else:
+            seqs = self.journal_seqs()
+            hint = seqs[-1] if seqs else 0
+        self._head_hint = hint
+        return hint
+
+    def _journal_index(self) -> dict:
+        """Per-handle, in-memory derived index of the immutable journal (ADR-020).
+
+        Holds ``txid -> seq`` and the ordered revocations. Built only from digest-verified entries
+        and extended incrementally to the current head. It is never persisted and never authoritative:
+        a txid hit is confirmed by re-reading that entry, and the index is discarded and rebuilt if the
+        journal is shorter than what was indexed or the last indexed entry's digest changed (restore)."""
+        idx = getattr(self, "_jidx", None)
+        head = self.head_seq()
+        if idx is not None and idx["seq"]:
+            if head < idx["seq"]:
+                idx = None
+            else:
+                try:
+                    anchor = self.read_entry(idx["seq"])
+                except (FileNotFoundError, WorkspaceCorruptError):
+                    anchor = None
+                if anchor is None or anchor.get("digest", entry_digest(anchor)) != idx["anchor"]:
+                    idx = None
+        if idx is None:
+            idx = {"seq": 0, "anchor": None, "txids": {}, "revocations": []}
+        for s in range(idx["seq"] + 1, head + 1):
+            try:
+                e = self.read_entry(s)
+            except FileNotFoundError:
+                raise WorkspaceCorruptError(f"journal entry {s} is missing (gap); writes refused") from None
+            if e.get("txid"):
+                idx["txids"].setdefault(e["txid"], s)
+            if e.get("op") == "workspace.lock.break":
+                for item in e["records"]:
+                    tok = (item.get("data") or {}).get("previous_holder", {}).get("token")
+                    if tok:
+                        idx["revocations"].append((s, tok))
+            idx["seq"], idx["anchor"] = s, e.get("digest", entry_digest(e))  # advance only when complete
+            self._jidx = idx
+        self._jidx = idx
+        return idx
 
     def read_entry(self, seq: int) -> dict:
         path = self._journal_dir() / f"{seq:020d}.json"
@@ -484,21 +533,9 @@ class Workspace:
         return entry
 
     def _revocations(self) -> list[tuple[int, str]]:
-        """(seq, token) of every audited writer-lock break, in journal order (issue #8 fence)."""
-        head = self.head_seq()
-        cached = getattr(self, "_revocation_cache", None)
-        if cached and cached[0] == head:
-            return cached[1]
-        out = []
-        for s in self.journal_seqs():
-            e = self.read_entry(s)
-            if e.get("op") == "workspace.lock.break":
-                for item in e["records"]:
-                    tok = (item.get("data") or {}).get("previous_holder", {}).get("token")
-                    if tok:
-                        out.append((s, tok))
-        self._revocation_cache = (head, out)
-        return out
+        """(seq, token) of every audited writer-lock break, in journal order (issue #8 fence).
+        Served from the incremental journal index, always extended to the current head."""
+        return list(self._journal_index()["revocations"])
 
     def is_fenced(self, entry: dict) -> bool:
         """An entry signed with a token that an EARLIER entry revoked never takes effect.
@@ -509,11 +546,13 @@ class Workspace:
         return bool(tok) and any(s < entry["seq"] and t == tok for s, t in self._revocations())
 
     def entries_after(self, seq: int) -> Iterable[dict]:
-        for s in self.journal_seqs():
-            if s > seq:
+        for s in range(seq + 1, self.head_seq() + 1):
+            try:
                 entry = self.read_entry(s)
-                if not self.is_fenced(entry):
-                    yield entry
+            except FileNotFoundError:
+                raise WorkspaceCorruptError(f"journal entry {s} is missing (gap)") from None
+            if not self.is_fenced(entry):
+                yield entry
 
     def applied_seq(self) -> int:
         try:
@@ -592,14 +631,14 @@ class Workspace:
         if txid is not None:  # idempotent retry (ADR-017): same txid + same content -> same result
             payload = {"op": op, "records": [p.as_json() for p in ops if not isinstance(p, RecordCheck)],
                        "blobs": blob_refs or []}
-            for s_ in reversed(self.journal_seqs()):
+            s_ = self._confirmed_txid_seq(txid)
+            if s_ is not None:
                 prior = self.read_entry(s_)
-                if prior.get("txid") == txid:
-                    if {"op": prior["op"], "records": prior["records"], "blobs": prior["blobs"]} != payload:
-                        raise TxidReuseError(f"txid {txid} was already used for a different change (entry {s_})")
-                    if self.is_fenced(prior):
-                        raise LockLostError(f"fenced: txid {txid} (entry {s_}) never took effect")
-                    return s_
+                if {"op": prior["op"], "records": prior["records"], "blobs": prior["blobs"]} != payload:
+                    raise TxidReuseError(f"txid {txid} was already used for a different change (entry {s_})")
+                if self.is_fenced(prior):
+                    raise LockLostError(f"fenced: txid {txid} (entry {s_}) never took effect")
+                return s_
         if self._lock_token in {t for _, t in self._revocations()}:
             self.writable = False
             raise LockLostError("this session's writer lock was revoked by an administrator; reopen the workspace")
@@ -636,11 +675,27 @@ class Workspace:
 
     def transaction_outcome(self, txid: str) -> dict:
         """Durable outcome of a transaction the caller tagged with ``txid``."""
-        for s in reversed(self.journal_seqs()):
-            entry = self.read_entry(s)
-            if entry.get("txid") == txid:
-                return {"state": "fenced" if self.is_fenced(entry) else "committed", "seq": s}
-        return {"state": "not-found"}
+        s = self._confirmed_txid_seq(txid)
+        if s is None:
+            return {"state": "not-found"}
+        return {"state": "fenced" if self.is_fenced(self.read_entry(s)) else "committed", "seq": s}
+
+    def _confirmed_txid_seq(self, txid: str) -> int | None:
+        """Look up a txid via the index and CONFIRM it against the authoritative entry. A stale or
+        wrong index hit triggers one full rebuild, so the index can never invent or hide an outcome."""
+        for attempt in (0, 1):
+            idx = self._journal_index()
+            s = idx["txids"].get(txid)
+            if s is None:
+                return None
+            try:
+                if self.read_entry(s).get("txid") == txid:
+                    return s
+            except (FileNotFoundError, WorkspaceCorruptError):
+                if attempt:
+                    raise
+            self._jidx = None  # inconsistent index: rebuild from the journal and retry once
+        raise WorkspaceCorruptError(f"txid {txid} index entry could not be confirmed against the journal")
 
     def verify(self, repair: bool = False) -> dict:
         """Replay the whole journal and compare with the materialised records.
