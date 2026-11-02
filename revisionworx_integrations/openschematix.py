@@ -15,6 +15,7 @@ import os
 import stat
 from pathlib import Path
 import zipfile
+import zlib
 
 MAX_SOURCE = 256 * 1024 * 1024
 MAX_MEMBER = 200 * 1024 * 1024
@@ -77,7 +78,8 @@ def _version(value, maximum: int, label: str) -> int:
 
 def _safe_path(value: str, directory: str) -> str:
     if (not isinstance(value, str) or not value.startswith(directory + "/")
-            or "\\" in value or ":" in value or ".." in value.split("/")
+            or "\\" in value or ":" in value
+            or any(part in ("", ".", "..") for part in value.split("/"))
             or value.startswith("/") or value.endswith("/")):
         raise InvalidProject(f"unsafe {directory} member path")
     return value
@@ -105,6 +107,11 @@ def _components(sheets: list[dict], project_uid: str, revision: str) -> tuple[li
                 raise InvalidProject("component props must be a mapping")
             if not isinstance(comp.get("params", {}), dict):
                 raise InvalidProject("component params must be a mapping")
+            if type(comp.get("in_bom", True)) is not bool:
+                raise InvalidProject("component in_bom must be boolean")
+            for field in ("designator", "label"):
+                if not isinstance(comp.get(field, ""), str):
+                    raise InvalidProject(f"component {field} must be text")
             for p in ("part_number", "manufacturer", "description", "rating"):
                 if p in props and not isinstance(props[p], str):
                     raise InvalidProject("invalid component property")
@@ -140,6 +147,8 @@ def _sheet(data: dict, fallback_uid: str) -> dict:
     uid = data.get("uid", fallback_uid)
     if not isinstance(uid, str) or not uid:
         raise InvalidProject("invalid sheet UID")
+    if not isinstance(data.get("name", "Sheet 1"), str):
+        raise InvalidProject("invalid sheet name")
     sheet_metadata = data.get("sheet", {})
     if not isinstance(sheet_metadata, dict):
         raise InvalidProject("invalid sheet metadata")
@@ -249,7 +258,9 @@ def inspect(path: str | Path) -> dict:
                     raise InvalidProject("duplicate sheet UIDs")
                 order = head.get("sheet_order", [])
                 if order:
-                    if not isinstance(order, list) or len(order) != len(set(order)):
+                    if (not isinstance(order, list) or
+                            not all(isinstance(key, str) for key in order) or
+                            len(order) != len(set(order))):
                         raise InvalidProject("invalid sheet ordering")
                     ranking = {key: i for i, key in enumerate(order)}
                     sheets.sort(key=lambda s: ranking.get(s["uid"], len(ranking)))
@@ -259,7 +270,8 @@ def inspect(path: str | Path) -> dict:
                     warnings.append("Internal revision snapshots not indexed; use RevisionWorx immutable file revisions.")
                 if manifest.get("symbols"):
                     warnings.append("Embedded custom symbols not interpreted; symbol-specific BOM classification unavailable.")
-        except (zipfile.BadZipFile, RuntimeError, EOFError, NotImplementedError, OSError) as exc:
+        except (zipfile.BadZipFile, zlib.error, RuntimeError, EOFError,
+                NotImplementedError, OSError) as exc:
             raise InvalidProject(f"damaged ZIP container: {type(exc).__name__}") from exc
     else:
         raise UnsupportedFormat("supported extensions: .schematix and .osch")
