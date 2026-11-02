@@ -1,5 +1,8 @@
 # RevisionWorx QA strategy
 
+**Current extended independently verified checkpoint:** Phase 2 `d202b28305f765b4edead3dede211dd9e7a891a6` + QA `f5b8a13064d8a482fa9492da73da333cf6615a15`. [Full matrix](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185333) passed on Linux and Windows Python 3.11/3.13: each Linux full suite **215 passed, 3 skipped, 1 xfailed**, each Windows full suite **217 passed, 1 skipped, 1 xfailed**. [Focused tests and real Windows process stress](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185328): Linux **18 passed/3 skipped/1 xfailed**, Windows **21 passed/1 xfailed**, and **5/5 six-process checkout trials** (30 attempts). New independent tests verify admin crash after journal revocation, bounded index retry fail-closed, persistent Windows lock-release failure, and ownership change during retry. The strict xfail concerns physical journal file existence only; effective mutation remains fenced. The latest matrix and merge-readiness handoff supersede prior f3c checkpoint status. Native installed GUI and physical Windows coordinator/SMB remain unqualified.
+
+
 QA development branch: `qa/testing-infrastructure` (draft PR #3 currently based on `phase1-foundation`).
 Review targets: `phase1-foundation` (PR #6) and stacked `phase2-documents` (PR #7).\nThe Lead Architect owns integration and protocol choices; QA independently evaluates both.
 

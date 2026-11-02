@@ -1,6 +1,6 @@
 # RevisionWorx — Risk-based QA acceptance matrix
 
-**QA Engineer • current verified candidate: Phase 2 `f3c54386e41a0587df0b97d0bfcf4b54cd92c0a6` + QA `454391dfd6bd66059b97631701f6e5722b5e862e`**
+**QA Engineer • latest extended verified candidate: Phase 2 `d202b28305f765b4edead3dede211dd9e7a891a6` + QA `f5b8a13064d8a482fa9492da73da333cf6615a15`**
 
 This is the **current acceptance state**, not a historical run list. Exact evidence: [full Linux/Windows × Python 3.11/3.13 run 41387311002](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387311002) and [focused #8/#9/#10 + Windows process-stress run 41387311010](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387311010). Earlier failed/xfail evidence is preserved in `docs/agents/QA_PROGRESS.md` and issues #8/#9/#10.
 
@@ -19,12 +19,16 @@ This is the **current acceptance state**, not a historical run list. Exact evide
 | LOCK-02 | P0 | Authorized administrative revocation is audited and stale commits have no effective data mutation | **PASS LOCAL** #8 journal-first acceptance; strong physical no-file oracle remains **XFAIL PHYSICAL** |
 | LOCK-03 | P0 | Pre-audit/lock-move race does not authorize a stale publication | **PASS LOCAL** #8 `test_writer_revoked_before_admin_audit_cannot_take_effect` |
 | LOCK-04 | P0 | Post-audit fenced journal artifacts remain logically invisible to reader, cache, recovery and txid outcome | **PASS LOCAL** independent `test_revoked_writer_publication_is_logically_fenced_on_replay`; physical artifact may exist |
+| LOCK-05 | P0 | Audit revocation survives crash before physical lock move; successor reacquires and old writer is refused | **PASS LOCAL** explicit crash/reacquire injection in current candidate |
 | INDEX-01 | P0 | Rebuild from corrupted/damaged cache repairs disposable index, never authoritative records | **PASS LOCAL**, application tests |
 | INDEX-02 | P0 | Record inserted after sampled journal cursor cannot appear with an older cursor | **PASS LOCAL** #9 deterministic index snapshot regression |
 | INDEX-03 | P0 | Record deleted after sampled journal cursor cannot disappear with an older cursor | **PASS LOCAL** #9 deterministic index snapshot regression |
+| INDEX-04 | P0 | Cache rebuild with permanently unstable snapshots must fail closed without altering previous cache cursor/rows | **PASS LOCAL** deterministic retry-exhaustion injection, actual continuous-writer soak not qualified |
 | CHECKOUT-01 | P0 | Exact one winner in real local six-process checkout; others are conflicts; no orphan lock | **PASS LOCAL Windows Server 2025: 5/5 trials, 30 process attempts, 1 winner + 5 conflicts per trial, all exits zero** |
 | CHECKOUT-02 | P0 | Stale checkout tokens rejected and checkout history unaltered | **PASS LOCAL**, independent Phase 2 suite |
 | WINDOWS-LOCK-01 | P0 | Transient Windows writer.lock sharing violation gets bounded retry, verifies owner, removes own lock | **PASS LOCAL Windows**, #10 injected failure and successor acquisition |
+| WINDOWS-LOCK-02 | P0 | Persistent Windows lock release denial is reported and rightful lock remains held | **PASS LOCAL Windows**, bounded retry exhaustion and exclusive successor refusal |
+| WINDOWS-LOCK-03 | P0 | Writer must not unlink successor token after sharing violation and ownership reassignment | **PASS LOCAL Windows**, deterministic ownership-change failpoint |
 | REV-01 | P0 | Historical revision SHA-256 and content immutable after check-in | **PASS LOCAL**, dedicated Phase 2 integrity tests |
 | REV-02 | P0 | Release supersedes prior release without rewriting old history; corrupt blob refuses release | **PASS LOCAL**, dedicated Phase 2 integrity tests |
 | REV-03 | P0 | Restore prior revision creates a NEW revision C, retaining revisions A/B and preserving native CAD references | **PASS LOCAL**, dedicated history-restore test |
@@ -42,6 +46,20 @@ This is the **current acceptance state**, not a historical run list. Exact evide
 | WINDOWS-GUI-01 | P0 | Clean installed Windows release launches and completes register/checkout/checkin/UI recovery | **NOT CERTIFIED**; no packaged installer/manual visual desktop run |
 | SMB-01 | P0 | Windows coordinator and two independent SMB clients preserve atomic revocation/commit on disconnect, restart, contention | **NOT CERTIFIED**; ADR-014 coordinator and physical share rig required |
 | NFS-01 | P1 | Supported Linux/NFS share semantics, if approved | **NOT CERTIFIED**, later target |
+
+## Latest extended independent acceptance — 2026-11-01 ET
+
+**Pinned source SHAs:** Claude Phase 2 `d202b28305f765b4edead3dede211dd9e7a891a6` and QA `f5b8a13064d8a482fa9492da73da333cf6615a15`. The newer candidate incorporates the previously accepted #8/#9/#10 corrections and was tested with four additional negative-path assertions.
+
+| Evidence | Linux | Windows |
+| --- | --- | --- |
+| [Full four-platform Phase 2 suite](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185333), Python 3.11 and 3.13 | **215 passed, 3 skipped, 1 strict xfailed** per Python version | **217 passed, 1 skipped, 1 strict xfailed** per Python version |
+| [Focused acceptance](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185328), Python 3.13.17 | **18 passed, 3 skipped, 1 strict xfailed** | **21 passed, 1 strict xfailed** |
+| [Five-trial Windows checkout stress](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185328) | Not run on Linux in this job | **5/5 trials passed**; 30 worker attempts; each exactly one `won` and five `conflict`; all exit codes 0, no orphan lock or journal errors |
+
+Newly **PASSING** independent QA tests in `tests/qa/test_integrity.py`: `test_journal_first_revocation_survives_admin_crash_before_lock_move` (#8); `test_index_rebuild_fails_closed_if_snapshot_never_stabilizes` (#9); `test_windows_persistent_lock_unlink_denial_is_reported_and_retained` and `test_windows_lock_release_does_not_unlink_reassigned_token` (#10). The sole strict expected failure tests a **physical late journal artifact**: it is not a proven effective stale mutation because logical fencing and recovery pass. Skip counts: Linux three Windows-only lock tests; Windows one case-sensitive-filesystem-only full-suite test.
+
+**Director handoff:** QA-only PR #3 is ready for code review independently of product readiness. Claude controls defect disposition and core implementation. Standalone release still requires installed desktop GUI/packaging and real backup-recovery qualification; approved multi-user Windows coordinator + SMB remains unimplemented/unqualified. No merge/release authorization or physical SMB/NFS certification follows from this evidence.
 
 ## Five separately retained regression oracles
 

@@ -2,15 +2,31 @@
 
 **QA Engineer • 2026-11-01 ET • Evidence-based advisory, NOT merge or release approval**
 
+**Current extended implementation under test:** `d202b28305f765b4edead3dede211dd9e7a891a6`; independent QA overlay `f5b8a13064d8a482fa9492da73da333cf6615a15`. Historical `f3c54386` evidence below remains valid for that prior revision.
+
+## Latest extended independent acceptance — 2026-11-01 ET
+
+**Pinned source SHAs:** Claude Phase 2 `d202b28305f765b4edead3dede211dd9e7a891a6` and QA `f5b8a13064d8a482fa9492da73da333cf6615a15`. The newer candidate incorporates the previously accepted #8/#9/#10 corrections and was tested with four additional negative-path assertions.
+
+| Evidence | Linux | Windows |
+| --- | --- | --- |
+| [Full four-platform Phase 2 suite](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185333), Python 3.11 and 3.13 | **215 passed, 3 skipped, 1 strict xfailed** per Python version | **217 passed, 1 skipped, 1 strict xfailed** per Python version |
+| [Focused acceptance](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185328), Python 3.13.17 | **18 passed, 3 skipped, 1 strict xfailed** | **21 passed, 1 strict xfailed** |
+| [Five-trial Windows checkout stress](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185328) | Not run on Linux in this job | **5/5 trials passed**; 30 worker attempts; each exactly one `won` and five `conflict`; all exit codes 0, no orphan lock or journal errors |
+
+Newly **PASSING** independent QA tests in `tests/qa/test_integrity.py`: `test_journal_first_revocation_survives_admin_crash_before_lock_move` (#8); `test_index_rebuild_fails_closed_if_snapshot_never_stabilizes` (#9); `test_windows_persistent_lock_unlink_denial_is_reported_and_retained` and `test_windows_lock_release_does_not_unlink_reassigned_token` (#10). The sole strict expected failure tests a **physical late journal artifact**: it is not a proven effective stale mutation because logical fencing and recovery pass. Skip counts: Linux three Windows-only lock tests; Windows one case-sensitive-filesystem-only full-suite test.
+
+**Director handoff:** QA-only PR #3 is ready for code review independently of product readiness. Claude controls defect disposition and core implementation. Standalone release still requires installed desktop GUI/packaging and real backup-recovery qualification; approved multi-user Windows coordinator + SMB remains unimplemented/unqualified. No merge/release authorization or physical SMB/NFS certification follows from this evidence.
+
 ## 1. Current engineering decision
 
 **PR #3 (independent QA infrastructure) is reviewable by Claude and the Director.** The new #8/#9/#10 corrective code on Claude's Phase 2 branch has passed the independent local-filesystem acceptance suite and the real Windows checkout stress specified below. This is **not** an approval to merge or release. A physically installed GUI and supported multi-user SMB deployment remain unqualified.
 
 | PR | Branch and current inspected SHA | Independent review disposition | Product release status |
 | --- | --- | --- | --- |
-| [#3 — QA](https://github.com/nrobertson152/RevisionWorx/pull/3) | `qa/testing-infrastructure`; QA test SHA `454391dfd6bd66059b97631701f6e5722b5e862e` in verified run; subsequent workflow-only commits tracked in progress log | **Ready for Director/Claude review.** Tests, failpoints, CI and evidence, no changes to production code. Remains draft. | QA green status does not certify product. |
+| [#3 — QA](https://github.com/nrobertson152/RevisionWorx/pull/3) | `qa/testing-infrastructure`; QA test SHA `f5b8a13064d8a482fa9492da73da333cf6615a15` in current independently verified run; documentation-only commit follows in progress log | **Ready for Director/Claude review.** Tests, failpoints, CI and evidence, no changes to production code. Remains draft. | QA green status does not certify product. |
 | [#6 — Phase 1](https://github.com/nrobertson152/RevisionWorx/pull/6) | `phase1-foundation` `412e69ab90bb1d8b74c1a3cf5519f581e4420e63` | Phase 1 + QA PR integration runs on Linux/Windows; still needs approved integration order. | No installed-desktop or physical-share qualification. |
-| [#7 — Phase 2](https://github.com/nrobertson152/RevisionWorx/pull/7) | `phase2-documents` `f3c54386e41a0587df0b97d0bfcf4b54cd92c0a6` | **#8 effective revocation, #9 index consistency, #10 local Windows lock cleanup accepted under exact CI configurations.** Full suite and focused stress green except explicitly retained physical-artifact xfail. | Standalone *testable/reviewable*, but no product-release approval; multi-user **NOT qualified**. |
+| [#7 — Phase 2](https://github.com/nrobertson152/RevisionWorx/pull/7) | `phase2-documents` `d202b28305f765b4edead3dede211dd9e7a891a6` | **#8 effective revocation, #9 index consistency, #10 local Windows lock cleanup accepted under exact CI configurations.** Full suite and focused stress green except explicitly retained physical-artifact xfail. | Standalone *testable/reviewable*, but no product-release approval; multi-user **NOT qualified**. |
 
 ## 2. Current exact-revision execution evidence
 
