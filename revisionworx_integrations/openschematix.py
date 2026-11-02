@@ -234,7 +234,9 @@ def inspect_bytes(raw: bytes, suffix: str) -> dict:
                     raise InvalidProject("ZIP exceeds inspection member limit")
                 if not infos or infos[0].filename != "mimetype" or infos[0].compress_type != zipfile.ZIP_STORED:
                     raise InvalidProject("missing first uncompressed mimetype member")
-                if infos[0].file_size != len(MIMETYPE) or archive.read("mimetype") != MIMETYPE:
+                if infos[0].file_size != len(MIMETYPE):
+                    raise InvalidProject("invalid project MIME member length")
+                if archive.read("mimetype") != MIMETYPE:
                     raise UnsupportedFormat("unrecognized project MIME type")
                 def member(name):
                     if name not in names or archive.getinfo(name).file_size > MAX_MEMBER:
