@@ -30,3 +30,21 @@ Separate writable staging ACLs from read-only committed-object ACLs; verify unau
 Collect synchronized client and coordinator logs with txid, epoch, generation, sequence and monotonic timestamps; Windows Event Logs, SMB server/client counters, durable hashes, journal snapshots, fault timestamps, pass/fail results and exact OS/build/share configuration. Do not log secrets. Preserve failed artifacts. Repeat tests on each supported SMB server configuration and after material changes to storage/locking settings.
 
 **Status:** zero physical two-host Windows/SMB tests executed. Local GitHub Windows runners do not qualify as a two-host SMB rig. Production multi-user certification remains blocked.
+
+## Extra owner-release and administrator-overlap scenarios
+
+The existing Windows `WinError 32` incident (issue #10) and the later token-check-to-`unlink` race are **separate mechanisms**:
+
+- **Transient Windows sharing violation:** a contender holds an open handle to `writer.lock` while its owner attempts `Path.unlink`. On Windows this may raise `PermissionError: [WinError 32]`; bounded retries with owner-token revalidation address this transient availability failure. QA ran five Windows NTFS trials with six independent processes each on Phase 2 `f3c54386` and found one winner and five conflicts in each, plus a passing injected transient-unlink test. These are local Windows results, **not SMB certification**.
+- **Successor pathname deletion after revocation:** an old owner reads its own lock token, pauses immediately before calling `unlink`; administrator publishes journal revocation and moves the old lock to an evidence path; a successor acquires a **new** `writer.lock`. The old owner resumes the pathname unlink and **deletes the successor's lock** despite its earlier token recheck. Independently reproduced against Phase 2 `f3c54386` in [run 41387552435](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387552435) using local Ubuntu Python 3.13. This is a genuine source-level filesystem ordering defect, **not** a measured Windows SMB result. A safe release design must prevent it.
+
+A certification rig must test both scenarios independently on actual Windows + SMB:
+
+1. Pause an owner immediately after its final token recheck, just before the lock release call. Publish an administrative revocation, allow another client to acquire, then resume the old release. **Acceptance:** successor's lock and ownership remain intact, no split-brain writer authority.
+2. Hold a lock-file inspection handle open on the second physical host while the owner attempts legitimate release. Inject bounded sharing violations (or use a controlled handle share mode). **Acceptance:** retries complete safely, or an explicit actionable error preserves the lock; no silent discard.
+3. Crash the original writer during release and the administrator during revocation, before/after durable audit. **Acceptance:** no unaudited ownership transfer, no old-credential publish after committed revocation and no permanent unresolvable lock.
+4. On reconnect, validate the new epoch/generation and a contiguous ordered journal before allowing cached work to publish; the client must not switch automatically to shared-folder standalone writes.
+
+Record both clients' Windows build/SMB dialect, original and successor tokens, exclusive-create semantics, share ACLs, exact fault-injection barrier, journal sequence, committed txids, stale outcome, and surviving lock-file identity. Run independently with (a) coordinator stopped, (b) normal coordinator, and (c) coordinator restart; only **coordinator-authoritative** multiuser writes may be accepted.
+
+**None of the above physical two-host scenarios have been executed.** Existing GitHub Windows hosted runners do not provide a separate authenticated SMB client/server topology or a real power-loss durability oracle.
