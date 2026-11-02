@@ -549,3 +549,173 @@ def test_windows_writer_lock_close_survives_transient_sharing_violation(tmp_path
         # A failed close leaves _closed=True in the current implementation.
         if lock.exists():
             real_unlink(lock)
+
+
+
+def test_journal_first_revocation_survives_admin_crash_before_lock_move(tmp_path, monkeypatch):
+    """ADR-015 rev.2 audit must survive a crash before the evidence rename.
+
+    A revoked old lock may remain physically present. The next writer must
+    recover safely without accepting a write from the original credential.
+    This is a local deterministic failpoint, not power-loss or SMB proof.
+    """
+    if not _journal_first_revocation_supported():
+        pytest.skip("journal-first ADR-015 administrative revocation not present")
+    store = tmp_path / "store"
+    old_writer = Workspace.create(store, "QA crash-after-revoke")
+    token = Workspace.read_writer_lock(store)["token"]
+    actual_replace = workspace_mod.os.replace
+    injected = []
+
+    def fail_lock_move(src, dst):
+        if Path(src).name == "writer.lock":
+            injected.append(True)
+            raise KeyboardInterrupt("QA simulated administrator death after audit publication")
+        return actual_replace(src, dst)
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(workspace_mod.os, "replace", fail_lock_move)
+            with pytest.raises(KeyboardInterrupt, match="simulated administrator death"):
+                Workspace.break_writer_lock(store, token, "QA simulated post-audit crash")
+        assert len(injected) == 1
+        assert Workspace.read_writer_lock(store)["token"] == token
+
+        with Workspace.open(store) as reader:
+            entries = [reader.read_entry(n) for n in reader.journal_seqs()]
+            audits = [e for e in entries if e["op"] == "workspace.lock.break"]
+            assert len(audits) == 1
+            assert audits[0].get("revokes") == token
+
+        # _acquire_writer_lock must treat the physically remaining, already
+        # revoked token as evidence, acquire a fresh token and recover the audit.
+        with Workspace.open(store, writable=True) as successor:
+            fresh = Workspace.read_writer_lock(store)["token"]
+            assert fresh != token
+            with pytest.raises(workspace_mod.LockLostError):
+                old_writer.commit("qa.revoked.after.crash", [
+                    RecordPut("settings", "workspace", {"must_not_exist": True})
+                ])
+            assert successor.get("settings", "workspace").get("must_not_exist") is None
+            assert successor.verify()["problems"] == []
+        with Workspace.open(store) as reader:
+            assert reader.get("settings", "workspace").get("must_not_exist") is None
+    finally:
+        old_writer.close()
+
+
+def test_index_rebuild_fails_closed_if_snapshot_never_stabilizes(tmp_path, monkeypatch):
+    """Issue #9: bounded retry exhaustion cannot publish a false cache cursor.
+
+    Synthetic alternating journal heads force all retry attempts to disagree.
+    This validates failure-closed behavior and an unchanged previous index;
+    separate insert/delete tests exercise actual authoritative commits.
+    """
+    if not _stable_index_rebuild_supported():
+        pytest.skip("bounded consistent-snapshot rebuild absent on earlier code")
+    import time
+    from revisionworx.index import LocalIndex
+
+    store = tmp_path / "store"
+    with Workspace.create(store, "QA index retry exhaustion") as ws:
+        with LocalIndex(ws, cache_dir=tmp_path / "cache") as index:
+            index.rebuild()
+            before_cursor = index.cursor_seq()
+            before_rows = index.db.execute("SELECT id, name FROM roots ORDER BY id").fetchall()
+            old_head = ws.head_seq()
+            # Prevent other operations from observing artificially changing
+            # heads. Only the rebuild's two head samples oscillate.
+            snapshots = {kind: ws.list(kind) for kind in
+                         ("root", "project", "document", "revision", "checkout")}
+            samples = []
+
+            def unstable_head():
+                samples.append(True)
+                return old_head + (len(samples) % 2)
+
+            with monkeypatch.context() as m:
+                m.setattr(ws, "head_seq", unstable_head)
+                m.setattr(ws, "list", lambda kind: snapshots[kind])
+                m.setattr(time, "sleep", lambda _: None)
+                with pytest.raises(workspace_mod.WorkspaceError,
+                                   match="changed continuously"):
+                    index.rebuild()
+            assert len(samples) >= 100, "snapshot retries must be bounded but substantive"
+            assert index.cursor_seq() == before_cursor
+            assert index.db.execute("SELECT id, name FROM roots ORDER BY id").fetchall() == before_rows
+            assert ws.head_seq() == old_head
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows writer.lock sharing semantics only")
+def test_windows_persistent_lock_unlink_denial_is_reported_and_retained(tmp_path, monkeypatch):
+    """Issue #10: retry exhaustion leaves the rightful lock held, never hidden."""
+    if not _windows_lock_release_retry_supported():
+        pytest.skip("bounded Windows lock release not yet implemented")
+    store = tmp_path / "store"
+    writer = Workspace.create(store, "QA persistent lock close failure")
+    lock = store / ".revisionworx" / "locks" / "writer.lock"
+    token = Workspace.read_writer_lock(store)["token"]
+    real_unlink = Path.unlink
+    attempts = []
+
+    def persistently_denied(path, *args, **kwargs):
+        if path == lock:
+            attempts.append(True)
+            raise PermissionError(13, "QA injected persistent WinError 32", str(path))
+        return real_unlink(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(Workspace, "LOCK_RELEASE_ATTEMPTS", 3)
+            m.setattr(Workspace, "LOCK_RELEASE_DELAY", 0)
+            m.setattr(Path, "unlink", persistently_denied)
+            with pytest.raises(workspace_mod.WorkspaceError, match="could not release"):
+                writer.close()
+        assert len(attempts) == 3
+        assert Workspace.read_writer_lock(store)["token"] == token
+        with pytest.raises(WorkspaceLockedError):
+            Workspace.open(store, writable=True)
+    finally:
+        # Original ownership is deliberately retained by the application.
+        # Remove only the private disposable test's lock after restoring
+        # Path.unlink, not by pretending an unsuccessful release succeeded.
+        if lock.exists():
+            real_unlink(lock)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows writer.lock sharing semantics only")
+def test_windows_lock_release_does_not_unlink_reassigned_token(tmp_path, monkeypatch):
+    """Issue #10: if ownership changes during a retry, do not delete successor."""
+    if not _windows_lock_release_retry_supported():
+        pytest.skip("bounded Windows lock release not yet implemented")
+    import json
+
+    store = tmp_path / "store"
+    writer = Workspace.create(store, "QA lock ownership change")
+    lock = store / ".revisionworx" / "locks" / "writer.lock"
+    original = Workspace.read_writer_lock(store)
+    successor_token = "f" * 32 if original["token"] != "f" * 32 else "e" * 32
+    real_unlink = Path.unlink
+    attempts = []
+
+    def ownership_changes_on_first_unlink(path, *args, **kwargs):
+        if path == lock:
+            attempts.append(True)
+            # Simulate a second holder replacing the token immediately after
+            # our first ownership read, before a sharing-violation retry.
+            lock.write_text(json.dumps({**original, "token": successor_token}), encoding="utf-8")
+            raise PermissionError(13, "QA simulated sharing violation and ownership change", str(path))
+        return real_unlink(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(Workspace, "LOCK_RELEASE_ATTEMPTS", 3)
+            m.setattr(Workspace, "LOCK_RELEASE_DELAY", 0)
+            m.setattr(Path, "unlink", ownership_changes_on_first_unlink)
+            writer.close()
+        assert attempts == [True]
+        assert lock.exists(), "never delete a lock held by a successor token"
+        assert Workspace.read_writer_lock(store)["token"] == successor_token
+    finally:
+        if lock.exists():
+            real_unlink(lock)
