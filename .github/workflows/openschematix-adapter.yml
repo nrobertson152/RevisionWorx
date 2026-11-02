@@ -21,3 +21,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Verify standalone OpenSchematix adapter
         run: python -m unittest discover -s tests -p 'test_openschematix_adapter.py' -v
+      - name: Checkout pinned OpenSchematix 1.1.0 native source
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/OpenSchematix
+          ref: 74e4c79053721997ae899eb9817ddbcb76eec5a0
+          path: external/openschematix
+          persist-credentials: false
+      - name: Compare exact native BOM against real fixtures
+        env:
+          OPENSCHEMATIX_ORACLE_SOURCE: ${{ github.workspace }}/external/openschematix
+        run: python -m unittest discover -s tests -p 'test_openschematix_native_oracle.py' -v
