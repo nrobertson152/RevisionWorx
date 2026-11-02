@@ -193,7 +193,7 @@ def test_document_viewmodel_checkout_status_and_filter(tmp_path):
     project = ctl.create_project(NewProject(name="QA project", rel_path="QA-project"))
     native = root / "Engineering" / "QA-project" / "03 Drawings" / "Native" / "vm.idw"
     native.write_bytes(b"QA drawing bytes")
-    ctl.start_register(project["id"], native, number="QA-VM-001")
+    assert ctl.start_register(project["id"], native, number="QA-VM-001")
     deadline = time.monotonic() + 15
     listing = DocumentListModel(ctl)
     listing.load(project["id"])
@@ -239,7 +239,7 @@ def test_document_viewmodel_rejects_empty_checkin_without_journal_mutation(tmp_p
     project = ctl.create_project(NewProject(name="QA project", rel_path="QA-project"))
     native = root / "Engineering" / "QA-project" / "03 Drawings" / "Native" / "empty.idw"
     native.write_bytes(b"QA drawing")
-    ctl.start_register(project["id"], native)
+    assert ctl.start_register(project["id"], native)
     deadline = time.monotonic() + 15
     doc_id = None
     while doc_id is None and time.monotonic() < deadline:
