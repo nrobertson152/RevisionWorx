@@ -84,6 +84,12 @@ class CoordinatorResearchTests(unittest.TestCase):
         self.assertEqual([x[0] for x in page2["changes"]], [3])
         self.assertFalse(page2["stale"])
 
+    def test_cursor_ahead_of_authority_fails_closed(self):
+        cred = self.c.acquire("cad", "alice")
+        self.c.publish("cad", cred, "tx0", "data", expected_revision=0)
+        with self.assertRaises(Fenced):
+            self.c.changes_after(2)
+
     def test_missing_change_sequence_fails_closed(self):
         cred = self.c.acquire("cad", "alice")
         for i in range(3):
