@@ -4,7 +4,7 @@ This intentionally runs against an ACTUAL, pinned Phase 2 source checkout.
 A strict expected-failure means the positive safety property is UNACCEPTED;
 the green unittest command does not certify it. No production files are edited.
 
-Current frozen baseline: Phase 2 2a2804820d4aca48b50026bdb7edfe8c241b1866.
+Initial historical baseline: Phase 2 2a28048. Current review: 366d4355.
 These are local-file tests on hosted Ubuntu/Windows, NOT physical SMB/power loss.
 """
 from __future__ import annotations
@@ -120,7 +120,16 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self._clear()
         self.assertEqual(len(observed), 1)
-        self._assert_no_writer()
+        self.assertTrue(self.orphan.exists(), "audit published but evidence not yet moved")
+        self.assertEqual(len(self._clear_audits()), 1)
+        # A fresh acquisition is permitted to FINISH the durably audited
+        # disposition, not to skip the audit or discard the raw evidence.
+        with self.ws.Workspace.open(self.meta, writable=True):
+            pass
+        self.assertFalse(self.orphan.exists())
+        kept = list(self.locks.glob("writer.lock.orphaned-*"))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_bytes(), ORPHAN_BYTES)
         self.assertEqual(len(self._clear_audits()), 1)
 
     @unittest.expectedFailure
@@ -179,7 +188,16 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
         with patch.object(self.ws.os, "replace", side_effect=deny_evidence_move):
             with self.assertRaises(PermissionError):
                 self._clear()
-        self._assert_no_writer()
+        self.assertEqual(self.orphan.read_bytes(), ORPHAN_BYTES)
+        self.assertEqual(len(self._clear_audits()), 1,
+                         "failed evidence move must not erase committed audit")
+        # After removing the injected filesystem fault, an acquisition may
+        # complete the already-audited evidence move exactly once.
+        with self.ws.Workspace.open(self.meta, writable=True):
+            pass
+        self.assertFalse(self.orphan.exists())
+        self.assertEqual(len(self._clear_audits()), 1)
+        self.assertEqual(len(list(self.locks.glob("writer.lock.orphaned-*"))), 1)
 
     def test_repeat_clear_does_not_repeat_audit_or_destroy_evidence(self):
         self._clear("supervisor confirmed writer stopped")
@@ -196,6 +214,7 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].read_bytes(), ORPHAN_BYTES)
 
+    @unittest.expectedFailure
     def test_reentrant_competing_admin_clear_has_one_terminal_audit(self):
         """Force two callers across the source-exists check deterministically."""
         real_publish = self.ws.Workspace._publish_admin_entry
@@ -221,6 +240,70 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
                          "competing clear requests must not publish duplicate effective audits")
         self.assertFalse(self.orphan.exists())
         self.assertEqual(len(list(self.locks.glob("writer.lock.orphaned-*"))), 1)
+
+    @unittest.expectedFailure
+    def test_changed_bytes_between_hash_check_and_move_never_get_authorized(self):
+        """Positive oracle: audit digest must bind the bytes actually moved.
+
+        Fault injection replaces the file after the final hash check and
+        before os.replace. The current code can archive *different* bytes
+        under a previously valid audit, then silently grant a new writer.
+        """
+        import hashlib
+        changed = b'{"token":"0000000000000000000000000000beef"}'
+        real = self.ws.os.replace
+        moves = []
+
+        def swap_just_before_move(src, dst, *args, **kwargs):
+            if (Path(src) == self.orphan and
+                    Path(dst).name.startswith("writer.lock.orphaned-")):
+                moves.append(True)
+                self.orphan.write_bytes(changed)
+            return real(src, dst, *args, **kwargs)
+
+        with patch.object(self.ws.os, "replace", side_effect=swap_just_before_move):
+            self._clear()
+        self.assertEqual(moves, [True])
+        audits = self._clear_audits()
+        self.assertEqual(len(audits), 1)
+        kept = self.locks / audits[0]["records"][0]["data"]["evidence"]
+        self.assertEqual(hashlib.sha256(kept.read_bytes()).hexdigest(),
+                         audits[0]["records"][0]["data"]["file_sha256"],
+                         "moved bytes MUST be those authorized by the prior audit")
+
+    def test_swapped_orphan_bytes_can_escape_audit_UNSAFE_reproduction(self):
+        """Passing UNSAFE demonstration for the check-then-os.replace race.
+
+        This is a deliberate injected concurrent file swap, NOT evidence
+        that ordinary NTFS/SMB spontaneously changes bytes.
+        """
+        import hashlib
+        changed = b'{"token":"0000000000000000000000000000beef"}'
+        real = self.ws.os.replace
+        hit = []
+
+        def swap_just_before_move(src, dst, *args, **kwargs):
+            if (Path(src) == self.orphan and
+                    Path(dst).name.startswith("writer.lock.orphaned-")):
+                hit.append(True)
+                self.orphan.write_bytes(changed)
+            return real(src, dst, *args, **kwargs)
+
+        with patch.object(self.ws.os, "replace", side_effect=swap_just_before_move):
+            self._clear()
+        audits = self._clear_audits()
+        self.assertEqual(hit, [True])
+        self.assertEqual(len(audits), 1)
+        data = audits[0]["records"][0]["data"]
+        evidence = self.locks / data["evidence"]
+        self.assertEqual(evidence.read_bytes(), changed)
+        self.assertNotEqual(hashlib.sha256(changed).hexdigest(), data["file_sha256"])
+        with self.ws.Workspace.open(self.meta, writable=True) as successor:
+            seq = successor.commit("after-unaudited-file-swap", [
+                self.ws.RecordPut("project", "prj_" + "3" * 32, {"alive": True})])
+            self.assertEqual(successor.get("project", "prj_" + "3" * 32)["_rev"], seq)
+        self.assertNotIn("0000000000000000000000000000beef",
+                         self.ws.Workspace._revoked_tokens(self.meta))
 
     def test_rejected_path_or_blank_reason_never_changes_authority(self):
         for name in ("../.releasing-a11ce5", "/tmp/foo", "writer.lock",
