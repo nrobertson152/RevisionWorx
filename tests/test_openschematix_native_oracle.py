@@ -96,6 +96,42 @@ class NativeBOMOracleTests(unittest.TestCase):
                 }
                 print("NATIVE_BOM_EVIDENCE " + json.dumps(evidence, sort_keys=True))
 
+    def test_native_multiunit_device_and_part_number_subsets(self):
+        latch = EXAMPLES / "start_stop_latch.osch"
+        project = self.projectio.open_any(str(latch), activate=False).project
+        lines = self.bom.generate(project)
+        merged = [line for line in lines if line.designators.count("K1") == 3]
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].quantity, 1)
+        self.assertEqual(len(merged[0].refs), 3)
+
+        demo = EXAMPLES / "demo_project.schematix"
+        source = demo.read_bytes()
+        project = self.projectio.open_any(str(demo), activate=False).project
+        lines = self.bom.generate(project)
+        report = inspect_bytes(source, demo.suffix)
+        candidates = {(c["manufacturer"].casefold(),
+                       c["manufacturer_part_number"].casefold())
+                      for c in report["bom_candidates"]}
+        native_explicit_parts = {(line.manufacturer.casefold(),
+                                  line.part_number.casefold())
+                                 for line in lines if line.part_number}
+        self.assertEqual(candidates, native_explicit_parts)
+        self.assertEqual(len(candidates), 5)
+        self.assertTrue(all(c["quantity"] is None for c in report["bom_candidates"]))
+        grouped = [line for line in lines if set(line.designators) == {"Z1", "Z2", "Z4"}]
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(grouped[0].quantity, 3)
+        self.assertEqual(len(grouped[0].refs), 3)
+        print("NATIVE_DEVICE_GROUPING_EVIDENCE " + json.dumps({
+            "latch_coil_and_contacts": {"source_units": len(merged[0].refs),
+                                        "physical_quantity": merged[0].quantity},
+            "demo_unpartnumbered_group": {"designators": grouped[0].designators,
+                                          "physical_quantity": grouped[0].quantity},
+            "demo_matching_explicit_manufacturer_part_keys": len(candidates),
+            "adapter_candidate_quantities": "unknown",
+        }, sort_keys=True))
+
     def test_native_sheet_filtering_preserves_source_identity(self):
         source = EXAMPLES / "demo_project.schematix"
         original = source.read_bytes()
