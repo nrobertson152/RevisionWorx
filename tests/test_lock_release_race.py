@@ -97,12 +97,13 @@ def test_third_writer_in_restore_window_fails_closed(share, monkeypatch):
     with pytest.raises(LockLostError):  # B can no longer take effect
         b.commit("b.late", [RecordPut("project", RID, {"by": "B"})])
     locks = share / ".revisionworx" / "locks"
-    assert any(p.name.startswith("writer.lock.displaced-") for p in locks.iterdir())  # evidence kept
+    # evidence kept: by the releaser (displaced) or by C's acquisition, which took custody (orphaned)
+    assert any(p.name.startswith(("writer.lock.displaced-", "writer.lock.orphaned-")) for p in locks.iterdir())
     assert not any(p.name.startswith(".releasing") for p in locks.iterdir())
     with Workspace.open(share) as r:
         assert r.get("project", RID) is None
-        ev = [x for x in r.list("audit").values() if "displaced" in x["reason"]]
-        assert ev and ev[0]["previous_holder"]["token"] == b._lock_token
+        ev = [x for x in r.list("audit").values() if x["previous_holder"].get("token") == b._lock_token]
+        assert len(ev) == 1  # fenced exactly once, whichever party noticed first
     b._lock_token = None
     b.close()
 
@@ -126,3 +127,35 @@ def test_crash_then_admin_break_then_new_writer(share):
     assert Workspace.read_writer_lock(share)["token"] == b._lock_token
     b.commit("ok", [RecordPut("project", RID, {"v": 1})])
     b.close()
+
+
+def test_crash_after_rename_of_successor_lock_fails_closed(share, monkeypatch):
+    """A moves B's lock aside and crashes before restoring it. The next acquirer C must revoke the
+    orphaned token before writing, so B and C can never both take effect."""
+    import revisionworx.workspace as wsmod
+    a = Workspace.create(share, "W")
+    holders = {}
+
+    def admin_revokes_a_and_b_acquires():
+        Workspace.break_writer_lock(share, a._lock_token, reason="A unresponsive")
+        holders["b"] = Workspace.open(share, writable=True)
+    _inject_before_first_lock_removal(monkeypatch, admin_revokes_a_and_b_acquires)
+    monkeypatch.setattr(wsmod.Workspace, "_restore_foreign_lock",
+                        lambda self, *a_: (_ for _ in ()).throw(SystemExit("A crashed")))
+    with pytest.raises(SystemExit):
+        a.close()
+    monkeypatch.undo()
+    b = holders["b"]
+    assert Workspace.read_writer_lock(share) is None  # B's lock is sitting in A's private file
+    c = Workspace.open(share, writable=True)          # C acquires the vacant name
+    assert b._lock_token in Workspace._revoked_tokens(share / ".revisionworx")  # journal fence, not luck
+    with pytest.raises(LockLostError):                # ...and B must be fenced
+        b.commit("b.late", [RecordPut("project", RID, {"by": "B"})])
+    c.commit("c.ok", [RecordPut("project", RID, {"by": "C"})])
+    assert c.get("project", RID)["by"] == "C"
+    locks = share / ".revisionworx" / "locks"
+    assert not any(p.name.startswith(".releasing") for p in locks.iterdir())
+    assert any(p.name.startswith("writer.lock.orphaned-") for p in locks.iterdir())
+    b._lock_token = None
+    b.close()
+    c.close()

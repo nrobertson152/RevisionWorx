@@ -438,6 +438,15 @@ exists. Adding more token re-checks only narrows the window.
 
    The displaced writer can then never take effect, and the new holder keeps its lock.
 
+**Crash after the rename (found while reviewing this ADR; reproduced first):**
+- Scenario: A has moved B's lock aside and dies before restoring it. `writer.lock` is then vacant
+  while B believes it still holds authority.
+- Fix: every acquisition scans `locks/.releasing-*` *before* the new holder can write. Any token
+  found there that is not yet revoked gets a journaled revocation, and the file becomes
+  `writer.lock.orphaned-*` evidence.
+- The same rule covers a live releaser racing an acquirer: whichever party notices first fences the
+  token exactly once. The releaser tolerates its private file having been taken into custody.
+
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.
 - ADR-016 bounded retry on Windows sharing violations (`PermissionError` on the rename).

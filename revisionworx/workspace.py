@@ -315,11 +315,17 @@ class Workspace:
                 os.link(private, lock)    # fails with EEXIST
                 private.unlink(missing_ok=True)
             return
+        except FileNotFoundError:
+            return  # a concurrent acquirer already fenced the token and took custody (evidence)
         except FileExistsError:
             pass
         evidence = lock.with_name(f"writer.lock.displaced-{uuid.uuid4().hex[:8]}")
-        os.replace(private, evidence)
-        if holder.get("token"):
+        try:
+            os.replace(private, evidence)
+        except FileNotFoundError:
+            return  # taken into custody (and fenced) by a concurrent acquirer
+        tok = holder.get("token")
+        if tok and tok not in Workspace._revoked_tokens(self.meta_dir):
             Workspace._publish_revocation(
                 self.meta_dir, holder, reason="lock displaced during a concurrent release; revoked to "
                 "fail closed (ADR-019)", evidence=evidence.name)
@@ -348,7 +354,34 @@ class Workspace:
                 os.replace(lock, lock.with_name(f"writer.lock.revoked-{uuid.uuid4().hex[:8]}"))
                 return Workspace._acquire_writer_lock(meta)
             raise WorkspaceLockedError(existing) from None
+        Workspace._fence_orphaned_releases(meta, token)
         return token
+
+    @staticmethod
+    def _fence_orphaned_releases(meta: Path, own_token: str) -> None:
+        """A releaser that crashed after moving writer.lock aside (ADR-019 step 2) may have taken a
+        successor's lock with it. Before the new holder writes anything, revoke every token found in
+        such orphaned files (fail closed) and keep them as evidence."""
+        locks = meta / "locks"
+        revoked = None
+        for orphan in sorted(locks.glob(".releasing-*")):
+            try:
+                holder = atomicio.read_json(orphan)
+            except (OSError, ValueError):
+                holder = {}
+            tok = holder.get("token")
+            if tok and tok != own_token:
+                if revoked is None:
+                    revoked = Workspace._revoked_tokens(meta)
+                if tok not in revoked:
+                    Workspace._publish_revocation(
+                        meta, holder, reason="lock orphaned by an interrupted release; revoked to fail "
+                        "closed (ADR-019)", evidence=orphan.name)
+                    revoked.add(tok)
+            try:
+                os.replace(orphan, locks / f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}")
+            except FileNotFoundError:
+                pass  # the releaser finished after all
 
     @staticmethod
     def _revoked_tokens(meta: Path) -> set[str]:

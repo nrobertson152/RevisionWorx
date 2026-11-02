@@ -80,6 +80,9 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
   fails.
 - **Tests:** full suite **177 passed, 1 skipped (Qt)** (Linux, Python 3.13.18). The checkout and lock
   multi-process races were repeated 3×, all passing. Windows not executed here.
+- **Crash after the rename** (A takes B's lock aside, then dies): reproduced, then fixed. The
+  acquirer fences tokens it finds in orphaned `.releasing-*` files before writing. Suite: **178 passed,
+  1 skipped**; races repeated 3×.
 - **Phase 1 backport authorization withheld** by the coordinator. `phase1-backport-8-9-10` must
   gain this fix once QA accepts it; PR #6 is unchanged.
 
