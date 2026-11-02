@@ -10,7 +10,7 @@ Preserve unmanaged files during adoption; refuse conflicting checkout authoritie
 
 Phase 1 (PR #6) now uses Python >=3.10, a PySide6 GUI, journal-first `Workspace`, single-writer lock checks, transaction outcome IDs, journal checksums, verify/repair, adoption, and disposable SQLite. Phase 2 (PR #7) adds document registry, immutable content snapshots and revision records, lifecycle, checkout/check-in, CLI and a Qt Documents tab. Parts, dependency graph, BOM, native CAD parsing, backups and production-safe SMB/NFS multi-writer operation remain unimplemented or unverified.
 
-Claude reports 118 passed / 1 Qt skipped for Phase 1 and 151 passed / 1 Qt skipped for Phase 2, both Linux. Claude also ran the earlier QA suite: 16/16 passed against its original Phase 1 base and 15/16 against Phase 2, with one expected contract mismatch. These are **Lead Architect-reported runs, not independent QA execution**. The QA PR updates the contract-mismatch test but has not independently executed it. On Phase 1 the new Phase 2-specific tests skip, and skipped tests do not certify the feature. The Qt widgets have not run, including offscreen; Windows and real network shares are unverified.
+Claude reports 118 passed / 1 Qt skipped for Phase 1 and 151 passed / 1 Qt skipped for Phase 2, both Linux. Claude also ran the earlier QA suite: 16/16 passed against its original Phase 1 base and 15/16 against Phase 2, with one expected contract mismatch. These are **Lead Architect-reported runs, not independent QA execution**. The QA PR updates the contract-mismatch test but has not independently executed it. On Phase 1 the new Phase 2-specific tests skip, and skipped tests do not certify the feature. A later GitHub-hosted PR-base Windows/Python 3.13 job exercised the Qt widget tests offscreen and completed the full suite (136 passed, 2 skipped, 1 xfailed); that is not a native installed-Windows desktop test. Initial Linux PySide6 test collection failed because `libEGL.so.1` was absent on the runner; corrected Qt runtime installation is awaiting CI verification. Actual SMB/NFS shares remain unverified.
 
 ## Testing layers
 
@@ -33,3 +33,9 @@ Synchronize 2, 3 and 10 clients on actual SMB 3.x and NFSv4 shares: one exclusiv
 Create directed/cyclic, direct/indirect, revision-specific, unverified and cross-project edges. Where-Used must show exact known downstream relationships and unmanaged coverage warnings. Before You Revise must not classify all affected assemblies as incompatible. Native CAD filenames alone never prove reference extraction. OpenSchematix current fixtures prove format recognition only.
 
 No test, feature, platform, performance result or release may be declared verified without an actual execution record.
+
+## Independent CI execution record (2026-11-01)
+
+Original QA branch at `304500f`: [GitHub Actions run 41371072088](https://github.com/nrobertson152/RevisionWorx/actions/runs/41371072088), SUCCESS on Ubuntu and Windows with Python 3.11/3.13; QA-only 16 passed/2 skipped and full suite 111 passed/3 skipped in each runner. Both skips in QA cover version-gated tests, not passing Phase 2 or fencing.
+
+GitHub PR merge check of QA atop updated Phase 1, [run 41371072451](https://github.com/nrobertson152/RevisionWorx/actions/runs/41371072451): Windows Python 3.13 QA 16 passed/1 skipped/1 xfailed, full suite 136 passed/2 skipped/1 xfailed. Linux 3.11/3.13 QA 16 passed/1 skipped/1 xfailed, but full suite aborted during Qt import due absent `libEGL.so.1`. Qt runner packages were added in `d3a4378`; rerun results not yet verified. Phase 2-including QA integration execution (eight tests) is queued and must not be counted as passing until its job logs are reviewed.
