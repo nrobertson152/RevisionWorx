@@ -286,6 +286,64 @@ class WitnessedCoordinatorResearch:
                 before_commit()  # research-only crash/fault injection before SQLite COMMIT
         return "committed"
 
+    def rotate_epoch(self, reason, signed_principal, *, after_guard_replace=None):
+        """Research-only supervised epoch rotation on a HEALTHY authority.
+
+        Revokes every checkout and changes the epoch for all future credentials.
+        The guard is durably replaced first, a witness is appended second, and
+        SQLite commits last. Crash at an intermediate point FAILS CLOSED and
+        requires external reconciliation; this method CANNOT repair a restored
+        DB whose acknowledged history is missing. The guard and witness are
+        ordinary, jointly rollbackable files: NOT a production trust root.
+        """
+        actor = self.auth.verify(signed_principal, administrator=True)
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("authenticated epoch rotation requires reason")
+        with self.core.authority._transaction() as db:
+            head = self._verify(db)
+            old_epoch = self.core.guard.epoch
+            new_epoch = uuid.uuid4().hex
+            resources = db.execute("""SELECT resource,generation,owner FROM authority
+                                      ORDER BY resource""").fetchall()
+            for resource, generation, owner in resources:
+                db.execute("""UPDATE authority SET generation=?,owner=NULL
+                              WHERE resource=?""", (generation + 1, resource))
+                db.execute("""INSERT INTO audits(resource,old_generation,new_generation,
+                              prior_owner,reason,actor_claim,outcome,time_utc)
+                              VALUES(?,?,?,?,?,?,?,?)""",
+                           (resource, generation, generation + 1, owner, reason,
+                            actor, "epoch-rotated", datetime.now(timezone.utc).isoformat()))
+            if not resources:
+                db.execute("""INSERT INTO audits(resource,old_generation,new_generation,
+                              prior_owner,reason,actor_claim,outcome,time_utc)
+                              VALUES(?,?,?,?,?,?,?,?)""",
+                           ("__epoch__", 0, 1, None, reason, actor, "epoch-rotated",
+                            datetime.now(timezone.utc).isoformat()))
+            db.execute("UPDATE epoch_state SET epoch=? WHERE id=1", (new_epoch,))
+            path = self.core.guard.guard_path
+            temporary = path.with_name(path.name + ".next-" + uuid.uuid4().hex)
+            try:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="ascii") as out:
+                    out.write(new_epoch)
+                    out.flush()
+                    os.fsync(out.fileno())
+                os.replace(temporary, path)
+                if os.name != "nt":
+                    dirfd = os.open(path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(dirfd)
+                    finally:
+                        os.close(dirfd)
+                self.core.guard.epoch = new_epoch
+                if after_guard_replace is not None:
+                    after_guard_replace()  # crash-injection point only
+                self._append(db, previous=head)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return {"old_epoch": old_epoch, "new_epoch": new_epoch,
+                "invalidated_checkouts": len(resources)}
+
     def outcome(self, txid, signed_principal):
         self.auth.verify(signed_principal)
         with self.core.authority._transaction() as db:
