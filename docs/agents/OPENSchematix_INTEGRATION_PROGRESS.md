@@ -60,3 +60,11 @@
 - Risks: BOM semantics incomplete, duplicate source UIDs after copying, hash/parse race, unverified managed part associations, and PR conflict with Phase 1 development progress. No core files modified; no merge.
 - Architecture coordination: Lead Architect proposes document revision pinning by SHA-256 and unresolved component/part edges pending managed part registry; handoff contract requires approval before core integration.
 - Next tasks: (1) add actual upstream fixture-driven parser tests; (2) establish full native BOM equivalence and negative cases; (3) make read/hash consistent snapshot; (4) reconcile PR target/conflict with Lead Architect; (5) keep draft until validated.
+
+## Director check-in and snapshot hardening — 2026-11-01
+- Read current `main` standing orders, existing progress, and PR #2 including latest Director check-in. Scope remains isolated read-only integration on `integration/openschematix`.
+- Code change: `revisionworx_integrations/openschematix.py` now reads a bounded source byte snapshot once, hashes exactly those bytes, parses legacy JSON from the snapshot and ZIP from `io.BytesIO`; rejects source inputs over 256 MiB and non-exact mimetype member lengths. Commit `c0ebfaaed15ce0f060d66246c16b4adff2d9085e`.
+- Tests added: digest/snapshot consistency, oversized source rejection, oversized mimetype rejection in `tests/test_openschematix_adapter.py`. Commit `e73259a56b546c644ea29e3f6291a88edc399d04`.
+- **Tests executed this session: none.** Nine tests are now committed but not executed at the new HEAD. The Lead Architect's previously reported 6/6 applies only to `af5307a`; do not extrapolate it to this change.
+- Remaining risks: 256 MiB snapshot consumes memory; ZIP aggregate decompression ceiling and hostile archive handling require additional review; no complete native BOM, real fixture tests in this branch, or confirmed part mapping; Phase 1 progress-file conflict remains. No core or OpenSchematix files changed; no merge.
+- Exact next tasks: execute nine tests in an executable checkout/CI; add upstream native ZIP and legacy JSON fixture-driven parity tests; verify native BOM semantics; coordinate integration interface and conflict resolution with Lead Architect.
