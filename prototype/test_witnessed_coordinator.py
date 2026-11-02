@@ -6,6 +6,7 @@ storage is nonrollbackable, Windows authentication, or SMB/power-loss semantics.
 from contextlib import closing
 import multiprocessing as mp
 import os
+import shutil
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -149,6 +150,40 @@ class WitnessedCoordinatorTests(unittest.TestCase):
         # Even the old credential cannot publish via the witnessed authority.
         with self.assertRaises(Fenced):
             self.co.publish(old, self.alice, "invalid", "payload", expected_revision=0)
+
+    def test_rollback_of_both_db_and_witness_resurrects_revoked_owner(self):
+        """KNOWN UNSAFE: two restorable files are not a nonrollbackable trust root."""
+        old = self.co.acquire("drawing", self.alice)
+        backup = self.root / "older-authority.db"
+        witness_copy = self.root / "older-witness"
+        with closing(sqlite3.connect(self.db)) as source, closing(sqlite3.connect(backup)) as target:
+            source.backup(target)
+        shutil.copytree(self.ledger, witness_copy)
+        self.co.override("drawing", old["generation"], "recover lost lock", self.admin)
+        with self.assertRaises(Fenced):
+            self.co.publish(old, self.alice, "revoked", "old", expected_revision=0)
+        with closing(sqlite3.connect(backup)) as source, closing(sqlite3.connect(self.db)) as target:
+            source.backup(target)
+        shutil.rmtree(self.ledger)
+        shutil.copytree(witness_copy, self.ledger)
+        restored = self.restart()
+        self.assertEqual(restored.snapshot("drawing")[:2],
+                         (old["generation"], "alice"))
+        self.assertEqual(restored.publish(old, self.alice, "resurrected", "unsafe",
+                                          expected_revision=0), "committed")
+        # This is an intentionally passing *vulnerability demonstration*.
+        # The acceptance criterion in production is the OPPOSITE.
+        self.assertEqual(restored.outcome("resurrected", self.alice)["state"], "committed")
+
+    def test_reverted_witness_only_fails_closed(self):
+        self.co.acquire("drawing", self.alice)
+        witness_copy = self.root / "older-witness"
+        shutil.copytree(self.ledger, witness_copy)
+        self.co.override("drawing", 1, "administrative recovery", self.admin)
+        shutil.rmtree(self.ledger)
+        shutil.copytree(witness_copy, self.ledger)
+        with self.assertRaises(Fenced):
+            self.restart()
 
     def test_missing_and_tampered_witness_fail_closed(self):
         self.co.acquire("drawing", self.alice)
