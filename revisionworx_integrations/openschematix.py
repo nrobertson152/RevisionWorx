@@ -51,10 +51,20 @@ def _reject_constant(value: str):
     raise InvalidProject("non-standard JSON numeric constant")
 
 
+def _unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise InvalidProject(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
 def _json(raw: bytes, where: str) -> dict:
     try:
         result = json.loads(raw.decode("utf-8"), parse_int=_integer,
-                            parse_float=_finite_float, parse_constant=_reject_constant)
+                            parse_float=_finite_float, parse_constant=_reject_constant,
+                            object_pairs_hook=_unique_object)
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise InvalidProject(f"invalid JSON in {where}: {type(exc).__name__}") from exc
     stack = [(result, 1)]
