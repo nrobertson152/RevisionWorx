@@ -140,3 +140,14 @@ def test_controller_reports_conflict_actionably(tmp_path):
     with pytest.raises(ConflictError) as info:
         c.update_project(rec["id"], rec["_rev"], name="second")
     assert "Reload" in describe_error(info.value)
+
+
+def test_index_sync_handles_journaled_deletes(ws, cache_dir):
+    """Regression: index sync assumed every journal item carried data and crashed on deletes."""
+    from revisionworx.index import open_index
+    rec = projects.create_project(ws, NewProject(name="Temp"))
+    with open_index(ws, cache_dir) as idx:
+        assert idx.count_projects() == 1
+        ws.commit("t", [RecordDelete("project", rec["id"], expect_rev=rec["_rev"])])
+        assert idx.sync()["mode"] == "incremental"
+        assert idx.count_projects() == 0 and idx.search_projects("temp") == []

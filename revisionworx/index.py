@@ -145,6 +145,14 @@ class LocalIndex:
         elif kind == "root":
             self.db.execute("INSERT OR REPLACE INTO roots VALUES (?,?)", (rid, data["name"]))
 
+    def _apply_delete(self, kind: str, rid: str) -> None:
+        if kind == "project":
+            for table, col in (("projects", "id"), ("projects_fts", "id"), ("files", "project_id"),
+                               ("files_fts", "project_id")):
+                self.db.execute(f"DELETE FROM {table} WHERE {col}=?", (rid,))
+        elif kind == "root":
+            self.db.execute("DELETE FROM roots WHERE id=?", (rid,))
+
     def rebuild(self) -> int:
         """Discard everything and reload from the authoritative workspace."""
         head = self.ws.head_seq()  # captured first: later entries are replayed idempotently
@@ -173,8 +181,11 @@ class LocalIndex:
             for entry in self.ws.entries_after(cur):
                 if entry["seq"] != expected:
                     break
-                for put in entry["records"]:
-                    self._apply_put(put["kind"], put["id"], put["data"])
+                for item in entry["records"]:
+                    if item.get("delete"):
+                        self._apply_delete(item["kind"], item["id"])
+                    else:
+                        self._apply_put(item["kind"], item["id"], item["data"])
                 self.db.execute("UPDATE meta SET value=? WHERE key='journal_seq'", (str(entry["seq"]),))
                 expected += 1
                 applied += 1
