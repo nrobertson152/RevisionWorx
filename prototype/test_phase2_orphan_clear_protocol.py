@@ -301,6 +301,37 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
         self.assertNotIn("0000000000000000000000000000beef",
                          self.ws.Workspace._revoked_tokens(self.meta))
 
+    def test_two_overlapping_admin_clears_duplicate_audit_UNSAFE_reproduction(self):
+        """Passing unsafe audit-idempotency demonstration, NOT safety acceptance.
+
+        Force admin B after admin A's pre-check and before A writes its audit.
+        Both may publish different clearance audits for the SAME original
+        orphan, while only one evidence file remains.
+        """
+        original = self.ws.Workspace._publish_admin_entry
+        entered = []
+
+        def overlapping_clear(meta, op, audit_data, *args, **kwargs):
+            if not entered:
+                entered.append(True)
+                self._clear("second administrator confirms termination")
+            return original(meta, op, audit_data, *args, **kwargs)
+
+        with patch.object(self.ws.Workspace, "_publish_admin_entry",
+                          side_effect=overlapping_clear):
+            self._clear("first administrator confirms termination")
+        self.assertEqual(entered, [True])
+        audits = [x["records"][0]["data"] for x in self._clear_audits()]
+        self.assertEqual(len(audits), 2, "reproduces duplicate clearance")
+        self.assertEqual({a["file"] for a in audits}, {ORPHAN_NAME})
+        self.assertEqual({a["file_sha256"] for a in audits},
+                         {audits[0]["file_sha256"]})
+        self.assertEqual(len({a["reason"] for a in audits}), 2)
+        self.assertFalse(self.orphan.exists())
+        kept = list(self.locks.glob("writer.lock.orphaned-*"))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_bytes(), ORPHAN_BYTES)
+
     def test_rejected_path_or_blank_reason_never_changes_authority(self):
         for name in ("../.releasing-a11ce5", "/tmp/foo", "writer.lock",
                      ".releasing-invalid_name"):
