@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 import pytest
 from revisionworx import atomicio, projects
-from revisionworx.workspace import RecordPut, Workspace, WorkspaceCorruptError, WorkspaceLockedError
+from revisionworx.workspace import (CommittedNotApplied, LockLostError, RecordPut, Workspace,
+                                 WorkspaceCorruptError, WorkspaceLockedError, strip_rev)
 from .fixtures import STRUCTURES, fingerprint, populate
 
 @pytest.mark.parametrize("layout", sorted(STRUCTURES))
@@ -53,19 +54,22 @@ def test_journal_publish_then_apply_failure_is_recovered(tmp_path, monkeypatch):
     writer = Workspace.create(store, "QA")
     before = writer.head_seq()
     try:
+        txid = "a" * 32
         with monkeypatch.context() as m:
             def crash(_entry):
                 raise OSError("simulated crash")
             m.setattr(writer, "_apply", crash)
-            with pytest.raises(OSError):
-                writer.commit("qa.crash", [RecordPut("project", rid, {"name": "durable"})])
+            with pytest.raises(CommittedNotApplied) as outcome:
+                writer.commit("qa.crash", [RecordPut("project", rid, {"name": "durable"})], txid=txid)
+        assert outcome.value.txid == txid
         assert writer.head_seq() == before + 1
+        assert writer.transaction_outcome(txid) == {"state": "committed", "seq": before + 1}
         with Workspace.open(store) as reader:
-            assert reader.get("project", rid) == {"name": "durable"}
+            assert strip_rev(reader.get("project", rid)) == {"name": "durable"}
     finally:
         writer.close()
     with Workspace.open(store, writable=True) as recovered:
-        assert recovered.get("project", rid) == {"name": "durable"}
+        assert strip_rev(recovered.get("project", rid)) == {"name": "durable"}
         assert recovered.applied_seq() == recovered.head_seq()
 
 def test_journal_gap_fails_closed(tmp_path):
@@ -112,3 +116,35 @@ def test_unmanaged_archive_not_enumerated_during_open(tmp_path, monkeypatch):
         m.setattr(os, "listdir", checked_listdir)
         with Workspace.open(store) as ws:
             assert ws.list("project") == {}
+
+@pytest.mark.xfail(strict=True, reason="Known ADR-008 R2 TOCTOU: lock break between verification and journal publish")
+def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeypatch):
+    """Safety oracle: old writer must not publish after its lock was revoked.
+
+    Controlled local pause at the *last* lock check demonstrates the outstanding
+    non-atomic verify/publish window. XPASS means re-evaluate/remove the xfail.
+    This is NOT an SMB/NFS test or a concurrency certification.
+    """
+    store = tmp_path / "store"
+    writer = Workspace.create(store, "QA")
+    initial = writer.head_seq()
+    token = Workspace.read_writer_lock(store)["token"]
+    actual_check = writer._check_lock_still_held
+    calls = []
+    def break_after_check():
+        actual_check()
+        if not calls:
+            calls.append(True)
+            Workspace.break_writer_lock(store, token, reason="QA deterministic paused-writer race")
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(writer, "_check_lock_still_held", break_after_check)
+            with pytest.raises(LockLostError):
+                writer.commit("qa.stale", [
+                    RecordPut("settings", "workspace", {"stale_writer": True})
+                ])
+        with Workspace.open(store) as reader:
+            assert reader.head_seq() == initial
+            assert reader.get("settings", "workspace") is None
+    finally:
+        writer.close()
