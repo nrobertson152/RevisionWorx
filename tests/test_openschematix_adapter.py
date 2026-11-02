@@ -301,6 +301,27 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidProject, "duplicate JSON key"):
             inspect(path)
 
+    def test_detect_concurrent_working_file_edit_during_snapshot(self):
+        path = self.legacy()
+        real_fstat = os.fstat
+        calls = 0
+
+        def write_after_read(fd):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                # Deterministic edit between the parser's two fstat checks.
+                # Use builtins.open to avoid invoking Path.open recursively.
+                with open(path, "ab") as writable:
+                    writable.write(b" concurrently edited")
+            return real_fstat(fd)
+
+        with patch("revisionworx_integrations.openschematix.os.fstat",
+                   side_effect=write_after_read):
+            with self.assertRaisesRegex(InvalidProject, "source changed during inspection"):
+                inspect(path)
+        self.assertGreaterEqual(calls, 2)
+
     def test_unknown_extension(self):
         path = self.root / "example.step"
         path.write_text("{}")
