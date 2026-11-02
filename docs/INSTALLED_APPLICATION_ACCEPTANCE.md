@@ -16,7 +16,7 @@ The acceptance matrix must distinguish four levels:
 | C | Actual desktop install or copied bundle launched interactively on a real display | Tested UI, keyboard, dialogs and desktop integration on that OS |
 | D | Real installation/update/uninstallation against disposable copies of old engineering workspaces | Compatibility, rollback and data preservation for the *specific versions tested* |
 
-**Current evidence reaches level B only.** The packaging jobs are experimental one-directory bundles, not MSI, AppImage, .deb or system installers.
+**Current evidence reaches level B only.** Linux/Windows [run 41390661790](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390661790) also demonstrates **copied-workspace preservation for five files** and Unicode/spaces paths in a disposable Qt-offscreen test; it does **not** reach level C interactive desktop or level D actual installer/migration. The packaging jobs are experimental one-directory bundles, not MSI, AppImage, .deb or system installers.
 
 ## 2. Explicitly safe test-data preparation
 
@@ -59,7 +59,7 @@ The acceptance matrix must distinguish four levels:
 | Gate | Current status | Owner |
 | --- | --- | --- |
 | Pinned onedir Linux/Windows bundled startup | Automated offscreen smoke verified on earlier Phase 2 `ffcfb463`; new `d656884b` rerun is a separate result | Integration |
-| Copied existing workspace preservation under frozen CLI and Qt-offscreen GUI | New automated harness; verify exact CI run and SHA before marking passed | Integration |
+| Copied existing workspace preservation under frozen CLI and Qt-offscreen GUI | **PASS** (disposable current-schema copy, 5 hashed files, Windows/Linux Python 3.11, 41390661790); not an old-version migration | Integration |
 | Fully interactive installed GUI on actual Windows/Linux desktop | **NOT EXECUTED** | QA + Director |
 | Native installer and uninstaller, signing and redistribution compliance | **NOT IMPLEMENTED** | Release engineering |
 | Actual migration, backward compatibility, power-loss rollback and ACLs | **NOT EXECUTED** | Claude + QA |

@@ -1,13 +1,13 @@
 # RevisionWorx — experimental Windows/Linux packaging readiness
 
 **Owner:** OpenSchematix Integration Engineer (isolated draft PR #2).  
-**Status:** PRE-ALPHA EXPERIMENT. Frozen Windows/Linux CLI and Qt-offscreen startup smoke **PASS** at Phase 2 SHA ffcfb463, [CI run 41388877999](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388877999). No installer, upgrade mechanism, signed package or release is created.
+**Status:** PRE-ALPHA EXPERIMENT. Windows/Linux frozen CLI, Qt-offscreen and disposable **copied-workspace preservation** smoke **PASS** against Phase 2 `d656884b39401134149273dd0121ef620b76eb8e` in [CI run 41390661790](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390661790). No interactive installed GUI, migration, native installer, signed package or release exists.
 
 ## Source and build contract
 
 The inspected Phase 2 source has Python >=3.10, a standard-library CLI, optional PySide6-Essentials GUI, and separate GUI/CLI entry points. Its declared version is **0.1.0.dev0**. This builder intentionally narrows validation to **Python 3.11**.
 
-The first test target is the exact Phase 2 commit **ffcfb463bc050ff460279fd92f6758e0215f73e3**. The build will fail if the checkout SHA differs. Build tools are pinned at top level (PyInstaller 6.13.0, PySide6-Essentials 6.8.3, setuptools 75.8.2, wheel 0.45.1). The output captures a full pip freeze, source SHA, version, platform, Python runtime and binary SHA-256 hashes in provenance.json and dependencies.txt. These do **not** constitute a fully hash-locked or bit-for-bit reproducible build; that is a separate release gate.
+The first tested source target was Phase 2 commit **ffcfb463bc050ff460279fd92f6758e0215f73e3**; the **current pinned build/test target is `d656884b39401134149273dd0121ef620b76eb8e`**. The build will fail if the checkout SHA differs. Build tools are pinned at top level (PyInstaller 6.13.0, PySide6-Essentials 6.8.3, setuptools 75.8.2, wheel 0.45.1). The output captures a full pip freeze, source SHA, version, platform, Python runtime and binary SHA-256 hashes in provenance.json and dependencies.txt. These do **not** constitute a fully hash-locked or bit-for-bit reproducible build; that is a separate release gate.
 
 The builder produces two **one-directory** executables inside a newly created output directory:
 
@@ -23,12 +23,12 @@ First check out RevisionWorx at the pinned SHA into a **separate path** outside 
 On Linux, with Python 3.11:
 
     python3.11 tools/packaging/test_builder.py
-    bash tools/packaging/build-linux.sh --source /tmp/revisionworx-phase2 --output /tmp/revisionworx-bundle-test --expected-sha ffcfb463bc050ff460279fd92f6758e0215f73e3
+    bash tools/packaging/build-linux.sh --source /tmp/revisionworx-phase2 --output /tmp/revisionworx-bundle-test --expected-sha d656884b39401134149273dd0121ef620b76eb8e
 
 On Windows PowerShell, with Python 3.11 available through python:
 
     python tools\packaging\test_builder.py
-    .\tools\packaging\build-windows.ps1 --source C:\Temp\revisionworx-phase2 --output C:\Temp\revisionworx-bundle-test --expected-sha ffcfb463bc050ff460279fd92f6758e0215f73e3
+    .\tools\packaging\build-windows.ps1 --source C:\Temp\revisionworx-phase2 --output C:\Temp\revisionworx-bundle-test --expected-sha d656884b39401134149273dd0121ef620b76eb8e
 
 On Ubuntu-family Linux systems, the PySide6 6.8.3 runtime requires system graphics libraries. The verified GitHub Actions environment installed **libegl1, libgl1, libopengl0, libxkbcommon-x11-0** and the relevant libxcb libraries (cursor, image, keysyms, render-util, xkb, icccm and shape). These are OS packages and are **not** guaranteed to be embedded by PyInstaller. Missing libEGL.so.1 caused the first Linux GUI smoke to exit, so native dependency resolution is an explicit deployment requirement.
 
@@ -47,6 +47,20 @@ This checks bundled executable **startup**, not an actual installed desktop UI, 
 - **[Run 41388877999](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388877999)**, integration packaging SHA **17cc1cce846df63b4ddab0dc137f495e3f3101d9**, pinned Phase 2 SHA **ffcfb463bc050ff460279fd92f6758e0215f73e3**: both Ubuntu and Windows Python 3.11 jobs **SUCCESS**. Each executed **2 packaging safety unittests passed**, built separate frozen GUI and CLI one-dir directories, passed frozen CLI help, passed frozen Qt GUI startup survival in a disposable Qt-offscreen profile, and emitted provenance with application version **0.1.0.dev0** and binary SHA-256. **No user-visible interactive GUI, native installer, migration or existing-data acceptance was performed.**
 
 This confirms the isolated bundle *startup* gate only. The initial Linux failure is an environmental prerequisite discovered and corrected in the experimental CI environment, not a production-code change.
+
+
+### New disposable-copy acceptance run at source SHA `d656884b`
+
+[GitHub Actions run 41390411172](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390411172), packaging code SHA `31255080407518f7156e81722c40449bd26dc53d`, was **not green**: Ubuntu passed; Windows failed the new Unicode-path `--json status` smoke because the bundled CLI inherited a non-UTF-8 console codepage and raised `'charmap' codec can't encode character '\\u03a9'`. The source CLI was **not modified**.
+
+The packaging-only `tools/packaging/cli_entry.py` now configures UTF-8 text output, and the two smoke drivers explicitly decode UTF-8. [GitHub Actions run 41390661790](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390661790) at packaging code SHA **`19ba7329e96ed76abf7cafe4cc9b23499798b145`**, pinned Phase 2 SHA **`d656884b39401134149273dd0121ef620b76eb8e`**, was **SUCCESS on both Ubuntu and Windows Python 3.11**. Each OS job completed **4/4 packaging safety unittest cases** and verified:
+- Frozen CLI `--help` exit 0, frozen Qt GUI offscreen process survival.
+- Created a completely disposable initial PDM workspace using the frozen CLI.
+- Copied the workspace to a separate Unicode/spaces-containing path, ran frozen `--json status`, and opened only the **copy** with the frozen Qt offscreen GUI.
+- Compared content SHA-256 of **all five files** in the sample workspace before and after each read-only operation; copy and original remained unchanged. This is an **existing-workspace read-preservation smoke**, not migration from a prior schema or real ACL/UNC test.
+- No shipped binaries, upgraded customer workspaces, interactive installed GUI or SMB two-host acceptance.
+
+The frozen CLI Unicode mitigation does not establish that *source* `python -m revisionworx` supports arbitrary redirected Windows codepages; that is a separate review point for Claude.
 
 ## Non-destructive upgrade, migration and path/permissions matrix
 
