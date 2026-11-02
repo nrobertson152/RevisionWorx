@@ -237,7 +237,7 @@ Implementation notes beyond the original design:
 - Registration may capture the file's current content as the first revision in the **same journal
   entry**. That is an explicit snapshot of present content, not invented history.
 
-### ADR-011 Immutable revisions and content store — IMPLEMENTED (`content.py`, `revlabels.py`; GC of orphan objects PROPOSED)
+### ADR-011 Immutable revisions and content store — IMPLEMENTED (`content.py`, `revlabels.py`; orphan GC implemented: `documents.gc_content`, CLI `doc gc`)
 - Content store: `.revisionworx/content/sha256/<aa>/<64-hex>`, holding the raw bytes and named by
   their SHA-256.
   - Written by streaming the source once into a temp file while hashing, fsynced, then
@@ -390,6 +390,11 @@ afterwards and is only evidence.
   `LockLostError`.
 - Cost: txid lookup scans the journal (O(n)). Acceptable for standalone mode; the coordinator should
   index txids.
+- **Content GC** (`doc gc`):
+  - runs under the writer lock and is a dry run by default;
+  - treats every revision record (including unapplied entries) as a reference;
+  - keeps objects younger than 1 h;
+  - an `--apply` run is journaled as an audit record *before* it deletes anything.
 - Not yet done: `Workspace` itself is not split into reader and authority. That refactor waits
   until QA accepts `325b7a8`, so code under review is not churned.
 

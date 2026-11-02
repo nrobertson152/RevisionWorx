@@ -78,7 +78,9 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
   the director directed.
 - Added the `CommitAuthority` protocol and a reusable contract suite; the file journal passes it.
 - Fixed a non-idempotent `txid` retry (reproduced first: the same txid produced 2 entries).
-- **Tests:** full suite **168 passed, 1 skipped (Qt)**. No CI was triggered.
+- Added orphan content GC (`doc gc`): dry run by default, grace period, referenced objects never
+  removed, audited.
+- **Tests:** full suite **169 passed, 1 skipped (Qt)**. No CI was triggered.
 
 ### 2026-11-01 (session 4) — issues #8 (rev. 2), #9, #10
 - **#8 pre-audit gap closed:** revocation is now a journal entry, the single linearization point
@@ -252,8 +254,7 @@ against the application, so I ran them; nothing in their branches was modified.
    Launch the window on Linux and Windows; fix whatever the stub smoke could not catch.
 2. Run the full suite on Windows (NTFS) to verify the `rename`-based exclusive publish and path rules.
 3. Add CI (GitHub Actions: Linux + Windows, Python 3.10 and 3.13) — needs director approval for workflow files.
-4. Phase 2 follow-ups: content-object GC with a safe mark-and-sweep (only objects older than any
-   in-flight check-in), per-document revision storage for scale, PDF report export, engineering
+4. Phase 2 follow-ups (content GC done in session 5): per-document revision storage for scale, PDF report export, engineering
    change record linkage, optional read-only policy.
 5. Integrate Agent C's OpenSchematix adapter (PR #2) once retargeted. Schematic documents can then
    carry extracted component/part candidates as `unresolved` provenance until Phase 4 parts exist.

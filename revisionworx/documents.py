@@ -542,3 +542,41 @@ def drawing_register_csv(rows: list[dict]) -> str:
     for r in rows:
         w.writerow(r)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------- content GC
+def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600.0) -> dict:
+    """Find (and with ``apply`` remove) content objects no revision references.
+
+    Orphans arise when a check-in stored content but failed before its journal entry. Safety:
+    requires the writer lock (no check-in can be storing concurrently); every revision record,
+    including unapplied journal entries, is a reference; objects younger than ``min_age_seconds`` are
+    kept; dry-run by default; removals are recorded in the journal as an audit record."""
+    import time
+    ws._require_writable()
+    store = ContentStore(ws)
+    referenced = {r["sha256"] for r in ws.list("revision").values()}
+    now = time.time()
+    orphans, kept_young = [], 0
+    if store.root.is_dir():
+        for sub in sorted(store.root.iterdir()):
+            if not sub.is_dir():
+                continue
+            for obj in sorted(sub.iterdir()):
+                if obj.name.startswith(".") or obj.name in referenced:
+                    continue
+                st = obj.stat()
+                if now - st.st_mtime < min_age_seconds:
+                    kept_young += 1
+                    continue
+                orphans.append({"sha256": obj.name, "size": st.st_size})
+    report = {"referenced": len(referenced), "orphans": orphans, "kept_young": kept_young,
+              "bytes": sum(o["size"] for o in orphans), "removed": False}
+    if apply and orphans:
+        ws.commit("content.gc", [RecordPut("audit", new_id("aud"), {
+            "event": "content-gc", "removed": orphans, "time": now_iso(), "by": current_actor()})])
+        for o in orphans:  # audit first: a crash leaves a record of intent, never an unlogged deletion
+            if o["sha256"] not in {r["sha256"] for r in ws.list("revision").values()}:
+                store.path_for(o["sha256"]).unlink(missing_ok=True)
+        report["removed"] = True
+    return report

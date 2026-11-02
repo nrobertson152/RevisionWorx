@@ -514,3 +514,34 @@ def test_cli_document_workflow(tmp_path, capsys):
     code, out, _ = run("--json", "doc", "show", doc["id"])
     assert json.loads(out)["status"]["state"] == "modified-externally"
     assert run("verify")[0] == 0
+
+
+# ---------------------------------------------------------------- content GC
+def test_gc_removes_only_old_unreferenced_objects(ws, proj, monkeypatch):
+    doc, a = reg(ws, proj, "02 CAD/Parts/bracket.ipt")
+    co = D.checkout(ws, doc["id"])
+    (ws.folder / "02 CAD/Parts/bracket.ipt").write_bytes(b"orphan content")
+    real = atomicio.publish_exclusive
+
+    def crash(path, data):
+        if "journal" in str(path):
+            raise OSError("crash before commit")
+        return real(path, data)
+    monkeypatch.setattr(atomicio, "publish_exclusive", crash)
+    with pytest.raises(OSError):
+        D.checkin(ws, doc["id"], co["token"], "lost")
+    monkeypatch.undo()
+    store = ContentStore(ws)
+    orphan = sha(b"orphan content")
+    assert store.exists(orphan)
+    young = D.gc_content(ws)  # default: 1 h grace, dry run
+    assert young["orphans"] == [] and young["kept_young"] == 1
+    old = time.time() - 7200
+    os.utime(store.path_for(orphan), (old, old))
+    os.utime(store.path_for(a["sha256"]), (old, old))  # old but referenced: must survive
+    dry = D.gc_content(ws)
+    assert [o["sha256"] for o in dry["orphans"]] == [orphan] and not dry["removed"] and store.exists(orphan)
+    done = D.gc_content(ws, apply=True)
+    assert done["removed"] and not store.exists(orphan) and store.exists(a["sha256"])
+    assert [x for x in ws.list("audit").values() if x["event"] == "content-gc"][0]["removed"][0]["sha256"] == orphan
+    assert D.verify_revisions(ws) == [] and ws.verify()["problems"] == []

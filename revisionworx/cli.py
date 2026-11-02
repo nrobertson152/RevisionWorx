@@ -322,6 +322,15 @@ def cmd_doc_verify(args):
             raise SystemExit(1)
 
 
+def cmd_doc_gc(args):
+    with _open(args, True) as ws:
+        r = documents.gc_content(ws, apply=args.apply, min_age_seconds=args.min_age_hours * 3600)
+        verb = "Removed" if r["removed"] else "Would remove"
+        _emit(args, r, f"{verb} {len(r['orphans'])} unreferenced content object(s), {r['bytes']} bytes "
+                       f"({r['referenced']} referenced, {r['kept_young']} too recent to touch)."
+              + ("" if args.apply else " Dry run; add --apply to remove."))
+
+
 def cmd_drawing_register(args):
     with _open(args, False) as ws:
         rows = documents.drawing_register(ws, args.project)
@@ -454,6 +463,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--reason", required=True); s.set_defaults(fn=cmd_doc_release_checkout)
     s = doc.add_parser("verify", help="re-hash stored revision content"); s.add_argument("--id")
     s.set_defaults(fn=cmd_doc_verify)
+    s = doc.add_parser("gc", help="find/remove content objects no revision references (admin)")
+    s.add_argument("--apply", action="store_true"); s.add_argument("--min-age-hours", type=float, default=1.0)
+    s.set_defaults(fn=cmd_doc_gc)
     s = doc.add_parser("register-report", help="engineering drawing register of a project")
     s.add_argument("project"); s.add_argument("--csv"); s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_drawing_register)
