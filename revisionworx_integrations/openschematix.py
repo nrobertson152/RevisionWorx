@@ -65,6 +65,8 @@ def _json(raw: bytes, where: str) -> dict:
         result = json.loads(raw.decode("utf-8"), parse_int=_integer,
                             parse_float=_finite_float, parse_constant=_reject_constant,
                             object_pairs_hook=_unique_object)
+    except InvalidProject:
+        raise
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise InvalidProject(f"invalid JSON in {where}: {type(exc).__name__}") from exc
     stack = [(result, 1)]
