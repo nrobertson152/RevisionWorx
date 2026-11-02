@@ -29,3 +29,7 @@ Maintain `docs/QA_STRATEGY.md`, `docs/TEST_MATRIX.md`, reusable automated tests 
 
 ## Immediate response required
 After reading these orders, report your role, branch, PR, current completed work, verified tests, outstanding risks, and your next concrete engineering task. Then continue implementation autonomously.
+
+## Updated priorities following Phase 2 report (2026-11-01)
+
+Phase 2 QA priority: inspect Claude draft PR #6 and stacked PR #7. Expand executable tests for immutable revisions, lifecycle supersession, checkout races, registration without moving CAD files, external edits, drawing register, CLI, Qt Documents tab, and view-models. Re-test Phase 1 optimistic conflicts, lock-break fencing, journal checksum, verify/repair, index deletion, symlinks, and case-fold duplicates. Reproduce paused-writer race and add deterministic fault injection; do not certify concurrent shared-folder writes. Real Qt and Windows tests remain unexecuted per Claude; run in suitable environments and report skips separately. Claude reports 151 passed/1 skipped and 16 QA tests on earlier code; independently validate. Maintain draft PR #3 and QA_PROGRESS.md; coordinate with Claude, no merges.
