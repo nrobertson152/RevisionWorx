@@ -12,7 +12,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .workspace import Workspace
+from .workspace import Workspace, WorkspaceError
 
 SCHEMA_VERSION = 1
 
@@ -154,15 +154,27 @@ class LocalIndex:
             self.db.execute("DELETE FROM roots WHERE id=?", (rid,))
 
     def rebuild(self) -> int:
-        """Discard everything and reload from the authoritative workspace."""
-        head = self.ws.head_seq()  # captured first: later entries are replayed idempotently
+        """Discard everything and reload from one stable snapshot of the authoritative workspace.
+
+        Issue #9: the head is sampled before and after listing every kind; if anything was committed
+        in between, the listing is retried, so the stored cursor never claims less than the cache
+        contains."""
+        import time
+        kinds = ("root", "project")
+        for attempt in range(50):
+            head = self.ws.head_seq()
+            snapshot = {k: self.ws.list(k) for k in kinds}
+            if self.ws.head_seq() == head:
+                break
+            time.sleep(0.01 * min(attempt + 1, 10))
+        else:
+            raise WorkspaceError("the workspace changed continuously during index rebuild; try again")
         with self.db:
             for table in ("roots", "projects", "projects_fts", "files", "files_fts"):
                 self.db.execute(f"DELETE FROM {table}")
-            for rid, data in self.ws.list("root").items():
-                self._apply_put("root", rid, data)
-            for rid, data in self.ws.list("project").items():
-                self._apply_put("project", rid, data)
+            for kind in kinds:
+                for rid, data in snapshot[kind].items():
+                    self._apply_put(kind, rid, data)
             self.db.execute("UPDATE meta SET value=? WHERE key='journal_seq'", (str(head),))
         return head
 

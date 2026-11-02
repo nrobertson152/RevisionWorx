@@ -248,8 +248,42 @@ class Workspace:
             except (OSError, ValueError):
                 holder = None
             if holder and holder.get("token") == self._lock_token:
-                lock.unlink(missing_ok=True)
+                self._unlink_own_lock(lock)
             self._lock_token = None
+
+    LOCK_RELEASE_ATTEMPTS = 50
+    LOCK_RELEASE_DELAY = 0.02
+
+    def _unlink_own_lock(self, lock: Path) -> None:
+        """Delete our own lock, retrying transient Windows sharing violations (issue #10).
+
+        On Windows another process briefly opening ``writer.lock`` to read it makes ``unlink`` fail
+        with WinError 32. Ownership is re-verified before every attempt, so another writer's lock is
+        never deleted. If the lock still cannot be removed, it stays held and the error is reported:
+        an administrator can break it (audited)."""
+        import time
+        last: OSError | None = None
+        for _ in range(self.LOCK_RELEASE_ATTEMPTS):
+            try:
+                holder = atomicio.read_json(lock)
+            except FileNotFoundError:
+                return
+            except (PermissionError, ValueError) as exc:  # being read/written right now: retry
+                last = exc if isinstance(exc, OSError) else None
+                time.sleep(self.LOCK_RELEASE_DELAY)
+                continue
+            if holder.get("token") != self._lock_token:
+                return  # no longer ours: never delete another writer's lock
+            try:
+                lock.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                last = exc
+                time.sleep(self.LOCK_RELEASE_DELAY)
+        raise WorkspaceError(f"could not release the writer lock after {self.LOCK_RELEASE_ATTEMPTS} attempts "
+                             f"({last}); it is still held by this session. An administrator can break it.")
 
     def __enter__(self):
         return self
@@ -270,8 +304,17 @@ class Workspace:
                 existing = atomicio.read_json(lock)
             except (OSError, ValueError):
                 existing = {"user": "?", "host": "?", "pid": "?", "acquired": "?", "token": "?"}
+            if existing.get("token") in Workspace._revoked_tokens(meta):
+                # Revocation is already authoritative in the journal; this file is only evidence.
+                os.replace(lock, lock.with_name(f"writer.lock.revoked-{uuid.uuid4().hex[:8]}"))
+                return Workspace._acquire_writer_lock(meta)
             raise WorkspaceLockedError(existing) from None
         return token
+
+    @staticmethod
+    def _revoked_tokens(meta: Path) -> set[str]:
+        probe = Workspace(meta, {"workspace_id": "probe"}, False, None)
+        return {tok for _, tok in probe._revocations()}
 
     @classmethod
     def read_writer_lock(cls, location: Path) -> dict | None:
@@ -299,14 +342,35 @@ class Workspace:
         if holder.get("token") != expected_token:
             raise WorkspaceError("the writer lock changed since it was inspected; inspect it again")
         broken = lock.with_name(f"writer.lock.broken-{uuid.uuid4().hex[:8]}")
-        os.replace(lock, broken)  # keep evidence instead of deleting
-        ws = cls.open(meta, writable=True)
-        try:
-            ws.commit("workspace.lock.break", [RecordPut("audit", new_id("aud"), {
-                "event": "writer-lock-broken", "previous_holder": holder, "reason": reason,
-                "evidence": broken.name, "time": now_iso(), "by": current_actor()})])
-        finally:
-            ws.close()
+        # Linearization point (issue #8, ADR-015 rev.2): the revocation takes effect when its journal
+        # entry is published. Exclusive sequence publication orders it against any concurrent
+        # publication by the revoked writer: entries before it were legitimately committed while the
+        # lock was valid; entries after it carry a revoked token and are fenced everywhere.
+        probe = cls(meta, atomicio.read_json(meta / "workspace.json"), False, None)
+        probe._check_journal()
+        audit = RecordPut("audit", new_id("aud"), {
+            "event": "writer-lock-broken", "previous_holder": holder, "reason": reason,
+            "evidence": broken.name, "time": now_iso(), "by": current_actor()}, expect_rev=0)
+        for _attempt in range(1000):
+            seq = probe.head_seq() + 1
+            entry = {"seq": seq, "txid": uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
+                     "op": "workspace.lock.break", "records": [audit.as_json()], "blobs": [],
+                     "writer_token": None, "revokes": expected_token}
+            entry["digest"] = entry_digest(entry)
+            try:
+                atomicio.publish_exclusive(meta / "journal" / f"{seq:020d}.json", atomicio.dumps_json(entry))
+                break
+            except ExclusiveCreateError:
+                continue  # the revoked writer published first: that entry precedes revocation
+        else:
+            raise WorkspaceError("could not publish the lock revocation (journal contention)")
+        # Evidence only; safe if it races: acquisition also treats a revoked-token lock as stale.
+        current = cls.read_writer_lock(meta)
+        if current and current.get("token") == expected_token:
+            try:
+                os.replace(lock, broken)
+            except OSError:
+                pass
         return holder
 
     # ------------------------------------------------------------------ journal
@@ -450,6 +514,9 @@ class Workspace:
         if self.applied_seq() != self.head_seq():
             self.recover()
         self._check_lock_still_held()
+        if self._lock_token in {t for _, t in self._revocations()}:
+            self.writable = False
+            raise LockLostError("this session's writer lock was revoked by an administrator; reopen the workspace")
         for item in ops:
             if item.expect_rev is not None:
                 actual = self._current_rev(item.kind, item.id)
@@ -463,6 +530,10 @@ class Workspace:
         try:
             atomicio.publish_exclusive(self._journal_dir() / f"{seq:020d}.json", atomicio.dumps_json(entry))
         except ExclusiveCreateError as exc:
+            if self._lock_token in {t for _, t in self._revocations()}:
+                self.writable = False  # an administrator's revocation took this sequence first
+                raise LockLostError("this session's writer lock was revoked by an administrator before "
+                                    "its change was published; nothing was written") from exc
             # Another process wrote this sequence: the single-writer invariant was violated.
             raise WorkspaceCorruptError(
                 f"journal entry {seq} was created by another writer; refusing to continue") from exc
