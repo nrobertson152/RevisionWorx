@@ -1,20 +1,24 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-01
-**Branch:** `phase1-foundation` (not merged, not tagged, no release published — awaiting director approval)
-**Status:** Phase 1 foundation implemented with automated tests on Linux. No release exists.
+**Updated:** 2026-11-01 (second session: Phase 1 review, PySide6 migration)
+**Branch:** `phase1-foundation` (not merged, not tagged, no release published — awaiting director approval).
+Phase 2 work is on `phase2-documents`, stacked on this branch.
+**Status:** Phase 1 foundation implemented, reviewed and hardened, with automated tests on Linux.
+The GUI was migrated to PySide6, but the Qt widgets have not been executed. No release exists.
 
 ## How to resume
 1. `git checkout phase1-foundation` and read `CLAUDE.md`, `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md` (ADRs).
-2. `python -m pytest -q` — expect **95 passed, 1 skipped** (the skip is the live Tk window test).
+2. `python -m pytest -q`: on this branch expect **118 passed, 1 skipped**. The skip is
+   `tests/test_qt_gui.py`, which needs PySide6. With PySide6 installed, run
+   `QT_QPA_PLATFORM=offscreen python -m pytest` and record the Qt results; they have never been run.
 3. Continue with "Next concrete tasks" below. Record every session in the log at the bottom.
 
 ## Phase tracking
 | Phase | Status |
 | --- | --- |
-| 1. Foundation, workspace configuration, registration, index | **Implemented, tested on Linux; GUI not run-verified; Windows untested** |
-| 2. Drawing/revisions/checkouts | Not started |
-| 3. Verified multi-user collaboration | Not started (design gate documented in ARCHITECTURE.md) |
+| 1. Foundation, workspace configuration, registration, index | **Implemented, reviewed, tested on Linux. Qt GUI not executed; Windows untested** |
+| 2. Drawing/revisions/checkouts | **In progress on `phase2-documents`** (see that branch) |
+| 3. Verified multi-user collaboration | Not started. Design gate in ARCHITECTURE.md; coordinated in issue #1 (Agent D) |
 | 4. Parts, dependencies, Where Used, Before You Revise | Not started |
 | 5. OpenSchematix and BOM integration | Not started (file format inspected; content recognition only) |
 | 6. Native CAD integrations | Not started (extension recognition only) |
@@ -37,10 +41,57 @@
 | Local index | `index.py` | SQLite/FTS5 in local cache dir; incremental sync, gap/ahead/corrupt/foreign-cache → rebuild; injection-safe FTS; paging; coverage statement |
 | OpenSchematix recognition | `filetypes.py` | Content-verified with real upstream samples; misnamed files rejected |
 | CLI | `cli.py` | init, status, root, template, project new/preview/adopt/list/set, files search, index rebuild, lock show/break; `--json` |
+| Conflict detection | `workspace.py` | `_rev` + `expect_rev` (ADR-008 R1); `RecordDelete` journaled |
+| Lock re-validation | `workspace.py` | Token re-read before every publish; `writer_token` in entries (R2) |
+| Durable outcome | `workspace.py` | `CommittedNotApplied`, `transaction_outcome(txid)` (R3) |
+| Entry integrity | `workspace.py` | SHA-256 digest per journal entry (R4) |
+| Verify/repair | `workspace.py`, `cli.py` | Journal replay vs records; quarantine, audited repair; `revisionworx verify` (R5) |
 | GUI controller | `gui/controller.py` | Toolkit-free; background jobs with progress/cancel; errors delivered to UI; writer lock held per action only |
-| GUI view | `gui/app.py` | Project table with search/paging, details + baseline files, new project and adopt dialogs, roots, rebuild index. **Never executed** — Tkinter unavailable in the dev sandbox. Only syntax/entry point are checked. |
+| GUI view-models | `gui/viewmodels.py` | Toolkit-free list/details/new-project form/adopt state machine — **tested headless** |
+| GUI view (PySide6) | `gui/qt/` | Main window, table models, dialogs. **Never executed**: PyPI is blocked in the dev sandbox. Stub-module smoke only (see log). |
 
 ## Session log
+
+### 2026-11-01 (session 2) — Phase 1 review, store hardening, PySide6 migration
+- **Directive:** the project director's Phase 1 review / Phase 2 directive. GUI must use PySide6.
+- **Commits on `phase1-foundation`:**
+  - `08ba872` store hardening (ADR-008)
+  - `9ba86b1` PySide6 migration (ADR-009)
+  - `8755867` index delete fix
+  - this documentation commit
+- **Environment:** same as session 1. **PyPI, files.pythonhosted.org, download.qt.io and apt
+  mirrors are refused by the session egress policy**, so neither PySide6 nor Tk could be installed.
+- **Tests executed:** `python -m pytest -q` gives **118 passed, 1 skipped** (`tests/test_qt_gui.py`:
+  no PySide6). The suite was re-run from a clean state at the start of the session (95 passed,
+  1 skipped on `23d6ecf`) rather than trusting the earlier report.
+- **Reliability review against the directive's seven properties:**
+  1. Files untouched during registration/indexing: already covered (snapshot tests). Holds.
+  2. No unauthorised recursive scans: already covered (50k-folder instrumented test). Holds.
+  3. Corrupt caches rebuilt: already covered. Holds.
+  4. Journal corruption cannot silently produce inconsistent state: **gap R4** (altered entry
+     accepted) and **gap R5** (damaged records undetectable). Fixed.
+  5. Interrupted operations leave no falsely committed records: held. **Gap R3**: a failure after
+     the commit point looked like a failure. Fixed (`CommittedNotApplied`, `transaction_outcome`).
+  6. Concurrent writers cannot bypass the lock: **gap R2** (a broken-lock writer kept committing).
+     Narrowed (token re-check); **not closed** (TOCTOU window, Phase 3 fencing).
+  7. Stale clients cannot overwrite without detection: **gap R1** (lost update). Fixed (`expect_rev`).
+- **Defects reproduced on the old code before fixing:** R1, R2, R4 by script (stale update
+  silently applied; broken-lock writer committed entry 7; altered entry accepted). R3 and R5 by the
+  new failing tests. Plus `KeyError: 'data'` in index sync on journaled deletes (found while
+  reviewing my own R-series change). All have regression tests.
+- **Qt verification performed:** a scratch stub-module smoke (fake PySide6 classes) drove
+  `MainWindow` and the dialogs through their Python code paths. It found that slots were connected
+  to signals carrying arguments they did not accept; all connections are now wrapped explicitly.
+  This is **not** Qt verification and is not committed as a test.
+- **Coordination:**
+  - Issue #1 (QA, Agent B): requirements 1 (commit boundary + outcome query) and 2 (fencing, partial)
+    addressed in ADR-008. Requirement 3 (checkout semantics) is answered in Phase 2 ADR-013.
+    Requirements 4–6 are not yet started.
+  - PR #2 (OpenSchematix adapter, Agent C): its 6 tests were executed (all pass) and it was run
+    against the real upstream samples. Sheet and component counts match upstream; BOM output
+    diverges from `bom.generate` (5 vs 16, 0 vs 5, 0 vs 7). Results posted on the PR. Not merged.
+  - No findings from Agent D yet. The `qa/testing-infrastructure` branch had no commits beyond
+    `23d6ecf`.
 
 ### 2026-11-01 — Phase 1 foundation
 - **Commit:** `34e254c` on `phase1-foundation` (base `0c9cc6b`).
@@ -68,9 +119,12 @@
 ### Known limitations / data-integrity risks (Phase 1)
 - **Single writer only.** Locking and journal semantics are verified on a local Linux filesystem only.
   Do not run concurrent writers against an SMB/NFS share; behaviour there is unverified (Phase 3 gate).
-- No lock fencing: a writer paused past an administrative `lock break` could still publish one entry.
+- Fencing is incomplete. A lock broken between a writer's token re-check and its journal publish
+  still lets that one entry through (ADR-008 residual risk).
 - **Windows not tested at all** (Windows-specific `rename`-based exclusive publish is untested code).
-- GUI has never been launched; expect fixes when first run with Tk.
+- The PySide6 GUI has never been launched. Expect fixes when it is first run with Qt.
+- Journal entries written before ADR-008 (none exist outside test data) have no digest. `verify`
+  reports them.
 - Journal is listed in full on each sync/read — fine for thousands of entries, not millions; compaction
   is proposed, not implemented.
 - Hashing during adoption may update file access times (content and mtimes are untouched).
@@ -80,7 +134,8 @@
 - No packaging/installers exist.
 
 ## Next concrete tasks
-1. Run the GUI on Linux and Windows with Tk; fix layout/behaviour; run the `gui`-marked test under Xvfb.
+1. Install PySide6 (allow pypi.org for the session, or run locally) and run `tests/test_qt_gui.py`.
+   Launch the window on Linux and Windows; fix whatever the stub smoke could not catch.
 2. Run the full suite on Windows (NTFS) to verify the `rename`-based exclusive publish and path rules.
 3. Add CI (GitHub Actions: Linux + Windows, Python 3.10 and 3.13) — needs director approval for workflow files.
 4. Phase 2 design (write into ARCHITECTURE.md before code): Document entity, content-addressed
