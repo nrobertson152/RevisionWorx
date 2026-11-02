@@ -273,11 +273,11 @@ def inspect_bytes(raw: bytes, suffix: str) -> dict:
                 if len(set(s["uid"] for s in sheets)) != len(sheets):
                     raise InvalidProject("duplicate sheet UIDs")
                 order = head.get("sheet_order", [])
+                if (not isinstance(order, list) or
+                        not all(isinstance(key, str) for key in order) or
+                        len(order) != len(set(order))):
+                    raise InvalidProject("invalid sheet ordering")
                 if order:
-                    if (not isinstance(order, list) or
-                            not all(isinstance(key, str) for key in order) or
-                            len(order) != len(set(order))):
-                        raise InvalidProject("invalid sheet ordering")
                     ranking = {key: i for i, key in enumerate(order)}
                     sheets.sort(key=lambda s: ranking.get(s["uid"], len(ranking)))
                 fmt = "schematix"
