@@ -73,6 +73,20 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-01 (session 4) — issues #8 (rev. 2), #9, #10
+- **#8 pre-audit gap closed:** revocation is now a journal entry, the single linearization point
+  (ADR-015 rev. 2). Five interleavings are tested, including the admin pausing between revocation
+  and the lock move, and acquisition over a revoked lock.
+  - Also fixed: a revocation that took the stale writer's sequence used to surface as
+    `WorkspaceCorruptError`; it now raises `LockLostError` and nothing is written.
+- **#9:** index rebuild uses a stable head-checked snapshot (ADR-016).
+- **#10:** bounded, ownership-checked retries when releasing the lock on Windows (ADR-016).
+- **Tests:** full suite **161 passed, 1 skipped (Qt)**. The three race tests were repeated 3×, all passing.
+- **Not executed here:** Windows (QA CI needed); PySide6 (PyPI still refused from this session).
+- **Still open:** multi-user production remains gated on the coordinator and on SMB qualification.
+  The fix is on `phase2-documents`; `phase1-foundation` (PR #6) does not have it yet. A director or
+  QA decision is needed on whether to backport or retarget.
+
 ### 2026-11-01 (session 3) — issue #8 fenced (ADR-015)
 - Reproduced Agent D's procedure as `tests/test_issue8_fencing.py`. Both tests failed first: the stale commit succeeded.
 - Implemented journal-order fencing. The full suite gives **153 passed, 1 skipped**.

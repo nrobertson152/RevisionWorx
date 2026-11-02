@@ -12,7 +12,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .workspace import Workspace
+from .workspace import Workspace, WorkspaceError
 
 SCHEMA_VERSION = 2  # 2: Phase 2 document/revision/checkout tables
 
@@ -193,14 +193,27 @@ class LocalIndex:
             self.db.execute("DELETE FROM revisions WHERE id=?", (rid,))
 
     def rebuild(self) -> int:
-        """Discard everything and reload from the authoritative workspace."""
-        head = self.ws.head_seq()  # captured first: later entries are replayed idempotently
+        """Discard everything and reload from one stable snapshot of the authoritative workspace.
+
+        Issue #9: the journal head and the record listing must describe the same state. The head is
+        sampled before and after listing all kinds; if anything was committed in between, the
+        listing is retried, so the stored cursor never claims less than the cache contains."""
+        import time
+        kinds = ("root", "project", "document", "revision", "checkout")
+        for attempt in range(50):
+            head = self.ws.head_seq()
+            snapshot = {k: self.ws.list(k) for k in kinds}
+            if self.ws.head_seq() == head:
+                break
+            time.sleep(0.01 * min(attempt + 1, 10))
+        else:
+            raise WorkspaceError("the workspace changed continuously during index rebuild; try again")
         with self.db:
             for table in ("roots", "projects", "projects_fts", "files", "files_fts", "documents",
                           "documents_fts", "revisions", "checkouts"):
                 self.db.execute(f"DELETE FROM {table}")
-            for kind in ("root", "project", "document", "revision", "checkout"):
-                for rid, data in self.ws.list(kind).items():
+            for kind in kinds:
+                for rid, data in snapshot[kind].items():
                     self._apply_put(kind, rid, data)
             self.db.execute("UPDATE meta SET value=? WHERE key='journal_seq'", (str(head),))
         return head

@@ -337,18 +337,44 @@ Implementation notes beyond the original design:
 - **Ownership:** Agent D owns the coordinator prototype and the SMB test rig. The lead architect owns the seam and its integration.
 - **Release gate:** issue #8 (the stale-writer vulnerability; see ADR-008 residual risk) must be closed by coordinator fencing and verified on real SMB before any production multi-user claim.
 
-### ADR-015 Journal-order fencing of revoked writers (issue #8) — IMPLEMENTED (standalone mode)
-- **Rule:** an audited lock break (`workspace.lock.break`) records the revoked token. Any journal entry signed (`writer_token`) with a token that an **earlier** entry revoked is **fenced**.
-- **Effect:**
-  - Fenced entries are never applied: by readers (overlay), replay (`recover`), the local index, or the stale writer itself, which gets `LockLostError("fenced…")`.
-  - `transaction_outcome` reports `fenced`.
-  - `verify` reports `fenced-entry`.
-  - The stale file may still exist on disk, but it has no effect.
-- **Closes:** the logical stale-writer vulnerability that Agent D reproduced (pause after the lock check, admin break, resume).
-- **Does not close:**
-  - It still relies on the file share's exclusive-create and ordering semantics, which are unverified on SMB.
-  - Multi-user production still requires the coordinator (ADR-014). The coordinator should apply the same generation check inside its commit transaction.
-- **Tests:** `tests/test_issue8_fencing.py`.
+### ADR-015 Revocation as a journal entry; fencing of revoked writers (issue #8) — IMPLEMENTED rev. 2 (standalone mode)
+
+**Rev. 1 was insufficient.** Agent D and QA reproduced a pre-audit gap: the administrator moved
+`writer.lock` *before* committing the audit, so a stale writer could publish in between, and its
+entry preceded the revocation and took effect.
+
+**Rev. 2 has a single linearization point.** `break_writer_lock` publishes the `workspace.lock.break`
+entry, which carries `revokes: <token>` and the audit record, **directly into the journal** with
+exclusive sequence publication. Revocation takes effect at that sequence. The lock-file move happens
+afterwards and is only evidence.
+
+| Interleaving | Outcome |
+|---|---|
+| Stale writer publishes before the revocation sequence | Its entry was committed while the lock was valid. Correct and expected. |
+| Revocation claims the sequence the stale writer chose | The stale publish collides: `LockLostError`, nothing written. |
+| Stale writer chooses a later sequence | Entry is **fenced**: ignored by readers, replay, the index and the writer itself (`LockLostError`); `transaction_outcome` = `fenced`; `verify` reports `fenced-entry`. |
+| Revocation already in the journal at the writer's preflight | `LockLostError` before anything is published. |
+| Admin paused or crashed after publishing, before moving the lock | The stale writer is refused or fenced. Acquisition treats a lock whose token is revoked as stale (evidence moved aside). |
+
+**Residual risks:**
+- A fenced entry can still exist **physically**. It has no logical effect, and `verify` reports it.
+- Correctness relies on exclusive create (`link`/`rename`) and on journal listing being correct on
+  the share, which is unverified on SMB.
+- Multi-user production still requires the coordinator (ADR-014), with generation checks inside its
+  commit transaction.
+
+**Tests:** `tests/test_issue8_fencing.py`.
+
+### ADR-016 Index rebuild snapshot (issue #9) and lock release on Windows (issue #10) — IMPLEMENTED
+- **#9:** `LocalIndex.rebuild` samples the journal head before and after listing every kind, and
+  retries until they match (bounded). The stored cursor therefore always describes exactly the
+  indexed snapshot. Tested with a commit injected mid-snapshot, and with insert/delete/restart/rebuild.
+- **#10:** `Workspace.close` releases its lock with bounded retries (50 × 20 ms) on Windows sharing
+  violations (`PermissionError`, WinError 32).
+  - Ownership is re-read before every attempt, so another writer's lock is never deleted.
+  - If release still fails, the lock stays held and `WorkspaceError` is raised; an administrator can
+    break it.
+  - Verified locally by injected failures only. **The Windows multi-process run needs QA.**
 
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
