@@ -63,3 +63,43 @@ No main-branch files modified; no merge performed.
 - Demonstrator uses a **local-only** SQLite database with BEGIN IMMEDIATE to serialize acquire, administrative override and commit. The generation check and commit-record insertion are in the same database transaction; override increments generation and appends audit row. A separate txid idempotency path rejects payload mismatch. Tests cover stale writer after override, idempotency and six independent contender processes.
 - **Verified tests: none executed this session.** Tests were committed, not run. This is a minimal coordinator authority model, not the required Phase 1 bug reproduction or a full multi-file revision publisher. It does not authenticate admin identity; supplied actor string is unverified. No SMB/NFS, Windows, server-crash, disk-full or actual share durability tests.
 - Immediate next steps: run `python -m unittest -v prototype.test_authority` in a suitable checkout; create deterministic reproduction against actual Phase 1 `Workspace`; test override-versus-publication race and LocalIndex rebuild cursor race; add durable blob/manifest protocol; assess how to preserve serverless operation if certification succeeds; report test results with commands and environment. No merge authorized.
+
+## Session — 2026-11-01 ET / 2026-11-02 UTC: Phase 2 review, independent verification, and CI
+
+**Standing orders:** re-read docs/agents/README.md and docs/agents/DISTRIBUTED_SYSTEMS_ORDERS.md from latest main. Reviewed main administrative lock-fencing directive; Claude draft PR #6 (Phase 1/PySide6) and stacked draft PR #7 (Phase 2 revisions/checkout); issue #5 (architecture decision), PR #4 comments, phase1-foundation Workspace/LocalIndex and phase2-documents documents.py / workspace.py. Latest main still requires director approval to introduce a coordinator. Phase 1 and Phase 2 do not claim production multi-user share correctness.
+
+**New/updated deliverables and commits, all on research/shared-filesystem-protocol:**
+- b7cf0c66 / cdaec3c7: prototype/authority.py now explicitly closes SQLite connections, uses BEGIN IMMEDIATE, persists monotonic generations and auditable operator claims, atomically checks generation/owner and **mandatory** expected_revision with ordered commit-marker insertion, handles duplicate txid and outcome lookup. Research model only; actor claim is *not authenticated*.
+- c55cbd14 / 0f6c60ed / 087b8aa0: prototype/test_authority.py extended for six-process contention, independent-process paused-writer revocation, concurrent override vs publication, rollback on SQL constraint error, persistent audit/revocation on restart, mandatory revision precondition, crash before COMMIT and crash after COMMIT before response, and idempotent replay.
+- fbd88d05: prototype/test_phase1_lock_race.py; deterministic real-code Phase 1 preflight-to-publish administrative lock-break reproducer.
+- a6ce452c: prototype/test_phase1_cache_watermark.py; actual Phase 1 rebuild snapshot-versus-newer-record hypothesis probe (unverified on real code as of log).
+- b5373756 / c5fb432c: .github/workflows/distributed-authority-research.yml; Windows/Ubuntu Python 3.11/3.13 matrix, with real Phase 1 checkout jobs.
+- ec283db1 / 2f84e1dc: docs/PHASE2_AUTHORITY_AND_SCALABILITY_AUDIT.md; current code review, detailed integration risk and revision-list O(total-revisions) scalability warning.
+- Updated docs/SHARED_FILESYSTEM_ARCHITECTURE.md, docs/CONCURRENCY_PROTOCOL.md, docs/FAILURE_RECOVERY.md and prototype/README.md to eliminate historical *unsubstantiated* five-test/mkdir prototype claims, incorporate mandatory atomic fencing and actual verification status. Relevant recent commits: 86d5b0b8, 8cb8c1cd, 70ef8522, 4f8587c6.
+
+**Tests independently executed locally (actual local code checkout, Linux CPython 3.13.5):**
+- Command: python -m unittest -v prototype.test_authority prototype.test_phase1_lock_race prototype.test_phase1_cache_watermark
+- **16 discovered; 14 passed, 0 failed, 2 skipped** (~5.88 seconds). Skips are deliberate, because this local execution environment cannot clone/fetch a separate phase1-foundation checkout; they are not treated as passes or as verified real-code results.
+- Local tests include 6 spawned contender processes, revoked writer in a separately spawned process, SQLite WAL transaction/crash recovery and restart. No Windows or real network shares in local execution.
+
+**Independently verified CI results (GitHub Actions run 41371405600, completed SUCCESS):**
+- Earlier committed 12-test authority edition: **12/12 PASS on EACH** Ubuntu Python 3.11, Ubuntu Python 3.13, Windows Python 3.11 and Windows Python 3.13, according to completed job statuses and inspected test logs. These are tests of isolated SQLite authority, NOT the RevisionWorx desktop application or a real network share.
+- Actual phase1-foundation checkout on Ubuntu, CPython 3.13.17: **1/1 PASS** for prototype.test_phase1_lock_race. The test confirms both the administrative override audit and a **new successful journal publication by the revoked writer**. This is an actual reproducible critical multiwriter integrity violation. Tracked as issue #8.
+- Latest 14-test edition, crash tests, and actual cache watermark probe: CI jobs were still queued at this log update; no claim of CI pass or confirmed cache defect.
+
+**Architectural status and blockers:**
+- The director requires administrative override and effective atomic fencing. Coordinator option B is not approved; issue #5 remains a decision gate. Claude owns production CommitAuthority seam and core change integration.
+- No real transport, authenticated operator, shared SMB/NFS Windows+Linux multi-host testing, NAS/drive power-loss, durable manifest and cross-system commit, independent epoch/high-water store for restored backup, fault-safe administration or distributed cleanup implemented.
+- Snapshot-index watermark concern is **still a hypothesis**, awaiting actual Phase 1 test logs; revision-list global scan is confirmed directly by source inspection, not benchmarked for performance.
+- Production data integrity requires fail-closed behavior; all above research remains draft, unmerged.
+
+**Coordination:**
+- Updated draft PR #4 with deliverables, CI verification and scope.
+- Added architecture evidence to issue #5; opened issue #8 with actual reproducible lock-break bug and acceptance conditions.
+- No changes to Claude's phase1-foundation/phase2-documents code, no other specialist files altered; no merge, tag or release.
+
+**Next engineering tasks:**
+1. Review newest GitHub Actions jobs and triage results of real Phase 1 cache watermark test and 14-test Linux/Windows crash suite.
+2. Implement isolated multi-file immutable blob/manifest crash-recovery experiments with ordered journal and txid reconciliation; evaluate blob-store and authority DB acknowledgment boundary.
+3. Prototype backup-restore epoch/high-water prevention and administrative authorization semantics, without integrating into production.
+4. Define exact cross-host SMB/Samba/NFS qualification matrix after Project Director makes issue #5 architecture decision.
