@@ -123,6 +123,17 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(len(result["bom_candidates"]), 0)
         self.assertEqual(fixture.read_bytes(), raw)
 
+    def test_real_upstream_hydraulic_fixture(self):
+        fixture = Path(__file__).parent / "fixtures" / "openschematix" / "hydraulic_cylinder_circuit.osch"
+        before = fixture.read_bytes()
+        result = inspect(fixture)
+        self.assertEqual(result["file_sha256"], hashlib.sha256(before).hexdigest())
+        self.assertEqual(len(result["sheets"]), 1)
+        self.assertEqual(len(result["components"]), 9)
+        self.assertEqual(len(result["bom_candidates"]), 0)
+        self.assertEqual(result["bom_status"], "candidate_only_not_equivalent_to_native_bom")
+        self.assertEqual(fixture.read_bytes(), before)
+
     def test_reject_archive_member_traversal(self):
         path = self.project()
         with zipfile.ZipFile(path, "a") as z:
