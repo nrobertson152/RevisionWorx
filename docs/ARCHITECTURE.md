@@ -196,6 +196,118 @@ not. BOM import, component identities and revision tracking are **PROPOSED** (Ph
 documents `components[].props.part_number/manufacturer` and an `in_bom` flag per component, which
 the Phase 5 adapter should use. OpenSchematix source is not modified.
 
+## Phase 2 — documents, revisions, lifecycle, checkout (design, ADR-010 … ADR-013)
+
+Design written before implementation, as `CLAUDE.md` requires for shared-data protocols. Status
+markers below are updated as each part is built and tested.
+
+### ADR-010 Document registry — PROPOSED
+- New record kinds `doctype`, `document`, `revision`, `checkout`, `lifecycle` (registered via
+  `workspace.register_kind`, so Phase 1 code is untouched).
+- **Document type** `{id, name, extensions[], revision_scheme, category}`. Built-in defaults:
+  `drawing`, `cad-part`, `cad-assembly`, `schematic`, `pdf`, `manufacturing`, `general`. They can
+  be overridden or extended per workspace. The type is suggested from the file extension and the
+  user can change it.
+- **Document** `{id doc_…, project_id, rel_path, type_id, number, title, description, owner,
+  revision_scheme, latest_rev_id, released_rev_id, rev_count, status, created, created_by}`.
+  - `rel_path` is relative to the project folder, POSIX/NFC, validated for both OSes and unique
+    case-insensitively within the project. **The file stays where it is**: no move, rename, copy
+    into a vault or rewrite. This preserves native Inventor/SolidWorks reference paths.
+  - Documents can only be registered in **managed** projects. Indexed projects stay read-only
+    references.
+  - The company document number is optional and unique case-insensitively across the workspace,
+    unless explicitly overridden.
+- Registration may capture the file's current content as the first revision in the **same journal
+  entry**. That is an explicit snapshot of present content, not invented history.
+
+### ADR-011 Immutable revisions and content store — PROPOSED
+- Content store: `.revisionworx/content/sha256/<aa>/<64-hex>`, holding the raw bytes and named by
+  their SHA-256.
+  - Written by streaming the source once into a temp file while hashing, fsynced, then
+    `publish_exclusive`.
+  - If the name already exists (deduplication), the existing object is re-hashed. A mismatch is
+    `WorkspaceCorruptError`, never silently accepted.
+- The source file's size and mtime are compared before and after the copy. A file that changes
+  during the copy aborts the check-in.
+- **Revision** `{id rev_…, document_id, number (1…n), label, state, sha256, size, source_mtime_ns,
+  source_rel_path, description, author, created, previous_rev_id, transitions[]}`.
+  - Every field except `state` and `transitions` is immutable. The service layer rejects any
+    attempt to change them, and `verify_revision` re-hashes stored content on demand.
+- **Publication order:** content object is durable → journal entry → records. A revision is never
+  visible before its content is durable. A crash before the entry leaves an unreferenced content
+  object, which is harmless. Garbage collection is PROPOSED.
+- Labels come from the document's scheme:
+  - `alpha` (A…Z, AA…), skipping I, O, Q, S, X, Z as ASME Y14.35 recommends;
+  - `numeric` (1, 2, …);
+  - `numeric2` (01, 02, …);
+  - `manual` (label required).
+  Labels are unique per document, case-insensitively.
+- Retrieval: `export_revision` writes to a new path only (never overwrites) and verifies the hash.
+- Restoring an old revision **creates a new revision**. While checked out, the old content is
+  written to the working file (atomic replace, audited); the next check-in records it, with
+  `restored_from` set. History is never rewritten.
+- Comparison: `compare_revisions` reports metadata differences (content equality, size delta,
+  labels, states, authors, dates, path changes). Content diffing of CAD formats is out of scope.
+
+### ADR-012 Lifecycle — PROPOSED
+- A configurable lifecycle record, with defaults:
+  - **States:** `wip` (Work in Progress), `in_review`, `approved`, `released`, `superseded`,
+    `obsolete`.
+  - **Transitions:**
+    - wip → in_review, obsolete
+    - in_review → wip, approved
+    - approved → released, wip
+    - released → obsolete
+    - superseded → obsolete
+  - **System-only transition:** released → superseded.
+- New revisions start in `wip`.
+- Releasing revision *n*:
+  - re-verifies its content object's hash;
+  - refuses if a newer revision is already released;
+  - moves the previously released revision to `superseded` and updates the document's
+    `released_rev_id`, all in **one** entry.
+- Optional policy `require_distinct_approver`: the actor moving a revision to `approved` must
+  differ from its author. Default off, so small teams have no mandatory bureaucracy.
+- Each transition is appended to the revision's `transitions[]` with actor, time and comment. The
+  journal entry is the durable audit record.
+- Released revisions stay immutable in content and metadata; only their state may later move to
+  `superseded`/`obsolete`.
+
+### ADR-013 Checkout / check-in — PROPOSED (single-writer safe; network shares unverified)
+- Checkout record id = document id, so at most one checkout per document can exist.
+  - Fields: `{document_id, token, owner {user, host}, acquired, base_rev_id, base_sha256, note}`.
+  - Created with `expect_rev=0` together with a document put at its `expect_rev`. Two concurrent
+    checkouts therefore cannot both commit: the second gets `CheckoutConflict` naming the owner.
+- Exclusive, **non-expiring**: a checkout never times out silently.
+  - Release paths: check-in, cancel by the owner (token), or audited administrative release (exact
+    token + reason).
+  - The client stores its token in local state (`$XDG_STATE_HOME/revisionworx/checkouts.json` or
+    `%LOCALAPPDATA%\RevisionWorx\state`). Losing it requires the administrative release.
+- **Check-in** validates against authoritative state under the writer lock:
+  - the checkout exists and the token matches;
+  - the document's `latest_rev_id` still equals the checkout's `base_rev_id`;
+  - the file is present and its content differs from the latest revision (unless explicitly
+    allowed);
+  - the content object is durable.
+  Then **one** entry puts the revision (`expect_rev=0`), updates the document (`expect_rev`) and
+  deletes the checkout (`expect_rev`). Any mismatch is a conflict and nothing changes.
+- Working files are edited **in place** in the project folder, because rewriting CAD reference
+  paths is not acceptable. Consequence: RevisionWorx cannot stop a user from editing a file without
+  checking it out (a hidden metadata folder is not a permission system).
+  - `document_status` detects this: missing, unchanged, modified while checked out, **modified
+    outside RevisionWorx**, or unrevisioned. It uses a size/mtime fast path, or a full hash when
+    asked.
+  - Setting files read-only between checkouts is PROPOSED as an optional policy, not a default.
+- Assembly-aware checkout is **not** automatic: checking out an assembly does not lock its
+  dependencies. Multi-document checkout is a separate explicit operation (PROPOSED, Phase 4, once
+  the dependency graph exists).
+- Interrupted operations: crash before the entry → no revision, checkout still held, orphan content
+  object; crash after → replayed. A failure after publication raises `CommittedNotApplied` and
+  is queryable by `txid`.
+- **Multi-user claim:** none. Correctness relies on the single-writer journal (ADR-004/005/008),
+  which is verified only on local Linux filesystems. Production multi-user use waits for Agent D's
+  findings (issue #1) and real SMB/NFS tests.
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).
