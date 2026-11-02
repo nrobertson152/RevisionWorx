@@ -169,6 +169,29 @@ class AdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(InvalidProject, "member limit"):
                 inspect(path)
 
+    def test_reject_nonboolean_bom_flag(self):
+        path = self.legacy()
+        obj = json.loads(path.read_text())
+        obj["components"][0]["in_bom"] = "false"
+        self.legacy(obj)
+        with self.assertRaisesRegex(InvalidProject, "in_bom"):
+            inspect(path)
+
+    def test_reject_unhashable_sheet_order(self):
+        path = self.project()
+        with zipfile.ZipFile(path, "r") as archive:
+            data = [(info.filename, archive.read(info), info.compress_type)
+                    for info in archive.infolist()]
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, payload, compression in data:
+                if name == "project.json":
+                    obj = json.loads(payload)
+                    obj["sheet_order"] = [["s1"]]
+                    payload = json.dumps(obj).encode()
+                archive.writestr(name, payload, compress_type=compression)
+        with self.assertRaisesRegex(InvalidProject, "sheet ordering"):
+            inspect(path)
+
     def test_unknown_extension(self):
         path = self.root / "example.step"
         path.write_text("{}")
