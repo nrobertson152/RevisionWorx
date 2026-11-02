@@ -267,6 +267,28 @@ class BatchAuthorityTests(unittest.TestCase):
                                      expected_revision=1)
         self.assertEqual(self.model.snapshot_batch()["high_watermark"], 1)
 
+    def test_check_only_idempotency_and_nonfinite_rejection(self):
+        checks = [{"type": "check", "kind": "document",
+                   "id": "docA", "expect_rev": 0}]
+        r = self.model.publish_batch(self.lease, self.alice, "8" * 32,
+                                     checks, expected_revision=0)
+        self.assertEqual(r["sequence"], 1)
+        self.assertEqual(self.restart().publish_batch(
+            self.lease, self.alice, "8" * 32, checks,
+            expected_revision=0)["state"], "already-committed")
+        with self.assertRaises(Fenced):
+            self.model.publish_batch(
+                self.lease, self.alice, "8" * 32,
+                [{"type": "check", "kind": "document",
+                  "id": "docA", "expect_rev": 1}], expected_revision=0)
+        with self.assertRaises(ValueError):
+            self.model.publish_batch(
+                self.lease, self.alice, "9" * 32,
+                [self.put("document", "docB", {"v": float("nan")})],
+                expected_revision=1)
+        self.assertEqual(self.model.outcome("9" * 32, self.alice)["state"], "not-found")
+        self.assertEqual(self.model.snapshot_batch()["high_watermark"], 1)
+
     def test_crash_after_witness_before_db_commit_quarantines(self):
         ctx = mp.get_context("spawn")
         proc = ctx.Process(target=_crash_batch,
@@ -303,12 +325,14 @@ class BatchAuthorityTests(unittest.TestCase):
                 self.lease, self.alice, "1" * 32,
                 [self.put("document", "docA", {"name": "A"}, expected=True)],
                 expected_revision=0)
-        with self.assertRaises(ValueError):
-            self.model.publish_batch(
-                self.lease, self.alice, "1" * 32,
-                [{"type": "check", "kind": "document", "id": "docA", "expect_rev": 0}],
-                expected_revision=0)
         self.assertEqual(self.model.snapshot_batch()["high_watermark"], 0)
+        only_check = self.model.publish_batch(
+            self.lease, self.alice, "1" * 32,
+            [{"type": "check", "kind": "document", "id": "docA", "expect_rev": 0}],
+            expected_revision=0)
+        self.assertEqual(only_check["sequence"], 1)
+        self.assertNotIn(("document", "docA"), self.model.snapshot_batch()["records"])
+        self.assertEqual(self.model.snapshot_batch()["high_watermark"], 1)
 
 
 if __name__ == "__main__":
