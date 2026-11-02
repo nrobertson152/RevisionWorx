@@ -136,3 +136,50 @@ def test_real_qt_documents_tab_empty_checkin_keeps_checkout(qapp, tmp_path):
         assert drawing.read_bytes() == b"Preserve drawing"
     finally:
         tab.close()
+
+
+def test_real_qt_documents_tab_reports_authoritative_checkout_conflict(qapp, tmp_path, monkeypatch):
+    """Error dialog must report a *real* externally owned checkout, without taking it."""
+    from revisionworx import documents
+    from revisionworx.workspace import Workspace
+
+    ctl = Controller(cfg_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache",
+                     state_dir=tmp_path / "state")
+    share = tmp_path / "share"
+    (share / "Engineering").mkdir(parents=True)
+    ctl.create_workspace(share, "QA conflicting checkout")
+    ctl.add_root("Engineering", share / "Engineering")
+    project = ctl.create_project(NewProject(name="Skid", rel_path="Skid"))
+    drawing = share / "Engineering" / "Skid" / "03 Drawings" / "Native" / "layout.idw"
+    drawing.write_bytes(b"Owner's drawing revision")
+    doc_id = _register_document(ctl, project["id"], drawing, qapp)
+
+    tab = DocumentsTab(ctl, configure_table)
+    try:
+        tab.load_project(project["id"])
+        tab.table.selectRow(0)
+        qapp.processEvents()
+        assert tab.checkout_btn.isEnabled()
+
+        # Another session checks the document out after the UI rendered.
+        with Workspace.open(share, writable=True) as other:
+            foreign = documents.checkout(other, doc_id, note="another workstation")
+            before = other.head_seq()
+
+        dialogs = []
+        def record_error(parent, title, message, *a, **kw):
+            dialogs.append((title, message))
+            return QtWidgets.QMessageBox.StandardButton.Ok
+
+        monkeypatch.setattr(QtWidgets.QMessageBox, "critical", record_error)
+        tab.checkout_btn.click()
+        qapp.processEvents()
+        assert len(dialogs) == 1
+        assert "checked out" in dialogs[0][1].lower()
+        assert "another session" not in dialogs[0][1].lower() or dialogs[0][1]
+        with Workspace.open(share) as reader:
+            assert reader.head_seq() == before
+            assert reader.get("checkout", doc_id)["token"] == foreign["token"]
+        assert drawing.read_bytes() == b"Owner's drawing revision"
+    finally:
+        tab.close()
