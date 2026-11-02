@@ -254,3 +254,58 @@ def test_index_rebuild_does_not_include_records_newer_than_its_watermark(tmp_pat
                 f"cache includes seq {injected_seq[0]} record {injected_id} "
                 f"while publishing older cursor {cursor}"
             )
+
+
+def test_revoked_writer_publication_is_logically_fenced_on_replay(tmp_path, monkeypatch):
+    """ADR-015: a late physical journal file must NEVER become authoritative state.
+
+    The strict xfail above still demonstrates the non-atomic *physical publish*
+    after an audited override. This independent, passing regression validates
+    the separate standalone-mode mitigation: logical rejection, fenced txid,
+    reader filtering, cache filtering and recovery. It does not certify SMB.
+    """
+    if not hasattr(Workspace, "is_fenced"):
+        pytest.skip("ADR-015 logical journal-order fencing is absent on this Phase 1 baseline")
+    from revisionworx.index import LocalIndex
+    from revisionworx.workspace import new_id
+
+    store = tmp_path / "store"
+    writer = Workspace.create(store, "QA fenced replay")
+    old_token = Workspace.read_writer_lock(store)["token"]
+    original_check = writer._check_lock_still_held
+    break_seq = []
+    late_id = new_id("root")
+    txid = "e" * 32
+
+    def break_immediately_after_preflight():
+        original_check()
+        if not break_seq:
+            Workspace.break_writer_lock(store, old_token, reason="QA fencing check")
+            break_seq.append(Workspace.open(store).head_seq())
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(writer, "_check_lock_still_held", break_immediately_after_preflight)
+            with pytest.raises(workspace_mod.LockLostError, match="fenced"):
+                writer.commit("qa.fenced.late.write", [
+                    RecordPut("root", late_id, {"id": late_id, "name": "not authoritative"})
+                ], txid=txid)
+        assert break_seq, "the audited override must have happened"
+
+        with Workspace.open(store) as reader:
+            assert reader.head_seq() == break_seq[0] + 1
+            assert reader.transaction_outcome(txid)["state"] == "fenced"
+            assert reader.get("root", late_id) is None
+            assert reader.is_fenced(reader.read_entry(reader.head_seq()))
+            assert any(p["problem"] == "fenced-entry" for p in reader.verify()["problems"])
+            with LocalIndex(reader, cache_dir=tmp_path / "cache") as index:
+                index.rebuild()
+                assert index.db.execute(
+                    "SELECT id FROM roots WHERE id=?", (late_id,)
+                ).fetchone() is None
+    finally:
+        writer.close()
+
+    with Workspace.open(store, writable=True) as recovered:
+        assert recovered.get("root", late_id) is None
+        assert recovered.transaction_outcome(txid)["state"] == "fenced"
