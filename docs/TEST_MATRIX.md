@@ -13,24 +13,25 @@
 | JOURNAL-03 | P0 | Journal gap denies writable open | AUTOMATED |
 | LOCK-01 | P0 | Multiple local writers race: only one winner | AUTOMATED (existing suite) |
 | LOCK-02 | P0 | Active writer excludes another writer | AUTOMATED |
-| LOCK-03 | P0 | Stale writer must not publish after administrator breaks lock at verify/publish boundary | EXPECTED FAILURE: deterministic local TOCTOU reproducer in tests/qa/test_integrity.py; production fencing BLOCKED |
-| CHECKOUT-01 | P0 | Independent checkout race and stale token rejection | PHASE 2: successor stale-token test ADDED, **NOT RUN**; upstream 6-process race reported passed, not independently verified |
-| REV-01 | P0 | Historical revision content unchanged after check-in and SHA-256 verifies | PHASE 2: test ADDED, **NOT RUN**; explicit released-state immutability and corrupt blob remain PLANNED |
-| REV-02 | P0 | Prepublication journal failure retains checkout, prior revision, and journal seq | PHASE 2: test ADDED, **NOT RUN** |
-| EDIT-01 | P0 | Forced hash detects same-size, same-mtime unauthorized edit | PHASE 2: test ADDED, **NOT RUN** (metadata-only fast path does not guarantee detection) |
+| LOCK-03 | P0 | Administrative override must not give revoked writer authority | **Known failure (#8):** strict xfail for physical post-audit publish; positive ADR-015 test verifies logical fencing; distinct pre-audit-rename strict xfail pending execution. No SMB certification. |
+| CHECKOUT-01 | P0 | Exclusive checkout, stale token rejected, view-model state | **VERIFIED** in Phase 2 Linux/Windows independent overlay; local multiprocess upstream checkout race in full suite; no cross-host guarantee |
+| REV-01 | P0 | Immutable historical snapshot, release supersession, damaged-content release blocked | **VERIFIED** in independent Phase 2 Linux/Windows overlay; packaged CAD editor not tested |
+| REV-02 | P0 | Prepublication journal failure retains checkout, prior revision, and journal seq | **VERIFIED** in independent Phase 2 Linux/Windows overlay |
+| EDIT-01 | P0 | Forced hash detects same-size, same-mtime unauthorized edit | **VERIFIED** in independent Phase 2 Linux/Windows overlay; default metadata-only path can miss adversarial restored mtime |
 | BACKUP-01 | P0 | Restored metadata and blobs from same consistent point | PLANNED |
 | DUP-01 | P0 | Failed project duplication safely rolled back | PLANNED |
 | PART-01 | P0 | Number collisions and reserved ranges rejected | PLANNED |
-| CAD-01 | P0 | Registration and check-in never move/rename/rewrite assembly file | PHASE 2: test ADDED, **NOT RUN**; native CAD resolver verification not done |
+| CAD-01 | P0 | Registration and check-in preserve assembly paths/bytes | **VERIFIED** via independent file-fingerprint tests on Linux/Windows; native CAD resolver integration still unavailable |
 | OSCH-01 | P1 | OpenSchematix content recognized, false extension rejected | AUTOMATED (existing suite) |
 | BOM-01 | P0 | BOM quantity/revision/provenance correct | PLANNED |
 | GRAPH-01 | P0 | Direct/indirect/cyclic/cross-project/revision Where-Used | PLANNED |
 | IMPACT-01 | P0 | Before You Revise shows coverage and does not imply incompatibility | PLANNED |
 | INDEX-01 | P1 | Local cache corruption/staleness rebuilt | AUTOMATED (existing suite) |
+| INDEX-02 | P0 | Rebuild must not index records later than advertised journal cursor | **Known defect #9**; deterministic strict xfail in independent QA on modern Phase 2, with verified reproducer in research CI; not fixed |
 | SCALE-01 | P1 | 10k projects, 2m docs, 500k edges and actual query p95/RSS | PLANNED |
 | WINDOWS-01 | P0 | NTFS exclusive publish, Windows case/path rules | Windows GitHub Actions original QA branch 111 passed/3 skipped on Python 3.11 and 3.13 (run 41371072088); case-sensitive-only test skipped; native installer and production NTFS certification NOT DONE |
 | SMB-NFS-01 | P0 | Two-host shared filesystem concurrency and disconnection | BLOCKED |
-| GUI-01 | P1 | PySide6 Qt widget smoke on Linux offscreen and Windows | Windows Python 3.13 offscreen GitHub-hosted suite PASSED (PR merge run 41371072451); Linux Qt blocked by missing libEGL in first run; corrected-run result PENDING; installed native GUI not verified |
+| GUI-01 | P1 | Real PySide6 Documents-tab widgets on Linux/Windows offscreen | **VERIFIED** initial tab warning/filter/validation tests on Linux+Windows in Phase 2 run 41381681615; Qt conflict dialog negative test pending CI; installed Windows desktop smoke NOT RUN |
 
 No absent feature is considered a passing test.
 
@@ -55,3 +56,7 @@ Two additional toolkit-independent DocumentListModel/DocumentPanel tests have be
 - **Separate-process writer exclusion:** `tests/qa/test_integrity.py::test_second_process_cannot_take_active_writer_lock` spawns a second real Python interpreter while the first holds the workspace writer lock, requires `WorkspaceLockedError`, verifies lock metadata is unchanged, then releases and reacquires the lock. This is **local OS process isolation only**, not a cross-host or SMB/NFS test. Committed `cef419c`; execution pending.
 - **Cross-platform Phase 2:** `.github/workflows/qa-integrity.yml` now runs the disposable stacked Phase 2 suite on **Ubuntu and Windows** Python 3.13, using portable Python-based QA fixture overlay rather than Unix `cp`. Committed `25ceb44`; cross-platform Phase 2 results pending.
 - **Previously verified latest Phase 2:** run [41373823866](https://github.com/nrobertson152/RevisionWorx/actions/runs/41373823866) used Phase 2 `47d81658764cd6bde60e391ac9aac24e722317e8` and QA `8d5a70f3e0ed1f58811a489e2271d1056a85abff`; QA **26 passed, 1 xfailed**; full **183 passed, 1 xfailed** on Linux Python 3.13. Both new view-model tests passed. The xfail remains the known stale-writer publication defect.
+
+## Latest independent cross-platform regression evidence
+
+[GitHub Actions run 41381884699](https://github.com/nrobertson152/RevisionWorx/actions/runs/41381884699), disposable Phase 2 source `47d81658764cd6bde60e391ac9aac24e722317e8` plus QA source `d72b7ba25ccbf5162e4db6df13914fbf5faa373e`: Linux/Python 3.13 **32 passed, 2 strict xfailed** (QA) and **189 passed, 2 strict xfailed** (full); Windows/Python 3.13 **32 passed, 2 strict xfailed** (QA) and **188 passed, 1 skipped, 2 strict xfailed** (full). Strict xfails are physical post-audit writer publish (#8) and LocalIndex snapshot-watermark mismatch (#9). The separate **positive** ADR-015 logical post-audit fence test passed. Newer pre-audit override and Qt checkout-conflict tests are committed but not included in this run; their status must come from subsequent CI logs. No physical SMB/NFS, native installed GUI, or actual concurrent shared-folder certification.
