@@ -23,7 +23,7 @@ The test skips when the separate checkout is not supplied. It has **not** been e
 
 ## Verification record (2026-11-01)
 
-Linux, CPython 3.13.5: `python -m unittest -v prototype.test_authority` — **10 passed, 0 failed**, approximately 5 seconds. The separate opt-in Phase 1 reproducer — **1 skipped** without a Phase 1 checkout. The first three prototype tests were also separately executed by the Lead Architect on another Linux Python 3.13 environment, reported in PR #4; this is not a substitute for the tests above.
+Linux, CPython 3.13.5: `python -m unittest -v prototype.test_authority` — **12 passed, 0 failed**, approximately 5 seconds. The separate opt-in Phase 1 reproducer — **1 skipped** without a Phase 1 checkout. The first three prototype tests were also separately executed by the Lead Architect on another Linux Python 3.13 environment, reported in PR #4; this is not a substitute for the tests above.
 
 The earlier README described an **unimplemented mkdir/COMMIT-marker experiment** and claimed related local tests. That description was inaccurate and has been replaced with the actual implementation.
 
