@@ -101,6 +101,30 @@ jobs:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m unittest -v prototype.test_phase2_new_fixes_acceptance
 
+  phase1-backport-owner-safety:
+    name: Frozen Phase 1 backport ownership probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: 36d1957fe8d7800659b488106ef6cec1fa0c6267
+          path: phase1-backport
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Demonstrate obsolete stale release and positive safety xfail
+        working-directory: research
+        env:
+          REVISIONWORX_BACKPORT_CHECKOUT: ${{ github.workspace }}/phase1-backport
+        run: python -m unittest -v prototype.test_phase1_backport_release_race
+
   phase2-latest-adr-review:
     name: ADR-019 audit-first and ADR-021 digest interoperability (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
