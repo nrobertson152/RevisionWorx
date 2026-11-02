@@ -8,7 +8,7 @@ import tempfile
 import unittest
 import zipfile
 
-from revisionworx_integrations.openschematix import inspect, InvalidProject, UnsupportedFormat
+from revisionworx_integrations.openschematix import inspect, inspect_bytes, InvalidProject, UnsupportedFormat
 
 
 class AdapterTests(unittest.TestCase):
@@ -191,6 +191,21 @@ class AdapterTests(unittest.TestCase):
                 archive.writestr(name, payload, compress_type=compression)
         with self.assertRaisesRegex(InvalidProject, "sheet ordering"):
             inspect(path)
+
+    def test_immutable_bytes_entry_point_matches_file_entry_point(self):
+        for path in (self.project(), self.legacy()):
+            self.assertEqual(inspect_bytes(path.read_bytes(), path.suffix), inspect(path))
+
+    def test_immutable_bytes_entry_point_needs_only_original_extension(self):
+        path = self.project()
+        raw = path.read_bytes()
+        result = inspect_bytes(raw, ".schematix")
+        self.assertEqual(result["file_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(result["project_uid"], "p1")
+
+    def test_immutable_bytes_entry_point_rejects_unknown_extension(self):
+        with self.assertRaises(UnsupportedFormat):
+            inspect_bytes(b"{}", ".bin")
 
     def test_unknown_extension(self):
         path = self.root / "example.step"
