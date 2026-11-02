@@ -2,7 +2,7 @@
 
 **QA Engineer • latest independently verified candidate: Phase 2 `d656884b39401134149273dd0121ef620b76eb8e` + QA `1def701cd06e5e373ab37ca1d1d250cf13c55821`**
 
-This is the **current acceptance state**, not a historical run list. Exact evidence: [full Linux/Windows × Python 3.11/3.13 run 41387311002](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387311002) and [focused #8/#9/#10 + Windows process-stress run 41387311010](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387311010). Earlier failed/xfail evidence is preserved in `docs/agents/QA_PROGRESS.md` and issues #8/#9/#10.
+This is the **current acceptance state**, not a historical run list. **Current exact evidence:** [full Linux/Windows × Python 3.11/3.13 run 41389199207](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199207), and [focused ADR-019 + five-trial Windows stress run 41389199197](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199197), both with Phase 2 `d656884b` + QA `1def701c`. Earlier `41387311002`/`41387311010` runs are historical. Preserve pre-fix failure evidence in `docs/agents/QA_PROGRESS.md` and issues #8/#9/#10.
 
 
 ## Latest independently verified ADR-019 acceptance (2026-11-01 ET)
