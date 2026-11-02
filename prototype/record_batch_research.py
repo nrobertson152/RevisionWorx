@@ -42,6 +42,26 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
         self._online = True
         self._quarantined = False
 
+    def acquire(self, resource, signed_principal):
+        self._require_online()
+        return super().acquire(resource, signed_principal)
+
+    def release(self, credential, signed_principal):
+        self._require_online()
+        return super().release(credential, signed_principal)
+
+    def override(self, resource, expected_generation, reason, signed_principal):
+        self._require_online()
+        return super().override(resource, expected_generation, reason, signed_principal)
+
+    def outcome(self, txid, signed_principal):
+        self._require_online()
+        return super().outcome(txid, signed_principal)
+
+    def audit(self, resource, signed_principal):
+        self._require_online()
+        return super().audit(resource, signed_principal)
+
     def _require_online(self):
         if self._quarantined:
             raise Fenced("authority quarantined; no authoritative access")
@@ -61,8 +81,9 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
         if not isinstance(files, dict) or len(files) > 256:
             raise ValueError("manifest must be a mapping of at most 256 objects")
         for name, value in files.items():
-            if (not isinstance(name, str) or not name or len(name) > 255 or
-                    "/" in name or "\\" in name or name in (".", "..")):
+            if (not isinstance(name, str) or not name or len(name) > 1024 or
+                    name.startswith("/") or "\\" in name or "\x00" in name or
+                    any(part in ("", ".", "..") for part in name.split("/"))):
                 raise ValueError("invalid logical filename")
             if not isinstance(value, dict) or set(value) != {"sha256", "length"}:
                 raise ValueError("blob metadata must contain sha256 and length only")
@@ -149,6 +170,7 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
                          "operations": ops, "manifest": files})
         with self.core.authority._transaction() as db:
             head = self._verify(db)
+            self._verify_committed_objects(db)
             row = db.execute("""SELECT sequence,resource,generation,payload,expected_revision
                                 FROM commits WHERE txid=?""", (txid,)).fetchone()
             if row is not None:
