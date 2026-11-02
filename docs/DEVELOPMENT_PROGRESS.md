@@ -73,6 +73,13 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-02 (session 5) — CommitAuthority contract, idempotent txid (ADR-017)
+- QA (PR #3) and Distributed Systems (PR #4) are verifying `325b7a8`. PR #6 is left unchanged, as
+  the director directed.
+- Added the `CommitAuthority` protocol and a reusable contract suite; the file journal passes it.
+- Fixed a non-idempotent `txid` retry (reproduced first: the same txid produced 2 entries).
+- **Tests:** full suite **168 passed, 1 skipped (Qt)**. No CI was triggered.
+
 ### 2026-11-01 (session 4) — issues #8 (rev. 2), #9, #10
 - **#8 pre-audit gap closed:** revocation is now a journal entry, the single linearization point
   (ADR-015 rev. 2). Five interleavings are tested, including the admin pausing between revocation

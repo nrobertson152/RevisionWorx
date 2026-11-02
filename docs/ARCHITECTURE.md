@@ -376,6 +376,23 @@ afterwards and is only evidence.
     break it.
   - Verified locally by injected failures only. **The Windows multi-process run needs QA.**
 
+### ADR-017 CommitAuthority contract and idempotent txid — IMPLEMENTED (file journal)
+- `revisionworx/authority.py` defines the `CommitAuthority` protocol: `commit`,
+  `transaction_outcome`, `head_seq`, `get`, `list`, `entries_after`. It has six semantics:
+  atomicity, in-commit `expect_rev`, ordering/`_rev`, fencing, outcome, and idempotency.
+  `documents.py` depends only on this.
+- `tests/contract_commit_authority.py` is an executable conformance suite. The file journal passes
+  it (`tests/test_commit_authority_file_journal.py`). **The LAN coordinator must pass the same
+  suite before integration.**
+- Defect found while writing the contract, reproduced first: retrying `commit` with the same `txid`
+  appended a second entry. Now an identical retry returns the original sequence and writes nothing;
+  a different payload under the same txid raises `TxidReuseError`; a fenced original raises
+  `LockLostError`.
+- Cost: txid lookup scans the journal (O(n)). Acceptable for standalone mode; the coordinator should
+  index txids.
+- Not yet done: `Workspace` itself is not split into reader and authority. That refactor waits
+  until QA accepts `325b7a8`, so code under review is not churned.
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).

@@ -99,6 +99,10 @@ class ConflictError(WorkspaceError):
                          "reload and try again")
 
 
+class TxidReuseError(WorkspaceError):
+    """A transaction id was reused for different content; nothing was written."""
+
+
 class LockLostError(WorkspaceError):
     """This handle's writer lock was broken or replaced; it must not write any more."""
 
@@ -522,6 +526,17 @@ class Workspace:
         if self.applied_seq() != self.head_seq():
             self.recover()
         self._check_lock_still_held()
+        if txid is not None:  # idempotent retry (ADR-017): same txid + same content -> same result
+            payload = {"op": op, "records": [p.as_json() for p in ops if not isinstance(p, RecordCheck)],
+                       "blobs": blob_refs or []}
+            for s_ in reversed(self.journal_seqs()):
+                prior = self.read_entry(s_)
+                if prior.get("txid") == txid:
+                    if {"op": prior["op"], "records": prior["records"], "blobs": prior["blobs"]} != payload:
+                        raise TxidReuseError(f"txid {txid} was already used for a different change (entry {s_})")
+                    if self.is_fenced(prior):
+                        raise LockLostError(f"fenced: txid {txid} (entry {s_}) never took effect")
+                    return s_
         if self._lock_token in {t for _, t in self._revocations()}:
             self.writable = False
             raise LockLostError("this session's writer lock was revoked by an administrator; reopen the workspace")
