@@ -23,7 +23,7 @@ def publisher(path, ready, proceed, queue, name, generation):
     proceed.wait(20)
     try:
         queue.put(("committed", authority.publish("drawing", name, generation,
-                                                 "tx-from-paused-worker", "data")))
+                                                 "tx-from-paused-worker", "data", expected_revision=0)))
     except Fenced:
         queue.put(("fenced", None))
 
@@ -39,21 +39,21 @@ class AuthorityTests(unittest.TestCase):
         old = self.authority.acquire("drawing", "alice")
         self.assertGreater(self.authority.override("drawing", "operator recovery", "unverified actor"), old)
         with self.assertRaises(Fenced):
-            self.authority.publish("drawing", "alice", old, "tx-old", "old")
+            self.authority.publish("drawing", "alice", old, "tx-old", "old", expected_revision=0)
         fresh = self.authority.acquire("drawing", "bob")
         self.assertGreater(fresh, old)
-        self.assertEqual(self.authority.publish("drawing", "bob", fresh, "tx-new", "new"), "committed")
+        self.assertEqual(self.authority.publish("drawing", "bob", fresh, "tx-new", "new", expected_revision=0), "committed")
 
     def test_idempotency_and_replay_after_override(self):
         generation = self.authority.acquire("drawing", "alice")
-        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data"), "committed")
-        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data"), "already-committed")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data", expected_revision=0), "committed")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data", expected_revision=0), "already-committed")
         with self.assertRaises(Fenced):
-            self.authority.publish("drawing", "alice", generation, "tx1", "changed")
+            self.authority.publish("drawing", "alice", generation, "tx1", "changed", expected_revision=0)
         self.authority.override("drawing", "administrative recovery", "unverified actor")
-        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data"), "already-committed")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data", expected_revision=0), "already-committed")
         with self.assertRaises(Fenced):
-            self.authority.publish("drawing", "alice", generation, "tx2", "new")
+            self.authority.publish("drawing", "alice", generation, "tx2", "new", expected_revision=1)
         self.assertEqual(self.authority.outcome("tx1")["state"], "committed")
         self.assertEqual(self.authority.outcome("tx2")["state"], "not-found")
 
@@ -107,7 +107,7 @@ class AuthorityTests(unittest.TestCase):
         self.authority.override("drawing", "restart recovery", "operator-claim")
         recovered = Authority(self.path)
         with self.assertRaises(Fenced):
-            recovered.publish("drawing", "alice", generation, "tx-old", "invalid")
+            recovered.publish("drawing", "alice", generation, "tx-old", "invalid", expected_revision=0)
         newer = recovered.acquire("drawing", "bob")
         self.assertGreater(newer, generation)
         self.assertEqual(recovered.audits("drawing"),
@@ -123,9 +123,49 @@ class AuthorityTests(unittest.TestCase):
         generation = self.authority.acquire("drawing", "alice")
         with self.assertRaises(sqlite3.IntegrityError):
             # txid uniqueness is checked before insert, so instead violate NOT NULL payload.
-            self.authority.publish("drawing", "alice", generation, "bad", None)
+            self.authority.publish("drawing", "alice", generation, "bad", None, expected_revision=0)
         self.assertEqual(self.authority.snapshot("drawing")[2], 0)
         self.assertEqual(self.authority.outcome("bad")["state"], "not-found")
+
+    def test_required_expected_revision(self):
+        generation = self.authority.acquire("drawing", "alice")
+        with self.assertRaises(TypeError):
+            self.authority.publish("drawing", "alice", generation, "unconditional", "payload")
+        with self.assertRaises(ValueError):
+            self.authority.publish("drawing", "alice", generation, "invalid", "payload",
+                                   expected_revision=-1)
+        self.assertEqual(self.authority.outcome("unconditional")["state"], "not-found")
+
+    def test_override_races_publish_in_threads(self):
+        import threading
+        generation = self.authority.acquire("drawing", "alice")
+        start = threading.Barrier(3)
+        outcomes = []
+
+        def write():
+            start.wait()
+            try:
+                outcomes.append(self.authority.publish("drawing", "alice", generation,
+                                                      "simultaneous", "payload", expected_revision=0))
+            except Fenced:
+                outcomes.append("fenced")
+
+        def revoke():
+            start.wait()
+            self.authority.override("drawing", "race", "operator-claim")
+
+        a = threading.Thread(target=write)
+        b = threading.Thread(target=revoke)
+        a.start(); b.start(); start.wait()
+        a.join(15); b.join(15)
+        self.assertFalse(a.is_alive() or b.is_alive())
+        self.assertEqual(len(outcomes), 1)
+        self.assertIn(outcomes[0], ("committed", "fenced"))
+        self.assertEqual(self.authority.outcome("simultaneous")["state"],
+                         "committed" if outcomes[0] == "committed" else "not-found")
+        with self.assertRaises(Fenced):
+            self.authority.publish("drawing", "alice", generation, "late", "payload",
+                                   expected_revision=self.authority.snapshot("drawing")[2])
 
     def test_sequence_order_follows_serialized_publications(self):
         generation = self.authority.acquire("drawing", "alice")
