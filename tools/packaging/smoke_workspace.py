@@ -51,7 +51,8 @@ def isolated_env(home: Path) -> dict[str, str]:
 def checked_cli(cli: Path, args: list[str], home: Path, env: dict[str, str]) -> str:
     proc = subprocess.run(
         [str(cli), *args], cwd=home, env=env,
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         timeout=30, check=False,
     )
     if proc.returncode != 0:

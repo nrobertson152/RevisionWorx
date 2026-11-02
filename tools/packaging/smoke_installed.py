@@ -34,7 +34,8 @@ def smoke(gui: Path, cli: Path) -> None:
         env.pop("REVISIONWORX_WORKSPACE", None)
         cli_result = subprocess.run(
             [str(cli), "--help"], cwd=home, env=env, timeout=30,
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+            text=True, encoding="utf-8", errors="replace",
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
         )
         if cli_result.returncode != 0 or "usage:" not in cli_result.stdout.lower():
             raise RuntimeError(
