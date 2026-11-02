@@ -75,3 +75,27 @@ REVISIONWORX_PHASE2_CHECKOUT=/path/to/phase2-documents python -m unittest -v pro
 ```
 
 See `docs/COORDINATOR_WITNESS_RESEARCH.md`, `docs/COORDINATOR_INTEGRATION_CONTRACT.md`, and `docs/DISTRIBUTED_SYSTEMS_HANDOFF.md`. No actual two-host Windows SMB testing or verified nonrollbackable storage has been performed.
+
+## Latest research suite: 63 local tests and Phase 2 safety/defect controls
+
+[GitHub Actions run 41387844444](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387844444) **SUCCESS**. Inspected six job logs: **63/63** research tests passed in **each** Ubuntu Python 3.11, Ubuntu Python 3.13, Windows Python 3.11 and Windows Python 3.13 job. Actual `phase1-foundation`: 2/2 defect reproductions passed. Actual `phase2-documents` at **`f3c54386e41a0587df0b97d0bfcf4b54cd92c0a6`**: **4/4 tests passed**, consisting of three *positive* controls (two journal-first revocation safety tests and one normal writer-lock release) and one **intentional unsafe reproduction** (the old writer deletes the successor's replacement lock after administrator revocation; issue #10). Current Phase 2 may advance separately; report the checked-out SHA for each new run.
+
+The 63 local research tests exercise:
+- `authority.py`: generation and revision CAS, process contention, txid outcomes and crash points.
+- `coordinator_research.py`: acquire/verify/release, guard checks, contiguous cursor, restart, same-epoch DB rollback weakness.
+- `immutable_manifest_research.py`: immutable SHA-256 object staging, multi-file commit/recovery, process death and corruption quarantine.
+- `witnessed_coordinator.py`: HMAC-backed **test-only** principals/administrator role, auditable override, hash-chained external-looking witness, DB-only rollback denial, **simultaneous DB+witness rollback resurrecting a revoked lease (UNSAFE)**, controlled healthy epoch rotation, crash during guard rotation and bounded integrity validation.
+- `record_batch_research.py`: atomically validated per-record `put/delete/check` batches, consistent tombstone revisions, one sequence for all records, idempotent replay, immutable content manifests and simulated client disconnection/reconnect.
+
+Run the model suite using:
+
+```sh
+python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator prototype.test_record_batch_research
+```
+
+Real-code Phase 2 safety and issue #10 race demonstrations require an actual checkout:
+```sh
+REVISIONWORX_PHASE2_CHECKOUT=/path/to/phase2-documents python -m unittest -v prototype.test_phase2_lock_break_order prototype.test_phase2_lock_release_race
+```
+
+**No production Windows service, authenticated LAN transport, nonrollbackable witness hardware, cross-host SMB filesystem, SMB power-loss test or full application integration has been implemented or certified.** The 4,096-witness-entry and 10,000-state-row caps are prototype-only fail-closed limits. This is an isolated research branch, not a deployable product.
