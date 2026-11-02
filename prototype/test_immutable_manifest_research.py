@@ -1,4 +1,6 @@
 """Crash and corruption research for immutable content and atomic commit markers."""
+import multiprocessing as mp
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -6,14 +8,56 @@ import unittest
 from prototype.immutable_manifest_research import ImmutableManifestResearch, MissingContent
 
 
+def crash_after_staging(db, guard, objects):
+    model = ImmutableManifestResearch(db, guard, objects)
+    model.stage(b"durable staged orphan")
+    os._exit(41)
+
+
+def crash_after_manifest_commit(db, guard, objects, credential):
+    model = ImmutableManifestResearch(db, guard, objects)
+    a = model.stage(b"committed CAD part A")
+    b = model.stage(b"committed CAD part B")
+    model.publish("drawing", credential, "crash-after-commit",
+                  {"a.step": a, "b.dxf": b}, expected_revision=0)
+    os._exit(42)
+
+
 class ImmutableManifestTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
-        self.m = ImmutableManifestResearch(root / "authority.db",
-                                            root / "epoch", root / "objects")
+        self.db = root / "authority.db"
+        self.guard = root / "epoch"
+        self.objects = root / "objects"
+        self.m = ImmutableManifestResearch(self.db, self.guard, self.objects)
         self.cred = self.m.coordinator.acquire("drawing", "alice")
+
+    def test_worker_crash_after_staging_leaves_no_committed_revision(self):
+        ctx = mp.get_context("spawn")
+        child = ctx.Process(target=crash_after_staging,
+                            args=(str(self.db), str(self.guard), str(self.objects)))
+        child.start()
+        child.join(25)
+        self.assertEqual(child.exitcode, 41)
+        reopened = ImmutableManifestResearch(self.db, self.guard, self.objects)
+        self.assertEqual(reopened.recover(), 0)
+        self.assertEqual(reopened.coordinator.authority.snapshot("drawing")[2], 0)
+
+    def test_worker_crash_after_manifest_commit_is_recoverable(self):
+        ctx = mp.get_context("spawn")
+        child = ctx.Process(target=crash_after_manifest_commit,
+                            args=(str(self.db), str(self.guard), str(self.objects),
+                                  self.cred))
+        child.start()
+        child.join(25)
+        self.assertEqual(child.exitcode, 42)
+        reopened = ImmutableManifestResearch(self.db, self.guard, self.objects)
+        self.assertEqual(reopened.recover(), 1)
+        self.assertEqual(reopened.coordinator.authority.outcome("crash-after-commit")["state"],
+                         "committed")
+        self.assertEqual(reopened.coordinator.authority.snapshot("drawing")[2], 1)
 
     def test_multifile_commit_and_recovery(self):
         a = self.m.stage(b"first cad file")
