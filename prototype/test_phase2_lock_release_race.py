@@ -128,10 +128,14 @@ class Phase2LockReleaseSafety(unittest.TestCase):
                         RecordPut("project", "prj_" + "b" * 32, {"owner": "B"})])
                 with Workspace.open(meta) as reader:
                     self.assertIsNone(reader.get("project", "prj_" + "b" * 32))
-                    displaced = [e for e in reader.list("audit").values()
-                                 if "displaced" in e.get("reason", "")]
-                    self.assertTrue(displaced, "displacement must be durably audited")
-                    self.assertEqual(displaced[-1]["previous_holder"]["token"], b._lock_token)
+                    journal_entries = [reader.read_entry(seq)
+                                       for seq in reader.journal_seqs()]
+                    displaced = [e for e in journal_entries
+                                 if e.get("revokes") == b._lock_token]
+                    self.assertTrue(displaced, "displacement revocation must be in durable journal")
+                    self.assertIn("displaced", displaced[-1]["records"][0]["data"]["reason"])
+                    self.assertEqual(displaced[-1]["records"][0]["data"]["previous_holder"]["token"],
+                                     b._lock_token)
                 lock_dir = meta / "locks"
                 self.assertTrue(any(f.name.startswith("writer.lock.displaced-")
                                     for f in lock_dir.iterdir()))
