@@ -101,6 +101,32 @@ jobs:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m unittest -v prototype.test_phase2_new_fixes_acceptance
 
+  phase2-latest-adr-review:
+    name: ADR-019 audit-first and ADR-021 digest interoperability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout isolated research tests
+        uses: actions/checkout@v4
+        with:
+          path: research
+      - name: Checkout exact Phase 2 reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: 366d4355abcde7543122551fadaab01ac9832e01
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Test administrative recovery crash/retry and canonical hash compatibility
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_phase2_orphan_clear_protocol prototype.test_phase2_identity_interop
+
   phase2-commit-authority-conformance:
     name: ADR-017 exact contract on witnessed batch prototype (Ubuntu 3.13)
     runs-on: ubuntu-latest
@@ -112,7 +138,7 @@ jobs:
       - name: Checkout pinned Phase 2 contract
         uses: actions/checkout@v4
         with:
-          ref: 2a2804820d4aca48b50026bdb7edfe8c241b1866
+          ref: 366d4355abcde7543122551fadaab01ac9832e01
           path: phase2-documents
       - uses: actions/setup-python@v5
         with:
