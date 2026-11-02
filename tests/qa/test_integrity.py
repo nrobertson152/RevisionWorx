@@ -166,3 +166,39 @@ def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeyp
             assert not reader.get("settings", "workspace").get("stale_writer", False)
     finally:
         writer.close()
+
+
+def test_second_process_cannot_take_active_writer_lock(tmp_path):
+    """Real separate interpreter; in-process locks alone cannot satisfy this."""
+    import subprocess
+    import sys
+
+    store = tmp_path / "store"
+    with Workspace.create(store, "QA") as owner:
+        expected_lock = Workspace.read_writer_lock(store)
+        code = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from revisionworx.workspace import Workspace, WorkspaceLockedError\n"
+            "try:\n"
+            "    with Workspace.open(Path(sys.argv[1]), writable=True):\n"
+            "        sys.exit(40)  # second process illegally acquired write authority\n"
+            "except WorkspaceLockedError:\n"
+            "    sys.exit(0)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(store)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert result.returncode == 0, (
+            f"second interpreter result={result.returncode}\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+        assert Workspace.read_writer_lock(store) == expected_lock
+        assert owner.head_seq() >= 1
+    with Workspace.open(store, writable=True) as successor:
+        successor.commit("qa.process.reacquire", [
+            RecordPut("settings", "workspace", {"reacquired": True})
+        ])
+    with Workspace.open(store) as reader:
+        assert reader.get("settings", "workspace")["reacquired"] is True
