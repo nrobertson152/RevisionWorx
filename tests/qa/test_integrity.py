@@ -749,3 +749,127 @@ def test_windows_lock_release_does_not_unlink_reassigned_token(tmp_path, monkeyp
     finally:
         if lock.exists():
             real_unlink(lock)
+
+
+
+def test_atomic_lock_release_keeps_successor_live_after_administrative_revocation(tmp_path, monkeypatch):
+    """ADR-019 independent acceptance: A's release cannot discard B's lock.
+
+    After A's initial token check but before its pathname release operation,
+    an admin revokes A and B acquires. A must not remove B's authority, and B
+    must commit successfully. Local deterministic failpoint, not SMB evidence.
+    """
+    if not hasattr(Workspace, "_restore_foreign_lock"):
+        pytest.skip("ADR-019 atomic move-and-verify release unavailable on this branch")
+    from revisionworx.workspace import new_id
+
+    store = tmp_path / "store"
+    a = Workspace.create(store, "QA successor lock preservation")
+    old_token = Workspace.read_writer_lock(store)["token"]
+    lock = store / ".revisionworx" / "locks" / "writer.lock"
+    actual_replace = workspace_mod.os.replace
+    newer = {}
+    fired = []
+    rid = new_id("root")
+
+    def intervene_at_atomic_release(src, dst, *args, **kwargs):
+        if Path(src) == lock and Path(dst).name.startswith(".releasing-") and not fired:
+            fired.append(True)
+            Workspace.break_writer_lock(store, old_token, "QA successor takeover after preflight")
+            newer["writer"] = Workspace.open(store, writable=True)
+        return actual_replace(src, dst, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(workspace_mod.os, "replace", intervene_at_atomic_release)
+            a.close()
+        assert fired == [True], "QA must hit the release linearization boundary"
+        b_writer = newer["writer"]
+        token_b = b_writer._lock_token
+        assert token_b != old_token
+        assert Workspace.read_writer_lock(store)["token"] == token_b
+        seq = b_writer.commit("qa.successor.remains.authoritative", [
+            RecordPut("root", rid, {"id": rid, "name": "successor's valid data"})
+        ])
+        assert b_writer.get("root", rid)["_rev"] == seq
+        with Workspace.open(store) as reader:
+            assert reader.get("root", rid)["name"] == "successor's valid data"
+            assert reader.verify()["problems"] == []
+            assert old_token in Workspace._revoked_tokens(store / ".revisionworx")
+            assert token_b not in Workspace._revoked_tokens(store / ".revisionworx")
+    finally:
+        a.close()
+        if "writer" in newer:
+            newer["writer"].close()
+    assert Workspace.read_writer_lock(store) is None
+
+
+def test_crash_with_displaced_foreign_lock_revokes_orphan_before_new_writer(tmp_path, monkeypatch):
+    """ADR-019: A crashes after moving B's lock aside; C must fence B.
+
+    The candidate releases by moving the *actual* pathname to .releasing-*.
+    If an admin breaks A, B acquires and A then moves B's lock and dies,
+    C can only be allowed to write after B is durably revoked.
+    """
+    if not hasattr(Workspace, "_fence_orphaned_releases"):
+        pytest.skip("ADR-019 orphaned-release fencing unavailable on this branch")
+    from revisionworx.workspace import new_id
+
+    store = tmp_path / "store"
+    a = Workspace.create(store, "QA orphaned successor lock")
+    old_token = Workspace.read_writer_lock(store)["token"]
+    lock = store / ".revisionworx" / "locks" / "writer.lock"
+    actual_replace = workspace_mod.os.replace
+    owners = {}
+    fired = []
+    rid = new_id("root")
+
+    def intervene_at_atomic_release(src, dst, *args, **kwargs):
+        if Path(src) == lock and Path(dst).name.startswith(".releasing-") and not fired:
+            fired.append(True)
+            Workspace.break_writer_lock(store, old_token, "QA orphan crash boundary")
+            owners["b"] = Workspace.open(store, writable=True)
+        return actual_replace(src, dst, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(workspace_mod.os, "replace", intervene_at_atomic_release)
+
+            def crash_before_restore(self, *args, **kwargs):
+                raise SystemExit("QA simulated process death before restoring B's lock")
+
+            m.setattr(Workspace, "_restore_foreign_lock", crash_before_restore)
+            with pytest.raises(SystemExit, match="simulated process death"):
+                a.close()
+        assert fired == [True]
+        b_writer = owners["b"]
+        b_token = b_writer._lock_token
+        assert Workspace.read_writer_lock(store) is None
+        assert any(p.name.startswith(".releasing-")
+                   for p in (store / ".revisionworx" / "locks").iterdir())
+
+        with Workspace.open(store, writable=True) as c_writer:
+            c_token = c_writer._lock_token
+            assert c_token != b_token
+            assert b_token in Workspace._revoked_tokens(store / ".revisionworx")
+            with pytest.raises(workspace_mod.LockLostError):
+                b_writer.commit("qa.revoked.b.cannot.publish", [
+                    RecordPut("root", rid, {"id": rid, "name": "B is no longer allowed"})
+                ])
+            c_writer.commit("qa.c.can.publish", [
+                RecordPut("root", rid, {"id": rid, "name": "C is authoritative"})
+            ])
+            assert c_writer.get("root", rid)["name"] == "C is authoritative"
+            audits = [c_writer.read_entry(n) for n in c_writer.journal_seqs()
+                      if c_writer.read_entry(n).get("revokes") == b_token]
+            assert len(audits) == 1, "orphan custody must revoke B exactly once"
+            assert c_writer.verify()["problems"] == []
+            lock_dir = store / ".revisionworx" / "locks"
+            assert not any(p.name.startswith(".releasing-") for p in lock_dir.iterdir())
+            assert any(p.name.startswith("writer.lock.orphaned-")
+                       for p in lock_dir.iterdir())
+    finally:
+        a.close()
+        if "b" in owners:
+            owners["b"].close()
+    assert Workspace.read_writer_lock(store) is None
