@@ -20,6 +20,25 @@ from prototype.witnessed_coordinator import WitnessedCoordinatorResearch, _json
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 
 
+class BatchRecordConflict(Fenced):
+    """Explicit per-record expected-version mismatch."""
+    def __init__(self, kind, rid, expected, actual):
+        self.kind, self.rid, self.expected, self.actual = kind, rid, expected, actual
+        super().__init__(f"record revision conflict: {kind}/{rid}: {actual} != {expected}")
+
+
+class BatchTxidConflict(Fenced):
+    """Stable txid was submitted with different content."""
+
+
+class BatchLeaseFenced(Fenced):
+    """Lease epoch/generation/owner no longer has write authority."""
+
+
+class BatchResourceConflict(Fenced):
+    """Whole-resource expected revision no longer matches."""
+
+
 class BatchAuthorityResearch(WitnessedCoordinatorResearch):
     """Isolated schema extension with transactionally checked record versions.
 
@@ -123,8 +142,11 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
             if (not isinstance(kind, str) or not kind or not isinstance(rid, str)
                     or not rid or len(kind) > 64 or len(rid) > 128):
                 raise ValueError("invalid record key")
-            if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
-                raise ValueError("nonnegative record expect_rev required")
+            if (isinstance(expected, bool) or
+                    (expected is not None and
+                     (not isinstance(expected, int) or expected < 0)) or
+                    (typ == "check" and expected is None)):
+                raise ValueError("nonnegative record expect_rev required for check; writes may omit")
             if typ == "put" and not isinstance(raw["data"], dict):
                 raise ValueError("put data must be mapping")
             key = (kind, rid)
@@ -149,7 +171,7 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
         return result
 
     def publish_batch(self, credential, signed_principal, txid, operations, *,
-                      expected_revision, manifest=None, before_commit=None):
+                      expected_revision, manifest=None, before_commit=None, op="batch"):
         self._require_online()
         actor = self.auth.verify(signed_principal)
         if actor != credential.get("owner"):
@@ -165,7 +187,7 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
         # Out-of-band immutable SMB publication is not transactional with
         # SQLite. This local pre-commit check detects missing/corrupt objects,
         # but physical SMB durability must be certified independently.
-        request = _json({"epoch": credential.get("epoch"),
+        request = _json({"op": op, "epoch": credential.get("epoch"),
                          "resource": credential.get("resource"),
                          "operations": ops, "manifest": files})
         with self.core.authority._transaction() as db:
@@ -176,16 +198,16 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
             if row is not None:
                 if row[1:] != (credential.get("resource"), credential.get("generation"),
                                request, expected_revision):
-                    raise Fenced("txid reused for a different batch")
+                    raise BatchTxidConflict("txid reused for a different batch")
                 return {"state": "already-committed", "sequence": row[0], "txid": txid}
             lease = db.execute("""SELECT generation,owner,record_revision FROM authority
                                   WHERE resource=?""",
                                (credential.get("resource"),)).fetchone()
             if (credential.get("epoch") != self.core.guard.epoch or lease is None
                     or lease[:2] != (credential.get("generation"), actor)):
-                raise Fenced("revoked or stale batch lease")
+                raise BatchLeaseFenced("revoked or stale batch lease")
             if lease[2] != expected_revision:
-                raise Fenced("resource expected_revision conflict")
+                raise BatchResourceConflict("resource expected_revision conflict")
 
             expected_by_key = {}
             for op in ops:
@@ -195,8 +217,8 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
                 rec = db.execute("""SELECT revision FROM batch_records
                                     WHERE kind=? AND id=?""", (kind, rid)).fetchone()
                 actual = rec[0] if rec else 0
-                if actual != expected:
-                    raise Fenced(f"record revision conflict: {kind}/{rid}: {actual} != {expected}")
+                if expected is not None and actual != expected:
+                    raise BatchRecordConflict(kind, rid, expected, actual)
 
             # Check bytes under the same authority serialization lock.
             self._check_blobs(files)
