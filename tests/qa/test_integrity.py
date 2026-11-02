@@ -160,7 +160,8 @@ def test_paused_writer_break_after_lock_check_must_not_publish(tmp_path, monkeyp
             except workspace_mod.LockLostError:
                 lock_lost = True
         with Workspace.open(store) as reader:
-            assert after_break, "the administrative break must have been injected"
+            if not after_break:
+                raise RuntimeError("QA failpoint did not inject the audited administrative break")
             assert lock_lost, "revoked writer incorrectly returned from commit"
             assert reader.head_seq() == after_break[0], "revoked writer published a journal entry"
             assert not reader.get("settings", "workspace").get("stale_writer", False)
@@ -243,7 +244,8 @@ def test_index_rebuild_does_not_include_records_newer_than_its_watermark(tmp_pat
                 m.setattr(ws, "head_seq", head_then_commit)
                 index.rebuild()
 
-            assert injected_seq == [old_head + 1]
+            if injected_seq != [old_head + 1]:
+                raise RuntimeError("QA failpoint did not produce the expected intervening journal entry")
             included = index.db.execute(
                 "SELECT id FROM roots WHERE id=?", (injected_id,)
             ).fetchone() is not None
