@@ -65,6 +65,11 @@ jobs:
             --mount "type=bind,src=${{ github.workspace }}/packaging-prototype-output/dist,dst=/bundles,readonly" \
             --mount "type=bind,src=${{ github.workspace }}/tools/packaging,dst=/harness,readonly" \
             revisionworx-offline-qt /bin/sh /harness/smoke_offline_container.sh
+      - name: Optional Windows long, extended, UNC-loopback and file-sharing probes
+        if: runner.os == 'Windows'
+        run: >-
+          python tools/packaging/probe_windows_paths.py
+          --cli packaging-prototype-output/dist/RevisionWorxCLI/RevisionWorxCLI.exe
       - name: Print version and dependency provenance
         if: success()
         run: python -c "from pathlib import Path; print((Path('packaging-prototype-output') / 'provenance.json').read_text())"
