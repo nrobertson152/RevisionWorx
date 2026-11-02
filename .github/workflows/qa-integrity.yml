@@ -43,3 +43,46 @@ jobs:
 # A green run is evidence only for this specific runner and branch revision.
 # It does not certify live PySide6 widgets, real Windows desktop interaction,
 # SMB/NFS semantics, or cross-host recovery.
+
+  phase2-stacked-regressions:
+    name: "Phase 2 integrated QA / Linux Python 3.13"
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout Claude's stacked Phase 2 implementation
+        uses: actions/checkout@v4
+        with:
+          ref: phase2-documents
+          path: phase2
+      - name: Checkout QA engineering branch
+        uses: actions/checkout@v4
+        with:
+          ref: qa/testing-infrastructure
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Record exact integrated revisions
+        run: |
+          echo "Phase 2 commit: $(git -C phase2 rev-parse HEAD)"
+          echo "QA tests commit: $(git -C qa rev-parse HEAD)"
+      - name: Install Linux Qt libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
+      - name: Overlay only independent QA tests and fixtures into disposable Phase 2 checkout
+        run: cp -R qa/tests/qa phase2/tests/qa
+      - name: Install stacked implementation and test requirements
+        working-directory: phase2
+        run: python -m pip install -e ".[dev]"
+      - name: Run independent Phase 2 QA regressions
+        working-directory: phase2
+        run: python -m pytest -q -ra tests/qa
+      - name: Run entire stacked Phase 2 suite
+        working-directory: phase2
+        run: python -m pytest -q -ra
+
+# The Phase 2 job only overlays QA tests in the runner's disposable checkout.
+# It does not merge branches, write GitHub refs, or change Claude's branch.
