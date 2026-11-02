@@ -1,0 +1,68 @@
+# Independent, focused verification of Claude's candidate #8/#9/#10 fixes.
+# Source is checked out from its actual Phase 2 head. QA is a disposable overlay.
+# This does not merge or publish any Git refs.
+name: QA defect acceptance (focused)
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths:
+      - 'tests/qa/**'
+      - '.github/workflows/qa-defect-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  defect-acceptance:
+    name: "Current Phase 2 acceptance / ${{ matrix.os }} Python 3.13"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 22
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase2-documents
+          path: phase2
+      - uses: actions/checkout@v4
+        with:
+          ref: qa/testing-infrastructure
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Record exact implementation, QA and interpreter revisions
+        shell: python
+        run: |
+          import platform
+          import subprocess
+          for name in ("phase2", "qa"):
+              sha = subprocess.check_output(("git", "-C", name, "rev-parse", "HEAD"), text=True).strip()
+              print(f"{name}={sha}")
+          print(f"platform={platform.platform()} python={platform.python_version()}")
+      - name: Linux Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
+      - name: Overlay QA tests (disposable runner only)
+        shell: python
+        run: |
+          from pathlib import Path
+          import shutil
+          shutil.copytree(Path("qa/tests/qa"), Path("phase2/tests/qa"), dirs_exist_ok=True)
+      - name: Install candidate application and test dependencies
+        working-directory: phase2
+        run: python -m pip install -e ".[dev]"
+      - name: Execute independent #8/#9/#10 acceptance regressions
+        working-directory: phase2
+        run: python -m pytest -q -ra tests/qa/test_integrity.py
+      - name: Repeat actual six-process Windows checkout (5 trials, 30 attempts)
+        if: runner.os == 'Windows'
+        working-directory: phase2
+        run: python tests/qa/windows_checkout_stress.py --trials 5 --workers 6 --timeout 100
