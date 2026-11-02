@@ -112,7 +112,9 @@ def build(source: Path, output: Path, python: str, expected_sha: str | None) -> 
 
     run(sys.executable, str(HERE / "smoke_installed.py"),
         "--gui", str(gui), "--cli", str(cli))
-    print("Experimental packaging smoke succeeded (no installer/release).")
+    run(sys.executable, str(HERE / "smoke_workspace.py"),
+        "--gui", str(gui), "--cli", str(cli))
+    print("Experimental packaging + disposable copied-workspace smokes passed (no installer/release).")
 
 
 def main(argv: list[str] | None = None) -> int:

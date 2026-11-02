@@ -33,5 +33,30 @@ class PackagingSafetyTests(unittest.TestCase):
                 validate_locations(source.resolve(), (root / "output").resolve())
 
 
+class SnapshotSafetyTests(unittest.TestCase):
+    def test_snapshot_detects_content_changes(self):
+        from smoke_workspace import snapshot
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file = root / "folder" / "sample.txt"
+            file.parent.mkdir()
+            file.write_bytes(b"original")
+            a = snapshot(root)
+            file.write_bytes(b"modified")
+            b = snapshot(root)
+            self.assertNotEqual(a, b)
+            self.assertEqual(set(a), {"folder/sample.txt"})
+
+    def test_isolated_environment_clears_real_workspace_variable(self):
+        import os
+        from unittest.mock import patch
+        from smoke_workspace import isolated_env
+        with TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"REVISIONWORX_WORKSPACE": "LIVE-DATA-MUST-NOT-BE-OPENED"}):
+                env = isolated_env(Path(tmp))
+            self.assertNotIn("REVISIONWORX_WORKSPACE", env)
+            self.assertEqual(env["QT_QPA_PLATFORM"], "offscreen")
+
+
 if __name__ == "__main__":
     unittest.main()

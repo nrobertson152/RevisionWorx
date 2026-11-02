@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nrobertson152/RevisionWorx
-          ref: ffcfb463bc050ff460279fd92f6758e0215f73e3
+          ref: d656884b39401134149273dd0121ef620b76eb8e
           path: external/revisionworx-phase2
           persist-credentials: false
       - name: Select Python 3.11
@@ -50,7 +50,7 @@ jobs:
           python tools/packaging/build.py
           --source external/revisionworx-phase2
           --output packaging-prototype-output
-          --expected-sha ffcfb463bc050ff460279fd92f6758e0215f73e3
+          --expected-sha d656884b39401134149273dd0121ef620b76eb8e
       - name: Print version and dependency provenance
         if: success()
         run: python -c "from pathlib import Path; print((Path('packaging-prototype-output') / 'provenance.json').read_text())"
