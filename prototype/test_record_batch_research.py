@@ -217,6 +217,56 @@ class BatchAuthorityTests(unittest.TestCase):
         self.assertCountEqual(results, ["committed", "fenced"])
         self.assertEqual(self.model.snapshot_batch()["high_watermark"], 1)
 
+    def test_admin_override_serializes_after_inflight_checked_batch(self):
+        """BEGIN IMMEDIATE orders publish+record CAS vs authenticated revoke.
+
+        An override started after batch validation may not take effect before
+        the journal/record transaction commits; no half-applied publication.
+        The inverse order is exercised by test_revocation_fences_prepared_batch.
+        """
+        import threading
+        from prototype.record_batch_research import BatchLeaseFenced
+        started, done = threading.Event(), threading.Event()
+        worker_errors = []
+        worker = None
+        def override_worker():
+            started.set()
+            try:
+                self.model.override("drawing", self.lease["generation"],
+                                    "admin revokes during checked commit", self.admin)
+            except BaseException as exc:
+                worker_errors.append(repr(exc))
+            finally:
+                done.set()
+        def while_transaction_is_locked():
+            nonlocal worker
+            worker = threading.Thread(target=override_worker, daemon=True)
+            worker.start()
+            self.assertTrue(started.wait(5))
+            self.assertFalse(done.wait(0.1),
+                             "override must not complete inside active commit transaction")
+        result = self.model.publish_batch(
+            self.lease, self.alice, "e" * 32,
+            [self.put("document", "docA", {"owner": "alice"}),
+             {"type": "check", "kind": "document", "id": "docA",
+              "expect_rev": 0}],
+            expected_revision=0, before_commit=while_transaction_is_locked)
+        self.assertIsNotNone(worker)
+        worker.join(15)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(worker_errors, [])
+        self.assertTrue(done.is_set())
+        self.assertEqual(result["sequence"], 1)
+        self.assertEqual(self.model.outcome("e" * 32, self.alice)["state"], "committed")
+        self.assertEqual(self.model.snapshot_batch()["records"][("document", "docA")],
+                         {"revision": 1, "data": {"owner": "alice"}})
+        with self.assertRaises(BatchLeaseFenced):
+            self.model.publish_batch(self.lease, self.alice, "f" * 32,
+                                     [self.put("document", "docA",
+                                               {"owner": "revoked"}, expected=1)],
+                                     expected_revision=1)
+        self.assertEqual(self.model.snapshot_batch()["high_watermark"], 1)
+
     def test_crash_after_witness_before_db_commit_quarantines(self):
         ctx = mp.get_context("spawn")
         proc = ctx.Process(target=_crash_batch,

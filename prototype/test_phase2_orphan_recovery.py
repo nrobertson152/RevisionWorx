@@ -75,7 +75,12 @@ class Phase2OrphanedReleaseSafety(unittest.TestCase):
                 a._lock_token = None
                 a.close()
 
-    def test_malformed_orphan_kept_as_evidence_but_cannot_block_new_authority(self):
+    def test_malformed_orphan_archived_without_token_fence_UNSAFE_control(self):
+        """UNSAFE control only: the current implementation grants authority
+        without identifying/revoking the displaced owner. The separate
+        preflighted-writer proof shows both writers can commit. Do not treat
+        this successful test as safety acceptance.
+        """
         Workspace, RecordPut, _, _ = self._load()
         with tempfile.TemporaryDirectory() as directory:
             first = Workspace.create(Path(directory) / "workspace", "CorruptEvidence")
