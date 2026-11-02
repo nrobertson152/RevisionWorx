@@ -132,6 +132,19 @@ class NativeBOMOracleTests(unittest.TestCase):
             "adapter_candidate_quantities": "unknown",
         }, sort_keys=True))
 
+    def test_legacy_wrapper_uids_change_on_open_but_source_is_identical(self):
+        path = EXAMPLES / "start_stop_latch.osch"
+        data = path.read_bytes()
+        first = self.projectio.open_any(str(path), activate=False).project
+        second = self.projectio.open_any(str(path), activate=False).project
+        self.assertNotEqual(first.uid, second.uid)
+        self.assertNotEqual(first.sheets[0].uid, second.sheets[0].uid)
+        report_a = inspect_bytes(data, ".osch")
+        report_b = inspect_bytes(data, ".osch")
+        self.assertEqual(report_a, report_b)
+        self.assertIsNone(report_a["project_uid"])
+        self.assertEqual(path.read_bytes(), data)
+
     def test_native_sheet_filtering_preserves_source_identity(self):
         source = EXAMPLES / "demo_project.schematix"
         original = source.read_bytes()
