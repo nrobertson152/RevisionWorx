@@ -1,0 +1,52 @@
+name: Distributed Authority Research Tests
+
+on:
+  push:
+    branches:
+      - research/shared-filesystem-protocol
+    paths:
+      - "prototype/**"
+      - ".github/workflows/distributed-authority-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-authority:
+    name: SQLite authority (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Independent-process checkout and fencing tests
+        run: python -m unittest -v prototype.test_authority
+
+  phase1-stale-writer-reproduction:
+    name: Phase 1 real-code stale-writer reproduction (research)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout distributed research
+        uses: actions/checkout@v4
+        with:
+          path: research
+      - name: Checkout actual Phase 1 implementation
+        uses: actions/checkout@v4
+        with:
+          ref: phase1-foundation
+          path: phase1-foundation
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Reproduce preflight/administrative-break publication race
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE1_CHECKOUT: ${{ github.workspace }}/phase1-foundation
+        run: python -m unittest -v prototype.test_phase1_lock_race
