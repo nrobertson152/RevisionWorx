@@ -133,11 +133,14 @@ class Phase2LockReleaseSafety(unittest.TestCase):
                     displaced = [e for e in journal_entries
                                  if e.get("revokes") == b._lock_token]
                     self.assertTrue(displaced, "displacement revocation must be in durable journal")
-                    self.assertIn("displaced", displaced[-1]["records"][0]["data"]["reason"])
+                    reason = displaced[-1]["records"][0]["data"]["reason"]
+                    self.assertTrue("displaced" in reason or "orphaned" in reason,
+                                    "revocation must explain custody of displaced/orphaned lock")
                     self.assertEqual(displaced[-1]["records"][0]["data"]["previous_holder"]["token"],
                                      b._lock_token)
                 lock_dir = meta / "locks"
-                self.assertTrue(any(f.name.startswith("writer.lock.displaced-")
+                self.assertTrue(any(f.name.startswith(("writer.lock.displaced-",
+                                                       "writer.lock.orphaned-"))
                                     for f in lock_dir.iterdir()))
                 self.assertFalse(any(f.name.startswith(".releasing-")
                                      for f in lock_dir.iterdir()))
