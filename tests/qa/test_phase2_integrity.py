@@ -259,3 +259,38 @@ def test_document_viewmodel_rejects_empty_checkin_without_journal_mutation(tmp_p
     assert panel.detail["latest"]["id"] == before
     assert panel.can_checkin
     assert native.read_bytes() == b"QA drawing"
+
+
+def test_cli_doc_verify_fails_closed_for_corrupt_revision(ws, managed_document, tmp_path):
+    """CLI exit status must expose corrupted immutable content to scripts."""
+    import subprocess
+    import sys
+
+    folder, source, assembly, before, doc, rev_a = managed_document
+    workspace = ws.meta_dir.parent
+    cmd = [sys.executable, "-m", "revisionworx", "--workspace", str(workspace),
+           "--json", "doc", "verify", doc["id"]]
+    clean = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert clean.returncode == 0, clean.stderr
+    assert "[]" in clean.stdout
+    ContentStore(ws).path_for(rev_a["sha256"]).write_bytes(b"corrupt blob")
+    damaged = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert damaged.returncode != 0, (
+        "CLI falsely reported success for a corrupt immutable revision"
+    )
+    assert rev_a["id"] in damaged.stdout or rev_a["label"] in damaged.stdout
+
+
+def test_cli_export_does_not_overwrite_existing_destination(ws, managed_document, tmp_path):
+    """A CLI export of immutable content must not silently overwrite user data."""
+    import subprocess
+    import sys
+
+    folder, source, assembly, before, doc, rev_a = managed_document
+    destination = tmp_path / "existing-export.idw"
+    destination.write_bytes(b"KEEP EXISTING USER CONTENT")
+    cmd = [sys.executable, "-m", "revisionworx", "--workspace",
+           str(ws.meta_dir.parent), "rev", "export", rev_a["id"], str(destination)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert destination.read_bytes() == b"KEEP EXISTING USER CONTENT"
