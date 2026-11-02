@@ -16,6 +16,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import hmac
+from itertools import islice
 import json
 import os
 from pathlib import Path
@@ -95,6 +96,8 @@ class WitnessedCoordinatorResearch:
     """
 
     _TABLES = ("authority", "commits", "audits", "epoch_state", "witness_binding")
+    _MAX_WITNESS_ENTRIES = 4096  # research limit; no automatic checkpoint
+    _MAX_STATE_ROWS = 10000  # research limit; production requires incremental commitments
 
     def __init__(self, db_path, epoch_guard_path, witness_dir, identities):
         self.core = CoordinatorResearch(db_path, epoch_guard_path)
@@ -122,12 +125,21 @@ class WitnessedCoordinatorResearch:
 
     def _state_digest(self, db):
         state = {}
+        count = 0
         for table in self._TABLES:
-            state[table] = db.execute("SELECT * FROM " + table + " ORDER BY 1").fetchall()
+            remaining = self._MAX_STATE_ROWS - count
+            rows = db.execute("SELECT * FROM " + table + " ORDER BY 1 LIMIT ?",
+                              (remaining + 1,)).fetchall()
+            if len(rows) > remaining:
+                raise Fenced("research witness state limit reached; migrate/checkpoint required")
+            count += len(rows)
+            state[table] = rows
         return _digest(state)
 
     def _head(self):
-        files = sorted(self.witness.iterdir())
+        files = sorted(islice(self.witness.iterdir(), self._MAX_WITNESS_ENTRIES + 1))
+        if len(files) > self._MAX_WITNESS_ENTRIES:
+            raise Fenced("research witness history limit exceeded; migrate/checkpoint required")
         if not files:
             return None
         previous = None
@@ -162,6 +174,8 @@ class WitnessedCoordinatorResearch:
         head = self._head()
         if (previous is None) != (head is None):
             raise Fenced("witness chain changed unexpectedly")
+        if head is not None and head["index"] + 1 >= self._MAX_WITNESS_ENTRIES:
+            raise Fenced("research witness history limit reached; migrate/checkpoint required")
         if previous is not None and (head["digest"] != previous["digest"]):
             raise Fenced("witness head changed during mutation")
         entry = {"index": 0 if head is None else head["index"] + 1,
