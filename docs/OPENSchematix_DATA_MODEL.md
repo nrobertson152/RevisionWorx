@@ -34,3 +34,14 @@ The prototype emits a `source_instance` key and `target_key: [manufacturer, part
 Future confirmed edges require `revisionworx_document_id`, immutable `source_revision_id`, stable managed `part_id`, optional `target_revision_id`, `provenance` (explicit mapping vs native part field), `verified_at`, `coverage_scope` and `status` (verified, unresolved, stale, invalid). Existing settings should never silently infer the target revision from a drawing title-block revision, since that revision describes the drawing, not the part.
 
 For BOM comparisons, group confirmed managed-part identities with revision and source-level quantity, compare added/removed/changed lines against two immutable document snapshots, and record any unknown quantities as unknown rather than zero. Highlight changes in incomplete or unresolved records separately.
+
+## Immutable revision-content interface (prototype, 2026-11-01)
+
+The adapter now exposes two read-only entry points:
+
+- `inspect(path: str | Path) -> dict`: inspects one explicitly selected regular file, rejects symlinks, checks same-descriptor size/mtime/ctime consistency during the snapshot read, and parses/hash-consumes the captured bytes.
+- `inspect_bytes(raw: bytes, suffix: str) -> dict`: inspects **already captured immutable bytes**, with original registered document suffix `.schematix` or `.osch`. It performs no filesystem access, no record mutations, no checkout, and no revision publication. It computes `file_sha256` over those exact bytes.
+
+Recommended future Phase 2 handoff (subject to Lead Architect approval): retrieve a verified immutable source revision through the document service, pass those raw bytes and the registered document's original suffix to `inspect_bytes`, require result `file_sha256 == revision.sha256`, then attach `revision_id`, `document_id`, extractor version and observation time in the **disposable local index**. A path in `.revisionworx/content/sha256/...` lacks a suffix and must not be passed to `inspect(path)` as a workaround. The adapter must not import or write `revisionworx.workspace`, `documents.py`, GUI, or SQLite. Phase 4 is responsible for explicit manufacturer-candidate to managed-part identity mapping. A source drawing's title-block revision is never a PDM revision ID.
+
+No native BOM authority is added by either entry point. Both return the same explicitly incomplete `bom_candidates` and `bom_status` fields.
