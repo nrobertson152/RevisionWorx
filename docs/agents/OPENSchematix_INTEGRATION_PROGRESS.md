@@ -133,3 +133,15 @@
 **Open risks:** No full native BOM generation or multiunit device equivalence; native BOM 16/5/7 versus candidate 5/0/0 remains intentionally distinct. No production managed-part mapping or authoritative dependency publication. Native custom symbol registry and external libraries are not indexed. No Windows-specific adapter execution. Existing Phase 1 stale-writer issue #8 is outside this integration. No source changes to OpenSchematix or core RevisionWorx.
 
 **Next actions:** Seek Claude approval of proposed immutable-content handoff, SHA responsibility and observation storage; coordinate PR base/stacking with Phase 1/2; add native BOM parity only with tested upstream symbol metadata and explicit authorization. Maintain draft PR, no merge, tag or release.
+
+## Current-head verification, BOM source reconciliation and strict JSON — 2026-11-01
+
+**Orders:** Reread newest `main` integration orders, including the Director's current-head green requirement. PR #2 remains draft on `integration/openschematix`; no core or upstream modifications.
+
+**Verified baseline:** [Actions run 41380313246](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380313246) on exact head `ca5355a4c6878b111d547de597dff05c36caa076`: Linux Python 3.11 and 3.13 both successful, **30/30** tests in each environment. This supersedes earlier code-only evidence.
+
+**New deliverables:** `2229f8985e8ad2b52b0dd61d83038207afbab462` rejects ambiguous duplicate JSON keys; `5b6ed091376bbc1ba918ae47eb7f88b42311bf44` adds native/legacy regression tests; `7aec88ba2d63435866f78fe8a16c85f505475ec8` adds a source-grounded `bom.generate` versus `bom_candidates` reconciliation matrix (eligibility, physical device grouping, duplicate slots, symbolic identity, multiple part numbers, sheet filtering, source refs) in `docs/OPENSchematix_DATA_MODEL.md`. Native source reviewed at OpenSchematix commit `74e4c79`. This **does not implement or claim BOM parity**.
+
+**New CI finding and fix:** [Actions run 41380936524](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380936524) executed **32 tests, 30 passed and 2 failed** on both Python versions. Duplicate-key rejection correctly raised `InvalidProject`, but the JSON wrapper replaced its diagnostic with a generic `invalid JSON` message. Fixed by preserving `InvalidProject` in commit `c5e2ec0717b19f34fcc03730afe4e40f029dfc9d`. The **32-test current code is not yet verified green**; wait for CI at the final head before claiming success.
+
+**Risks and next actions:** full native BOM equivalence and custom symbol registry absent; manufacturer candidate identities unresolved; immutable Phase 2 read handoff and disposable observation ownership require Claude approval; PR #2 retarget/merge requires Director coordination. Check 32/32 on both Python versions at current code SHA, report any failure, and keep PR draft. No merge, tag or release.
