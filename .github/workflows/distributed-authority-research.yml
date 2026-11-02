@@ -50,3 +50,25 @@ jobs:
         env:
           REVISIONWORX_PHASE1_CHECKOUT: ${{ github.workspace }}/phase1-foundation
         run: python -m unittest -v prototype.test_phase1_lock_race prototype.test_phase1_cache_watermark
+
+  phase2-lock-break-order:
+    name: Phase 2 real-code administrative override ordering (research)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout distributed research
+        uses: actions/checkout@v4
+        with:
+          path: research
+      - name: Checkout actual Phase 2 implementation
+        uses: actions/checkout@v4
+        with:
+          ref: phase2-documents
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Verify post-audit fence and reproduce pre-audit window
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_phase2_lock_break_order
