@@ -1,14 +1,10 @@
-"""Deterministic actual-Phase-2 administrative lock-break ordering regression.
+"""Actual-Phase-2 SAFETY acceptance for administrative journal-first revocation.
 
-Tests the precise window AFTER the administrator moves writer.lock but BEFORE
-the break audit is committed. ADR-015 fences entries after the audit sequence,
-so a revoked writer's entry published in this window may still take effect.
-
-Run with REVISIONWORX_PHASE2_CHECKOUT=/path/to/phase2-documents from the
-research checkout. Skips without a separate, actual Phase 2 checkout.
-
-This is a DEFECT REPRODUCTION: the test passes only if the unsafe behavior
-can be produced. It is NOT a passing safety acceptance test.
+The older Phase 2 code (pre-ADR-015 rev.2) allowed an effective entry between
+lock rename and audit. Those old-branch defect reproductions are preserved in
+GitHub Actions 41381819173 / 41382608414; this suite asserts the reverse:
+a token revoked in the authoritative journal can never create an effective
+entry. Run with REVISIONWORX_PHASE2_CHECKOUT to the current Phase 2 checkout.
 """
 from __future__ import annotations
 
@@ -24,129 +20,139 @@ PHASE2 = os.environ.get("REVISIONWORX_PHASE2_CHECKOUT")
 
 
 @unittest.skipUnless(PHASE2, "requires actual phase2-documents checkout")
-class Phase2AdministrativeBreakOrderingProbe(unittest.TestCase):
-    def test_post_audit_stale_entry_is_correctly_fenced(self):
-        """Positive ADR-015 control: a stale append AFTER the audit is rejected."""
+class Phase2AdministrativeBreakAcceptance(unittest.TestCase):
+    def _load(self):
         source = Path(PHASE2).expanduser().resolve()
+        self.assertTrue((source / "revisionworx" / "workspace.py").is_file())
         sys.path.insert(0, str(source))
         from revisionworx.workspace import LockLostError, RecordPut, Workspace
+        from revisionworx import workspace as workspace_module
+        self.assertEqual(Path(sys.modules[Workspace.__module__].__file__).resolve(),
+                         source / "revisionworx" / "workspace.py")
+        return Workspace, RecordPut, LockLostError, workspace_module
 
+    def test_stale_writer_after_revocation_never_effective(self):
+        Workspace, RecordPut, LockLostError, _ = self._load()
         with tempfile.TemporaryDirectory() as td:
-            stale = Workspace.create(Path(td) / "project", "PostAuditFence")
+            stale = Workspace.create(Path(td) / "work", "Fencing")
             token = Workspace.read_writer_lock(stale.meta_dir)["token"]
+            rid = "prj_" + "b" * 32
             original_check = stale._check_lock_still_held
-            rid = "prj_" + "9" * 32
 
-            def check_then_admin_break():
+            def break_after_successful_preflight():
                 original_check()
-                Workspace.break_writer_lock(stale.meta_dir, token, "post-audit positive control")
+                Workspace.break_writer_lock(stale.meta_dir, token, "admin revoked stalled writer")
 
             try:
-                stale._check_lock_still_held = check_then_admin_break
+                stale._check_lock_still_held = break_after_successful_preflight
+                txid = "a" * 32
                 with self.assertRaises(LockLostError):
-                    stale.commit("test.post.audit.fenced", [
-                        RecordPut("project", rid, {"id": rid, "name": "should never take effect"})],
-                        txid="b" * 32)
+                    stale.commit("test.revoked", [
+                        RecordPut("project", rid, {"name": "cannot commit"})],
+                        txid=txid)
                 with Workspace.open(stale.meta_dir) as reader:
-                    self.assertEqual(reader.transaction_outcome("b" * 32)["state"], "fenced")
                     self.assertIsNone(reader.get("project", rid))
+                    self.assertNotIn(rid, reader.list("project"))
+                    self.assertIn(reader.transaction_outcome(txid)["state"],
+                                  ("not-found", "fenced"))
+                    audit = [reader.read_entry(s) for s in reader.journal_seqs()
+                             if reader.read_entry(s).get("op") == "workspace.lock.break"]
+                    self.assertEqual(len(audit), 1)
+                    self.assertEqual(audit[0].get("revokes"), token)
             finally:
                 stale._lock_token = None
                 stale.close()
 
-    def test_writer_publishes_between_lock_rename_and_audit(self):
-        source = Path(PHASE2).expanduser().resolve()
-        if not (source / "revisionworx" / "workspace.py").is_file():
-            self.fail("REVISIONWORX_PHASE2_CHECKOUT does not contain revisionworx/workspace.py")
-        sys.path.insert(0, str(source))
-        from revisionworx.workspace import Workspace, RecordPut
-
-        self.assertEqual(Path(sys.modules[Workspace.__module__].__file__).resolve(),
-                         source / "revisionworx" / "workspace.py")
+    def test_revocation_committed_before_evidence_move_fences_paused_writer(self):
+        """Pause admin after journal revocation, before writer.lock os.replace."""
+        Workspace, RecordPut, LockLostError, workmod = self._load()
         with tempfile.TemporaryDirectory() as td:
-            stale = Workspace.create(Path(td) / "project", "AdminBreakRace")
-            preflight = threading.Event()
-            renamed = threading.Event()
-            stale_done = threading.Event()
-            admin_go = threading.Event()
-            errors = []
-            stale_result = []
-            rid = "prj_" + "8" * 32
+            stale = Workspace.create(Path(td) / "work", "Ordering")
             token = Workspace.read_writer_lock(stale.meta_dir)["token"]
+            rid = "prj_" + "c" * 32
+            preflight = threading.Event()
+            revocation_published = threading.Event()
+            release_admin = threading.Event()
+            writer_done = threading.Event()
+            errors = []
+            outcomes = []
             original_check = stale._check_lock_still_held
-            original_open = Workspace.open
-            admin_thread = None
-            writer_thread = None
+            real_replace = workmod.os.replace
 
-            def checked_then_wait():
+            def check_then_pause():
                 original_check()
                 preflight.set()
-                if not renamed.wait(15):
-                    raise TimeoutError("admin did not rename lock in time")
+                if not revocation_published.wait(15):
+                    raise AssertionError("administrator did not publish revocation")
 
-            def intercept_open(*args, **kwargs):
-                if threading.current_thread() is admin_thread and kwargs.get("writable"):
-                    # break_writer_lock() calls cls.open() only AFTER os.replace
-                    # moved writer.lock. This blocks audit publication.
-                    renamed.set()
-                    if not admin_go.wait(15):
-                        raise TimeoutError("test did not release admin")
-                return original_open(*args, **kwargs)
+            def pause_evidence_move(source, destination):
+                if (threading.current_thread().name == "administrator"
+                        and Path(source).name == "writer.lock"
+                        and "writer.lock.broken-" in Path(destination).name):
+                    revocation_published.set()
+                    if not release_admin.wait(15):
+                        raise AssertionError("administrator evidence move release timed out")
+                return real_replace(source, destination)
 
             def writer():
                 try:
-                    stale_result.append(stale.commit(
-                        "test.stale.between.rename.and.audit",
-                        [RecordPut("project", rid, {"id": rid, "name": "stale"})]))
+                    stale.commit("test.revoked.before.evidence.move", [
+                        RecordPut("project", rid, {"name": "must never be visible"})],
+                        txid="d" * 32)
+                    outcomes.append("unexpected-commit")
+                except LockLostError:
+                    outcomes.append("fenced")
                 except Exception as exc:
                     errors.append(("writer", repr(exc)))
                 finally:
-                    stale_done.set()
+                    writer_done.set()
 
             def admin():
                 try:
                     Workspace.break_writer_lock(stale.meta_dir, token,
-                                                "audit boundary race test")
+                                                "admin journals revocation before evidence")
                 except Exception as exc:
                     errors.append(("admin", repr(exc)))
                 finally:
-                    admin_go.set()
+                    release_admin.set()
 
+            writer_thread = threading.Thread(target=writer, name="revoked-writer")
+            admin_thread = threading.Thread(target=admin, name="administrator")
             try:
-                stale._check_lock_still_held = checked_then_wait
-                with patch.object(Workspace, "open", side_effect=intercept_open):
-                    writer_thread = threading.Thread(target=writer, name="revoked-writer")
+                stale._check_lock_still_held = check_then_pause
+                with patch.object(workmod.os, "replace", side_effect=pause_evidence_move):
                     writer_thread.start()
-                    self.assertTrue(preflight.wait(15), "writer never reached preflight")
-                    admin_thread = threading.Thread(target=admin, name="admin-break")
+                    self.assertTrue(preflight.wait(15), "writer never reached token preflight")
                     admin_thread.start()
-                    self.assertTrue(renamed.wait(15), "admin never moved writer.lock")
-                    self.assertTrue(stale_done.wait(15), "writer did not finish while audit paused")
-                    admin_go.set()
-                    admin_thread.join(15)
+                    self.assertTrue(revocation_published.wait(15),
+                                    "admin did not journal revocation before evidence move")
+                    self.assertTrue(writer_done.wait(15),
+                                    "revoked writer did not complete while admin paused")
+                    release_admin.set()
                     writer_thread.join(15)
-                self.assertFalse(admin_thread.is_alive())
+                    admin_thread.join(15)
                 self.assertFalse(writer_thread.is_alive())
+                self.assertFalse(admin_thread.is_alive())
                 self.assertEqual(errors, [])
-                self.assertEqual(len(stale_result), 1)
-                with original_open(stale.meta_dir) as reader:
-                    entries = [reader.read_entry(i) for i in reader.journal_seqs()]
+                self.assertEqual(outcomes, ["fenced"])
+                with Workspace.open(stale.meta_dir) as reader:
+                    self.assertIsNone(reader.get("project", rid))
+                    self.assertIn(reader.transaction_outcome("d" * 32)["state"],
+                                  ("not-found", "fenced"))
+                    entries = [reader.read_entry(s) for s in reader.journal_seqs()]
+                    revocations = [e for e in entries if e.get("revokes") == token]
+                    self.assertEqual(len(revocations), 1)
                     stale_entries = [e for e in entries
-                                     if e["op"] == "test.stale.between.rename.and.audit"]
-                    breaks = [e for e in entries if e["op"] == "workspace.lock.break"]
-                    self.assertEqual(len(stale_entries), 1)
-                    self.assertEqual(len(breaks), 1)
-                    self.assertLess(stale_entries[0]["seq"], breaks[0]["seq"])
-                    # This confirms the currently unsafe window. The corrective
-                    # implementation should make this assertion FAIL.
-                    self.assertFalse(reader.is_fenced(stale_entries[0]))
-                    self.assertIsNotNone(reader.get("project", rid))
+                                     if e["op"] == "test.revoked.before.evidence.move"]
+                    for entry in stale_entries:
+                        self.assertGreater(entry["seq"], revocations[0]["seq"])
+                        self.assertTrue(reader.is_fenced(entry))
             finally:
-                admin_go.set()
-                renamed.set()
-                if writer_thread:
+                release_admin.set()
+                revocation_published.set()
+                if writer_thread.is_alive():
                     writer_thread.join(5)
-                if admin_thread:
+                if admin_thread.is_alive():
                     admin_thread.join(5)
                 stale._lock_token = None
                 stale.close()
