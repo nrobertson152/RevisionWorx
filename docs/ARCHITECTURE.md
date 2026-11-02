@@ -196,6 +196,14 @@ not. BOM import, component identities and revision tracking are **PROPOSED** (Ph
 documents `components[].props.part_number/manufacturer` and an `in_bom` flag per component, which
 the Phase 5 adapter should use. OpenSchematix source is not modified.
 
+### Backported from Phase 2: ADR-015 rev. 2 and ADR-016 (issues #8, #9, #10) — IMPLEMENTED, QA-accepted on local FS
+- **#8:** lock revocation is a journal entry and the single linearization point. Entries signed with a
+  revoked token are fenced: ignored by readers, replay and the index, and refused to the stale writer.
+- **#9:** index rebuild uses a head-checked stable snapshot.
+- **#10:** lock release retries Windows sharing violations, re-checking ownership on every attempt.
+- **Full rationale** is in ADR-015/016 on `phase2-documents`.
+- **Not covered:** SMB/two-host safety. Multi-user use requires the coordinator (issue #5).
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).

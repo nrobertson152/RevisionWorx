@@ -52,6 +52,19 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-02 — Phase 1 backport of QA-accepted #8/#9/#10 (branch `phase1-backport-8-9-10`, awaiting director decision)
+- **Contents:** cherry-picks of `47d8165` (ADR-015 rev. 1) and `325b7a8` (ADR-015 rev. 2, ADR-016) onto
+  `412e69a`. The index rebuild snapshot is adapted to Phase 1's record kinds (root, project).
+- **Excluded on purpose (not yet QA-accepted):** `03b3800` (txid idempotency/ADR-017), `1586845`
+  (GC), `f3c5438` (revision chain).
+- **QA acceptance relied on:** run 41387311010 (Linux and Windows, Python 3.13), #8/#9/#10 acceptance
+  cases passing; Windows six-process race 5/5. The remaining strict xfail is the physical fenced
+  artifact, which ADR-015 allows.
+- **Tests:** on this branch, **128 passed, 1 skipped (Qt)** (Linux, Python 3.13.18). A trial merge of
+  this branch into `phase2-documents` resolves by keeping Phase 2's `workspace.py`/`index.py`;
+  the result is identical to `phase2-documents` and gives 170 passed, 1 skipped.
+- **Decision needed:** fast-forward `phase1-foundation` (PR #6) to this branch. No force-push is needed.
+
 ### 2026-11-01 (session 2) — Phase 1 review, store hardening, PySide6 migration
 - **Directive:** the project director's Phase 1 review / Phase 2 directive. GUI must use PySide6.
 - **Commits on `phase1-foundation`:**
