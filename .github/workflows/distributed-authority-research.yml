@@ -30,7 +30,7 @@ jobs:
         run: python -m unittest -v prototype.test_authority
 
   phase1-stale-writer-reproduction:
-    name: Phase 1 real-code stale-writer reproduction (research)
+    name: Phase 1 real-code fencing and cache-watermark probes (research)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout distributed research
@@ -49,4 +49,4 @@ jobs:
         working-directory: research
         env:
           REVISIONWORX_PHASE1_CHECKOUT: ${{ github.workspace }}/phase1-foundation
-        run: python -m unittest -v prototype.test_phase1_lock_race
+        run: python -m unittest -v prototype.test_phase1_lock_race prototype.test_phase1_cache_watermark
