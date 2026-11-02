@@ -92,6 +92,40 @@ class Phase2ImmutableRevisionContractTests(unittest.TestCase):
                 finally:
                     ws.close()
 
+    def test_copied_native_identity_is_not_global_document_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ws, path_a, raw, doc_a, rev_a = self._registered_fixture(
+                Path(temp), "demo_project.schematix")
+            try:
+                # A user may duplicate a native CAD project in the same
+                # managed project. Its internal source UIDs are copied too.
+                path_b = path_a.with_name("demo_project_copy.schematix")
+                path_b.write_bytes(raw)
+                project_id = doc_a["project_id"]
+                doc_b, rev_b = self.documents.register_document(
+                    ws, project_id, path_b)
+                self.assertNotEqual(doc_a["id"], doc_b["id"])
+                self.assertNotEqual(rev_a["id"], rev_b["id"])
+                self.assertEqual(rev_a["sha256"], rev_b["sha256"])
+                store = self.ContentStore(ws)
+                data = store.path_for(rev_a["sha256"]).read_bytes()
+                before_seq = ws.head_seq()
+                source_a = inspect_bytes(data, ".schematix")
+                source_b = inspect_bytes(data, ".schematix")
+                self.assertEqual(source_a["project_uid"], source_b["project_uid"])
+                self.assertEqual(source_a["components"][0]["instance_id"],
+                                 source_b["components"][0]["instance_id"])
+                # The safe global association is (doc_id, rev_id, instance);
+                # source instance keys alone collide after copying a project.
+                self.assertNotEqual(
+                    (doc_a["id"], rev_a["id"], source_a["components"][0]["instance_id"]),
+                    (doc_b["id"], rev_b["id"], source_b["components"][0]["instance_id"]))
+                self.assertEqual(ws.head_seq(), before_seq)
+                self.assertEqual(path_a.read_bytes(), raw)
+                self.assertEqual(path_b.read_bytes(), raw)
+            finally:
+                ws.close()
+
     def test_two_real_document_revisions_index_independently(self):
         with tempfile.TemporaryDirectory() as temp:
             ws, path, original, doc, rev_a = self._registered_fixture(
