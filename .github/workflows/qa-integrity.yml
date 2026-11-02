@@ -16,6 +16,8 @@ jobs:
   core-and-qa:
     name: "${{ matrix.os }} / Python ${{ matrix.python-version }}"
     runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
     strategy:
       fail-fast: false
       matrix:
@@ -26,6 +28,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install Linux Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
       - name: Install test dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run independent QA tests
