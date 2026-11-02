@@ -1,5 +1,23 @@
 # RevisionWorx QA strategy
 
+
+## Latest independently verified ADR-019 acceptance (2026-11-01 ET)
+
+**Current test target:** Claude Phase 2 `d656884b39401134149273dd0121ef620b76eb8e` + independent QA `1def701cd06e5e373ab37ca1d1d250cf13c55821`. [Full Linux/Windows Python 3.11/3.13 CI](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199207) succeeded with one pinned source SHA across all four jobs; [focused acceptance + Windows multi-process stress](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199197) also succeeded.
+
+| Runner | QA-only | Complete Phase 2 |
+| --- | --- | --- |
+| Linux Python 3.11 and 3.13, each | **41 passed, 3 skipped, 1 strict xfailed** | **223 passed, 3 skipped, 1 strict xfailed** |
+| Windows Python 3.11 and 3.13, each | **44 passed, 1 strict xfailed** | **225 passed, 1 skipped, 1 strict xfailed** |
+
+Focused Linux Python3.13 `tests/qa/test_integrity.py`: **20 passed, 3 skipped, 1 xfailed**; focused Windows: **23 passed, 1 xfailed**. Windows Server 2025 Python3.13.17 ran **5/5 six-process checkout trials, 30 worker attempts**; each produced one winner and five conflicts, all exits zero, no orphaned lock and no journal verification problems.
+
+Two independently added ADR-019 acceptance tests **passed** on both OSes: a revoked releaser A cannot remove successor B's lock or prevent B's valid commit; and after A crashes having moved B's lock into a `.releasing-*` file, new C must journal-revoke B before publishing, preserve the evidence, refuse B's stale commit and clear the abandoned private file. The previously added Windows transient, persistent and reassigned-token tests now inject at ADR-019's **actual atomic move**, not a superseded `Path.unlink`. Commits: `06e7d8ea9f90918aca5893bb646aab8d9dd24eae` (failpoint compatibility), `1def701cd06e5e373ab37ca1d1d250cf13c55821` (two independent new regressions).
+
+**Remaining acceptance gap:** one strict xfail tests *physical absence of a late journal file*; ADR-015 can instead retain a **logically fenced, ineffective** late artifact. This xfail is not physical-nonpublication success, and passing logical fences are not evidence of physical SMB correctness. Physical two-host Windows coordinator/SMB, installed native Windows/Linux desktop builds, backup/restore epochs and authenticated coordinator remain **NOT VERIFIED**. This is QA review evidence, not merge/release authorization.
+
+
+
 **Current extended independently verified checkpoint:** Phase 2 `d202b28305f765b4edead3dede211dd9e7a891a6` + QA `f5b8a13064d8a482fa9492da73da333cf6615a15`. [Full matrix](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185333) passed on Linux and Windows Python 3.11/3.13: each Linux full suite **215 passed, 3 skipped, 1 xfailed**, each Windows full suite **217 passed, 1 skipped, 1 xfailed**. [Focused tests and real Windows process stress](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388185328): Linux **18 passed/3 skipped/1 xfailed**, Windows **21 passed/1 xfailed**, and **5/5 six-process checkout trials** (30 attempts). New independent tests verify admin crash after journal revocation, bounded index retry fail-closed, persistent Windows lock-release failure, and ownership change during retry. The strict xfail concerns physical journal file existence only; effective mutation remains fenced. The latest matrix and merge-readiness handoff supersede prior f3c checkpoint status. Native installed GUI and physical Windows coordinator/SMB remain unqualified.
 
 
