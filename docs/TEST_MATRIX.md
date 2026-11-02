@@ -28,9 +28,9 @@
 | IMPACT-01 | P0 | Before You Revise shows coverage and does not imply incompatibility | PLANNED |
 | INDEX-01 | P1 | Local cache corruption/staleness rebuilt | AUTOMATED (existing suite) |
 | SCALE-01 | P1 | 10k projects, 2m docs, 500k edges and actual query p95/RSS | PLANNED |
-| WINDOWS-01 | P0 | NTFS exclusive publish, Windows case/path rules | PLANNED |
+| WINDOWS-01 | P0 | NTFS exclusive publish, Windows case/path rules | Windows GitHub Actions original QA branch 111 passed/3 skipped on Python 3.11 and 3.13 (run 41371072088); case-sensitive-only test skipped; native installer and production NTFS certification NOT DONE |
 | SMB-NFS-01 | P0 | Two-host shared filesystem concurrency and disconnection | BLOCKED |
-| GUI-01 | P1 | Live PySide6 Documents tab under Linux offscreen and Windows desktop | PLANNED: PySide6 runtime not independently exercised |
+| GUI-01 | P1 | PySide6 Qt widget smoke on Linux offscreen and Windows | Windows Python 3.13 offscreen GitHub-hosted suite PASSED (PR merge run 41371072451); Linux Qt blocked by missing libEGL in first run; corrected-run result PENDING; installed native GUI not verified |
 
 No absent feature is considered a passing test.
 
