@@ -475,3 +475,43 @@ def test_index_rebuild_does_not_omit_pre_watermark_records_due_to_late_delete(tm
                 f"cache omitted root {rid} at cursor {index.cursor_seq()} "
                 f"although delete was published at seq {removed_seq[0]}"
             )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows NTFS sharing-violation semantics only")
+@pytest.mark.xfail(
+    strict=True, raises=PermissionError,
+    reason="Issue #10: Workspace.close does not retry transient Windows writer.lock sharing violations",
+)
+def test_windows_writer_lock_close_survives_transient_sharing_violation(tmp_path, monkeypatch):
+    """Failpoint acceptance for a single transient WinError 32 at lock release.
+
+    Real six-process Windows checkout failures are in issue #10. This small
+    deterministic failpoint is only a regression for close retry behavior,
+    NOT an SMB concurrency test and NOT a substitute for the real race.
+    """
+    store = tmp_path / "store"
+    writer = Workspace.create(store, "QA Win32 lock cleanup")
+    lock = store / ".revisionworx" / "locks" / "writer.lock"
+    real_unlink = Path.unlink
+    attempts = []
+
+    def transient_share_violation(path, *args, **kwargs):
+        if path == lock:
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise PermissionError(13, "QA injected Windows sharing violation", str(path))
+        return real_unlink(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(Path, "unlink", transient_share_violation)
+            writer.close()
+        assert len(attempts) >= 2, "release should retry after the transient sharing violation"
+        assert not lock.exists(), "released writer lock must not remain orphaned"
+        with Workspace.open(store, writable=True) as successor:
+            assert successor.writable
+    finally:
+        # Cleanup applies only to the private disposable test workspace.
+        # A failed close leaves _closed=True in the current implementation.
+        if lock.exists():
+            real_unlink(lock)
