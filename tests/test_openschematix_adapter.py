@@ -1,5 +1,7 @@
 """Contract tests for the isolated OpenSchematix source indexer."""
+import hashlib
 import json
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
@@ -76,6 +78,26 @@ class AdapterTests(unittest.TestCase):
     def test_bad_json(self):
         path = self.legacy()
         path.write_text('{"format":')
+        with self.assertRaises(InvalidProject):
+            inspect(path)
+
+    def test_digest_matches_parsed_snapshot(self):
+        path = self.project()
+        expected = hashlib.sha256(path.read_bytes()).hexdigest()
+        result = inspect(path)
+        self.assertEqual(result["file_sha256"], expected)
+
+    def test_reject_oversized_source_before_parsing(self):
+        path = self.legacy()
+        with patch("revisionworx_integrations.openschematix.MAX_SOURCE", 10):
+            with self.assertRaisesRegex(InvalidProject, "source file exceeds size limit"):
+                inspect(path)
+
+    def test_reject_oversized_mimetype_member(self):
+        path = self.root / "oversized.schematix"
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("mimetype", "application/x-openschematix-project" + "X" * 500,
+                       compress_type=zipfile.ZIP_STORED)
         with self.assertRaises(InvalidProject):
             inspect(path)
 
