@@ -88,6 +88,25 @@ class WitnessedCoordinatorTests(unittest.TestCase):
             self.idp.authenticate("alice", "alice-password", ttl_seconds=0)
         self.assertEqual(self.idp.verify(self.admin, administrator=True), "operator")
 
+    def test_witness_capacity_blocks_mutation_without_commit(self):
+        """Bounded model must fail closed, not append uncheckable history."""
+        self.co._MAX_WITNESS_ENTRIES = 2  # genesis plus one transaction
+        credential = self.co.acquire("drawing", self.alice)
+        with self.assertRaises(Fenced):
+            self.co.publish(credential, self.alice, "over-cap", "payload",
+                            expected_revision=0)
+        self.assertEqual(self.co.outcome("over-cap", self.alice)["state"], "not-found")
+        self.assertEqual(self.co.snapshot("drawing")[2], 0)
+
+    def test_record_limit_rolls_back_without_advancing_witness(self):
+        """Even a valid checkout must not be published beyond verification bound."""
+        self.co._MAX_STATE_ROWS = 2  # epoch_state + witness_binding already occupy two
+        with self.assertRaises(Fenced):
+            self.co.acquire("drawing", self.alice)
+        self.co._MAX_STATE_ROWS = 10000
+        self.assertIsNone(self.co.snapshot("drawing"))
+        self.assertEqual(len(list(self.ledger.glob("*.json"))), 1)
+
     def test_revoke_and_audited_admin_override(self):
         old = self.co.acquire("drawing", self.alice)
         with self.assertRaises(Fenced):
