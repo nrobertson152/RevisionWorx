@@ -19,7 +19,7 @@ REVISIONWORX_PHASE1_CHECKOUT=/path/to/phase1-foundation \\
   python -m unittest -v prototype.test_phase1_lock_race
 ```
 
-Both opt-in Phase 1 test modules skip when the separate checkout is not supplied. The second probe, `test_phase1_cache_watermark.py`, tests whether `LocalIndex.rebuild()` materializes newer records while retaining an older captured journal cursor. Neither has been executed with the real Phase 1 code in the present local environment.
+Both opt-in Phase 1 test modules skip when the separate checkout is not supplied. The second probe, `test_phase1_cache_watermark.py`, tests whether `LocalIndex.rebuild()` materializes newer records while retaining an older captured journal cursor. Neither has been executed against real Phase 1 in the present *local* environment. However, the lock-break test **was executed successfully against the real Phase 1 checkout in GitHub Actions run 41371405600** and confirmed the stale-writer commit. The cache-watermark test remains unverified against real Phase 1.
 
 ## Verification record (2026-11-01)
 
