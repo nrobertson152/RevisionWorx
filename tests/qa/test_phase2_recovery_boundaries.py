@@ -80,22 +80,29 @@ def test_manual_orphan_clear_crash_must_not_silently_authorize_a_new_writer(tmp_
     evidence_files = list(locks.glob("writer.lock.orphaned-*"))
     if evidence_files:
         assert any(p.read_bytes() == evidence for p in evidence_files)
-    assert (orphan.exists() or audit), (
-        "administrative clear removed its only blocking orphan evidence "
-        "without publishing the required durable audit"
-    )
-    # Even if recovery stores its evidence differently, no unaudited writer can
-    # commit while clearance has not been made authoritative.
+    # Check the *effective write* boundary before the diagnostic evidence
+    # assertion. A move-before-audit crash currently allows a new writer to
+    # publish even though no administrator action was durably recorded.
+    unauthorized_rid = "root_" + "f" * 32
     if not audit:
+        rejected = False
         try:
             with Workspace.open(root, writable=True) as successor:
                 successor.commit("qa.unaudited.orphan.clear", [
-                    RecordPut("root", "root_" + "f" * 32, {"name": "unapproved"})
+                    RecordPut("root", unauthorized_rid, {"name": "unapproved"})
                 ])
         except (WorkspaceError, OSError):
-            pass
-        else:
-            raise AssertionError("a new writer committed after an unaudited orphan clear")
+            rejected = True
+        with Workspace.open(root) as reader:
+            effective = reader.get("root", unauthorized_rid) is not None
+            assert not effective and rejected, (
+                "a new writer committed an EFFECTIVE change after an unaudited "
+                "administrative orphan clear; original blocking evidence disappeared"
+            )
+    assert orphan.exists() or audit, (
+        "administrative clear removed its only blocking orphan evidence "
+        "without publishing the required durable audit"
+    )
 
 
 def test_transaction_outcome_differentiates_pre_and_post_publication_faults(ws, monkeypatch):
@@ -141,9 +148,13 @@ def test_transaction_outcome_differentiates_pre_and_post_publication_faults(ws, 
 
 
 def test_content_gc_audit_is_published_before_delete_and_precommit_failure_preserves_data(
-        ws, tmp_path, monkeypatch):
+        ws, tmp_path, monkeypatch, managed_document):
     """Audit-first GC: unreferenced old blob survives if journal publish fails."""
     store = ContentStore(ws)
+    _, _, _, _, doc, rev_a = managed_document
+    referenced_obj = store.path_for(rev_a["sha256"])
+    assert referenced_obj.is_file()
+    os.utime(referenced_obj, (time.time() - 7200, time.time() - 7200))
     orphan_source = tmp_path / "gc-orphan.bin"
     orphan_source.write_bytes(b"orphan object created before an aborted check-in")
     orphan = store.store_file(orphan_source)
@@ -159,7 +170,7 @@ def test_content_gc_audit_is_published_before_delete_and_precommit_failure_prese
     dry = D.gc_content(ws)
     assert [x["sha256"] for x in dry["orphans"]] == [orphan.sha256]
     assert dry["kept_young"] >= 1
-    assert old_obj.is_file() and young_obj.is_file()
+    assert old_obj.is_file() and young_obj.is_file() and referenced_obj.is_file()
     assert ws.head_seq() == before
 
     real_publish = atomicio.publish_exclusive
@@ -171,8 +182,7 @@ def test_content_gc_audit_is_published_before_delete_and_precommit_failure_prese
         m.setattr(atomicio, "publish_exclusive", no_audit)
         with pytest.raises(OSError, match="QA GC journal fault"):
             D.gc_content(ws, apply=True)
-    assert old_obj.is_file()
-    assert young_obj.is_file()
+    assert old_obj.is_file() and young_obj.is_file() and referenced_obj.is_file()
     assert ws.head_seq() == before
 
     original_unlink = Path.unlink
@@ -190,7 +200,8 @@ def test_content_gc_audit_is_published_before_delete_and_precommit_failure_prese
         m.setattr(Path, "unlink", deletion_requires_durable_audit)
         done = D.gc_content(ws, apply=True)
     assert observed and done["removed"]
-    assert not old_obj.exists() and young_obj.exists()
+    assert not old_obj.exists() and young_obj.exists() and referenced_obj.exists()
+    assert D.verify_revisions(ws, doc["id"]) == []
     assert ws.head_seq() == before + 1
     assert ws.verify()["problems"] == []
 
