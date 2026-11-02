@@ -194,3 +194,29 @@
 **Evidence-backed scope:** Native OpenSchematix `bom.generate` is verified against three real examples (16/5/7 lines); explicit unresolved candidate groups remain 5/0/0 with unknown quantities. Native K1's 3 units count as 1 physical device; Z1/Z2/Z4 group as quantity 3. The five explicit demo manufacturer-part keys match their native part-number-bearing line identities; this is **not full native BOM parity**. Phase 2 immutable content indexing is tested on disposable workspaces but not integrated into the authoritative storage services.
 
 **Remaining blockers/next tasks:** Await Claude approval of the read-only `inspect_bytes` content handoff, observation storage/refresh and PDM SHA ownership; await Director/Claude restacking of PR #2 with draft PRs #6/#7 and resolution of `docs/DEVELOPMENT_PROGRESS.md` overlap. No managed part identity inference, complete native BOM import, SMB/NFS production claim, or Windows core storage testing. Keep PR draft; no merge, release, or unauthorized retarget. Updated `docs/OPENSchematix_CLAUDE_HANDOFF.md` with the latest evidence and restrictions.
+
+## Final integration approval package and conflict cleanup — 2026-11-01
+
+**Role, scope:** OpenSchematix Integration Engineer on `integration/openschematix`, existing draft PR #2. Read current `main` `docs/agents/README.md` and active `OPENSchematix_INTEGRATION_ORDERS.md`, plus `docs/agents/CLAUDE_RESUME_HANDOFF.md` and latest PRs #2/#6/#7. The resume handoff reports Claude's newer Phase 2 candidate repairs for #8/#9/#10 and independent QA still pending; no claim of production safety is made here.
+
+### Substantive handoff and merge-conflict corrections (commit `467e78dd8c4a6e10de8a6cb5974acd6ebd9a111d`)
+- `docs/OPENSchematix_CLAUDE_HANDOFF.md`: explicit proposed request/observation response envelopes, error classifications, SHA/caller responsibility, disposable observation key, lifecycle/refresh rules, and six decisions for Claude. Replaced unsafe illustrative `assert`-based pseudocode with bounded SHA-verified, read-only example using *existing* `Workspace.get`, `ContentStore.path_for`, and `inspect_bytes`. Corrected original suffix to `revision.source_rel_path`, not mutable `document.rel_path`. This is a **proposal**; no production orchestration API implemented.
+- `docs/DEVELOPMENT_PROGRESS.md`: restored byte-identical `main` content on own branch, eliminating PR #2's obsolete appended *"tests never executed"* paragraph and removing the root progress file from PR #2's changed-file list. All integration progress lives in this assignment-specific file.
+- `tests/fixtures/openschematix/README.md`: restored exact Phase 1 file SHA `ed11a4adffcef6d44e78b74b15e03514b6f7af56` on the integration branch; added `tests/fixtures/openschematix/INTEGRATION_PROVENANCE.md` for full native BOM fixtures and Git blob identities. Shared `.schematix` and `.osch` blobs are byte-identical between PRs #2/#6. No Claude branch was modified.
+- `.github/workflows/openschematix-adapter.yml`: Phase 2 overlay pin updated from historical `47d81658` to newer `325b7a801de15c082616781fe086bbd95cb350b6`, the actual inspected head of draft PR #7. PR #2 **was not rebased, retargeted or merged**.
+
+### Actual verified execution
+[GitHub Actions run 41387214269](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387214269) executed exact commit `467e78dd8c4a6e10de8a6cb5974acd6ebd9a111d` and **all four matrix jobs passed**, independently checked in GitHub job logs:
+- Ubuntu Python 3.11 and Python 3.13 each: `python -m unittest discover -s tests -p 'test_openschematix_adapter.py' -v` **36/36**; native oracle **4/4**; actual pinned newer Phase 2 contract **3/3** = **43/43** each.
+- Windows Python 3.11 and Python 3.13 each: standalone adapter **36/36**, native oracle **4/4**, Phase 2 contract deliberately not executed = **40/40** each.
+- **166 passing executions across four OS/Python jobs**. These are not 166 different test methods, nor tests of #8/#9/#10 safety acceptance, Windows Phase 2 storage, or physical SMB/NFS.
+
+### PR stacking/conflict evidence and approval request
+Live changed-file lists showed historical PR #2 versus #6 overlaps in four paths: `docs/DEVELOPMENT_PROGRESS.md`, the shared fixtures README, and two fixtures. PR #2 versus #7 overlap was only the root progress file. The obsolete root progress delta is now removed; README matches the Phase 1 blob exactly; the two fixtures already have identical blobs. Safe proposed sequence after Director approval: resolve #8/#9/#10 QA acceptance, merge #6, restack then merge #7 when approved, and only after Claude approves the read-only byte/observation handoff restack/integrate PR #2. No automatic merge action executed.
+
+### Remaining decisions/gates
+- Claude must explicitly approve immutable content access, exact SHA validation owner, historical original extension, authoritative `doc_id/rev_id`, cache observation owner/invalidation, and all BOM/part/dependency publication boundaries.
+- No native BOM import or source symbol registry interpretation, no managed parts, no verified where-used graph, no production Windows storage or SMB/NFS qualification.
+- A separate Windows Phase 2 disposable test is **not** run; the known Windows writer-lock race (#10) is Claude/QA scope. PR remains draft.
+
+**CI cost discipline:** the next workflow revision adds path filters so documentation-only progress log updates will not invoke four runner jobs. CI continues on adapter, fixture/test, or workflow changes and remains manually dispatchable. No redundant full rerun purely to publish this note. At this checkpoint the newly path-filtered workflow has not been independently re-verified; the latest pinned-overlay CI at `467e78dd` is green.

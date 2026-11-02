@@ -3,6 +3,11 @@ on:
   push:
     branches:
       - integration/openschematix
+    paths:
+      - '.github/workflows/openschematix-adapter.yml'
+      - 'revisionworx_integrations/**'
+      - 'tests/test_openschematix_*.py'
+      - 'tests/fixtures/openschematix/**'
   workflow_dispatch:
 concurrency:
   group: openschematix-adapter-${{ github.ref }}

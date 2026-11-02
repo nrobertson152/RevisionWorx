@@ -27,8 +27,11 @@ member names, corrupt JSON/ZIP data, and unsupported future schemas.
 ## 2. Proposed handoff at the actual Phase 2 API boundary
 
 Reviewed `revisionworx/documents.py` and `revisionworx/content.py` on
-`phase2-documents` (tested at commit
-`47d81658764cd6bde60e391ac9aac24e722317e8`).
+`phase2-documents`; the branch was subsequently updated for Issues #8/#9/#10.
+The disposable integration contract now runs against pinned latest inspected
+Phase 2 commit `325b7a801de15c082616781fe086bbd95cb350b6`.
+Those defect-fix candidates are separate from this adapter and are *not*
+independently certified by our interoperability smoke tests.
 
 The authoritative document record has `id`, `project_id`, `rel_path`,
 `type_id`, `latest_rev_id` and `released_rev_id`. The immutable revision
@@ -262,8 +265,11 @@ claim is made.
 - **Native oracle:** separately runs the pinned OpenSchematix
   generator, [run 41381776932](https://github.com/nrobertson152/RevisionWorx/actions/runs/41381776932).
 - **Actual Phase 2 draft:** isolated temporary-workspace integration tests
-  against `phase2-documents` pinned at `47d81658764cd6bde60e391ac9aac24e722317e8`;
+  against the earlier `phase2-documents` snapshot `47d81658764cd6bde60e391ac9aac24e722317e8`;
   [run 41381903865](https://github.com/nrobertson152/RevisionWorx/actions/runs/41381903865).
+  Subsequent [run 41387214269](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387214269)
+  verified the same three Linux Phase 2 contract tests on both Python
+  versions using newer Phase 2 SHA `325b7a801de15c082616781fe086bbd95cb350b6`.
 - **Expanded current matrix:** [run 41382647720](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382647720)
   at code/workflow commit `11abac8534231c6d7b029d29d75af8cd976a8f84`:
   Linux Python 3.11 and 3.13 each **36 standalone + 4 native oracle + 3
