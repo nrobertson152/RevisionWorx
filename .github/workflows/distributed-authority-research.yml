@@ -71,4 +71,4 @@ jobs:
         working-directory: research
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
-        run: python -m unittest -v prototype.test_phase2_lock_break_order
+        run: python -m unittest -v prototype.test_phase2_lock_break_order prototype.test_phase2_lock_release_race
