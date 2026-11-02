@@ -399,6 +399,17 @@ afterwards and is only evidence.
 - Not yet done: `Workspace` itself is not split into reader and authority. That refactor waits
   until QA accepts `325b7a8`, so code under review is not churned.
 
+### ADR-018 Verified, bounded read of immutable revision content for integrations — IMPLEMENTED
+- Requested by the Integration Engineer (PR #2, decision 1).
+- `ContentStore.read_verified(sha256, max_bytes, expected_size)` and
+  `documents.read_revision_bytes(ws, rev_id, max_bytes)` return the **exact bytes** of a revision.
+  SHA-256 is computed over those bytes and the size is checked against `revision.size`.
+- Refusals: objects over the limit (`ContentTooLarge`, not fully read), and missing or altered
+  objects (`WorkspaceCorruptError`).
+- Never reads the mutable working file. Integrations must use this instead of `path_for`, which
+  remains an implementation detail.
+- The historical extension comes from `revision.source_rel_path`.
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).

@@ -482,6 +482,18 @@ def document_status(ws: Workspace, doc_id: str, verify_hash: bool = False) -> di
     return {**out, "state": "modified" if co else "modified-externally"}
 
 
+def read_revision_bytes(ws: Workspace, rev_id: str, max_bytes: int) -> tuple[dict, bytes]:
+    """Read-only, verified access to a revision's immutable content for integrations (ADR-018).
+
+    Returns ``(revision, data)``; the bytes are checked against ``revision.sha256`` and
+    ``revision.size``. The original extension is ``Path(revision["source_rel_path"]).suffix``."""
+    rev = _require_rev(ws, rev_id)
+    if ws.get("document", rev["document_id"]) is None:
+        raise DocumentError(f"revision {rev_id} belongs to a missing document")
+    data = ContentStore(ws).read_verified(rev["sha256"], max_bytes, expected_size=rev["size"])
+    return rev, data
+
+
 def export_revision(ws: Workspace, rev_id: str, dest: Path, overwrite: bool = False) -> Path:
     rev = _require_rev(ws, rev_id)
     return ContentStore(ws).export(rev["sha256"], Path(dest), overwrite=overwrite)

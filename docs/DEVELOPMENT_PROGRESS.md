@@ -73,6 +73,20 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-02 (session 6) — QA acceptance received; Phase 1 backport branch; ADR-018
+- **QA accepted the #8/#9/#10 fixes on local filesystems** (run 41387311010; Linux and Windows,
+  Python 3.13):
+  - #8: pre-audit race fixed. The one strict xfail left is the physical fenced artifact allowed by
+    design.
+  - #9: insert and delete snapshot cases pass.
+  - #10: Windows six-process race 5/5 (one winner, five conflicts each), and the injected
+    WinError 32 case passes.
+  - No SMB or two-host claim.
+- **Backport:** prepared on `phase1-backport-8-9-10` @ `36d1957`; PR #6 itself is unchanged.
+  Director decision pending (see the log above).
+- **ADR-018:** verified bounded revision-content read for the OpenSchematix adapter.
+- **Tests:** full suite **171 passed, 1 skipped (Qt)**. No CI was triggered.
+
 ### 2026-11-02 (session 5) — CommitAuthority contract, idempotent txid (ADR-017)
 - QA (PR #3) and Distributed Systems (PR #4) are verifying `325b7a8`. PR #6 is left unchanged, as
   the director directed.

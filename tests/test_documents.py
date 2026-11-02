@@ -564,3 +564,27 @@ def test_history_walks_chain_without_listing_all_revisions(ws, proj, monkeypatch
     ws.commit("t", [RecordPut("document", doc["id"], {**d, "rev_count": 5})])
     with pytest.raises(Exception, match="records 5 revisions"):
         D.history(ws, doc["id"])
+
+
+# ---------------------------------------------------------------- ADR-018 verified reads
+def test_read_revision_bytes_is_verified_bounded_and_immutable(ws, proj):
+    from revisionworx.content import ContentTooLarge
+    from revisionworx.workspace import WorkspaceCorruptError
+    doc, a = reg(ws, proj, "02 CAD/Parts/bracket.ipt")
+    (ws.folder / "02 CAD/Parts/bracket.ipt").write_bytes(b"working file edited later")  # never read
+    rev, data = D.read_revision_bytes(ws, a["id"], max_bytes=1024)
+    assert data == b"IPT v1" and rev["id"] == a["id"] and rev["source_rel_path"].endswith(".ipt")
+    with pytest.raises(ContentTooLarge):
+        D.read_revision_bytes(ws, a["id"], max_bytes=3)
+    obj = ContentStore(ws).path_for(a["sha256"])
+    obj.write_bytes(b"IPT v2")  # same size, different bytes
+    with pytest.raises(WorkspaceCorruptError, match="SHA-256"):
+        D.read_revision_bytes(ws, a["id"], max_bytes=1024)
+    obj.write_bytes(b"short")
+    with pytest.raises(WorkspaceCorruptError, match="size"):
+        D.read_revision_bytes(ws, a["id"], max_bytes=1024)
+    obj.unlink()
+    with pytest.raises(WorkspaceCorruptError, match="missing"):
+        D.read_revision_bytes(ws, a["id"], max_bytes=1024)
+    with pytest.raises(D.DocumentError):
+        D.read_revision_bytes(ws, "rev_" + "0" * 32, max_bytes=1024)

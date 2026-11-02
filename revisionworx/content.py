@@ -23,6 +23,10 @@ _HEX = re.compile(r"^[0-9a-f]{64}$")
 CHUNK = 1024 * 1024
 
 
+class ContentTooLarge(ValueError):
+    """A content object exceeds the caller's read limit; nothing was returned."""
+
+
 class SourceChangedError(OSError):
     """The source file changed while it was being copied; nothing was stored."""
 
@@ -117,6 +121,33 @@ class ContentStore:
             return StoredContent(digest, size, after.st_mtime_ns, reused)
         finally:
             tmp.unlink(missing_ok=True)
+
+    def read_verified(self, sha256: str, max_bytes: int, expected_size: int | None = None) -> bytes:
+        """Return the exact bytes of an immutable content object, verified (ADR-018).
+
+        The SHA-256 is computed over the very bytes returned, so a caller parsing them never relies on
+        an earlier check of a different read. Refuses objects larger than ``max_bytes`` without reading
+        them fully, and raises ``WorkspaceCorruptError`` on a missing object, a size mismatch or a hash
+        mismatch. Read-only; never touches mutable working files."""
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
+        src = self.path_for(sha256)
+        try:
+            fh = open(src, "rb")
+        except FileNotFoundError:
+            raise WorkspaceCorruptError(f"content object {sha256} is missing from the store") from None
+        with fh:
+            size = os.fstat(fh.fileno()).st_size
+            if expected_size is not None and size != expected_size:
+                raise WorkspaceCorruptError(f"content object {sha256} has size {size}, expected {expected_size}")
+            if size > max_bytes:
+                raise ContentTooLarge(f"content object {sha256} is {size} bytes, over the {max_bytes}-byte limit")
+            data = fh.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ContentTooLarge(f"content object {sha256} exceeds the {max_bytes}-byte limit")
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise WorkspaceCorruptError(f"content object {sha256} failed SHA-256 verification")
+        return data
 
     def export(self, sha256: str, dest: Path, overwrite: bool = False) -> Path:
         """Write a stored object to ``dest`` (new file unless ``overwrite``), then verify it."""
