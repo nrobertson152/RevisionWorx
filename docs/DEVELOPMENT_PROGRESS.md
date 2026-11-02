@@ -73,6 +73,33 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-01 (session 2, part 3) — independent agents' work executed; decision pending
+Agents B and D opened PR #3, PR #4 and issue #5 during this session. Their tests had not been run
+against the application, so I ran them; nothing in their branches was modified.
+
+- **PR #3 (QA, Agent B), `tests/qa`:**
+  - On its base `23d6ecf`: **16/16 passed**.
+  - Against `phase2-documents`: **15 passed, 1 failed**, `test_journal_publish_then_apply_failure_is_recovered`.
+  - The failure is caused by intentional ADR-008 contract changes (`CommittedNotApplied` instead of
+    the raw `OSError`; records carry `_rev`), not by a regression. The same scenario with those two
+    adjustments was run and **passes**. Details and suggested updates are posted on PR #3.
+- **PR #4 (concurrency, Agent D), `prototype/test_authority.py`:** **3/3 passed**. Its fencing is
+  sound because the generation check and the commit are one local SQLite transaction. Review notes
+  posted (unclosed connections; the payload must carry `expect_rev` semantics).
+- **PR #2 (OpenSchematix, Agent C):** 6/6 passed; compared against upstream; see the session 2 log.
+- **Issue #5, architecture decision: PENDING DIRECTOR APPROVAL.**
+  - Recommendation: keep the serverless shared folder for single-writer use (not certified for
+    concurrent writes), and make the optional LAN coordinator the supported multi-user mode, behind
+    a `CommitAuthority` seam that implements the existing `Workspace.commit` contract.
+  - This **amends REQUIREMENTS §5** (preferred deployment), so it was not decided unilaterally.
+    Status for issue #1's six requirements was posted there.
+- **Open draft PRs:**
+  - #6 `phase1-foundation` → `main`;
+  - #7 `phase2-documents` → `phase1-foundation` (stacked);
+  - #2, #3, #4 from the agents.
+
+  None merged.
+
 ### 2026-11-01 (session 2, part 2) — Phase 2 on `phase2-documents`
 - **Commits:**
   - `677dbe1` design (ADR-010..013)
@@ -204,8 +231,13 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
    change record linkage, optional read-only policy.
 5. Integrate Agent C's OpenSchematix adapter (PR #2) once retargeted. Schematic documents can then
    carry extracted component/part candidates as `unresolved` provenance until Phase 4 parts exist.
-6. Begin the Phase 3 investigation plan: an SMB/NFS test rig (Samba + NFSv4 containers or two VMs) to
-   exercise exclusive publish, fsync and lease behaviour across clients.
+6. **Blocked on the director's decision (issue #5):**
+   - Extract a `CommitAuthority` interface from `Workspace.commit`: the file journal is one
+     implementation, and the LAN coordinator (Agent D) would be the other.
+   - Add named failpoints for QA (issue #1).
+   - Plan the SMB/NFS test rig, i.e. Samba + NFSv4 containers or two VMs (Agent D).
+7. Ask Agent B to extend `tests/qa` to Phase 2 (checkout/check-in/lifecycle) and update the one test
+   pinned to the old exception type.
 
 ## Persistent warnings
 - Never conflate a local cache with authoritative lock ownership.
