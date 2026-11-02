@@ -88,3 +88,33 @@ class PreconditionIdentityContract:
                              txid=T1)
         assert authority.commit("t", [RecordPut("project", B, {"v": 1}), RecordCheck("project", A, s)],
                                 txid=T1)  # identical request still replays
+
+
+class RequestIdentityV2Contract:
+    """ADR-021: a txid names the complete submitted request, in order."""
+
+    def test_reordered_operations_are_a_different_request(self, authority):
+        s = authority.commit("t", [RecordPut("project", A, {"v": 1})])
+        ops = [RecordCheck("project", A, s), RecordPut("project", B, {"v": 1})]
+        authority.commit("t", ops, txid=T2)
+        with pytest.raises(TxidReuseError):
+            authority.commit("t", list(reversed(ops)), txid=T2)
+        assert authority.commit("t", ops, txid=T2)  # identical request replays
+
+    def test_check_only_request_identity(self, authority):
+        s = authority.commit("t", [RecordPut("project", A, {"v": 1})])
+        authority.commit("t", [RecordCheck("project", A, s)], txid=T2)
+        with pytest.raises(TxidReuseError):
+            authority.commit("t", [RecordCheck("project", A, s + 1)], txid=T2)
+
+    def test_key_order_does_not_matter_but_values_do(self, authority):
+        authority.commit("t", [RecordPut("project", A, {"x": 1, "y": 2})], txid=T2)
+        assert authority.commit("t", [RecordPut("project", A, {"y": 2, "x": 1})], txid=T2)
+        with pytest.raises(TxidReuseError):
+            authority.commit("t", [RecordPut("project", A, {"y": 2, "x": 1.5})], txid=T2)
+
+    def test_non_finite_numbers_are_rejected_before_writing(self, authority):
+        head = authority.head_seq()
+        with pytest.raises(ValueError):
+            authority.commit("t", [RecordPut("project", A, {"v": float("nan")})], txid=T2)
+        assert authority.head_seq() == head

@@ -99,6 +99,17 @@ class ConflictError(WorkspaceError):
                          "reload and try again")
 
 
+class IdentityUnverifiable(WorkspaceError):
+    """A txid was committed by an entry written before ADR-021, so it cannot be proven that a retry
+    is the identical request. Nothing was written; ask ``transaction_outcome(txid)`` instead."""
+
+    def __init__(self, txid: str, seq: int):
+        self.txid, self.seq = txid, seq
+        super().__init__(f"txid {txid} was committed as entry {seq} in a journal format that cannot prove "
+                         "this retry is the identical request; nothing was written. Use "
+                         "transaction_outcome() to learn its result.")
+
+
 class TxidReuseError(WorkspaceError):
     """A transaction id was reused for different content; nothing was written."""
 
@@ -117,6 +128,34 @@ class CommittedNotApplied(WorkspaceError):
         self.seq, self.txid, self.cause = seq, txid, cause
         super().__init__(f"change {seq} (tx {txid}) is saved, but updating derived records failed: "
                          f"{cause}. It will be completed when the workspace is next opened for writing.")
+
+
+REQUEST_IDENTITY_VERSION = 2
+_REQUEST_DOMAIN = b"revisionworx/commit-request/v2\x00"
+
+
+def request_identity(op: str, ops: list, blob_refs: list[str] | None) -> str:
+    """Versioned digest of the COMPLETE commit request (ADR-021).
+
+    Operations keep their submitted order (reordering is a different request); every RecordPut,
+    RecordDelete and RecordCheck is included with an explicit, nullable ``expect_rev``; RecordPut data
+    has the derived ``_rev`` removed. JSON keys are sorted recursively, encoding is compact UTF-8,
+    non-finite numbers are rejected, and the hash is domain-separated by version."""
+    operations = []
+    for o in ops:
+        if isinstance(o, RecordPut):
+            operations.append({"type": "put", "kind": o.kind, "id": o.id, "expect_rev": o.expect_rev,
+                               "data": strip_rev(o.data)})
+        elif isinstance(o, RecordDelete):
+            operations.append({"type": "delete", "kind": o.kind, "id": o.id, "expect_rev": o.expect_rev})
+        elif isinstance(o, RecordCheck):
+            operations.append({"type": "check", "kind": o.kind, "id": o.id, "expect_rev": o.expect_rev})
+        else:
+            raise ValueError(f"unknown operation {o!r}")
+    req = {"version": REQUEST_IDENTITY_VERSION, "op": op, "operations": operations,
+           "blob_refs": list(blob_refs or [])}
+    canon = json.dumps(req, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(_REQUEST_DOMAIN + canon.encode("utf-8")).hexdigest()
 
 
 def entry_digest(entry: dict) -> str:
@@ -677,14 +716,15 @@ class Workspace:
         self._check_lock_still_held()
         checks = [{"kind": c.kind, "id": c.id, "expect_rev": c.expect_rev}
                   for c in ops if isinstance(c, RecordCheck)]
-        if txid is not None:  # idempotent retry (ADR-017): same txid + same request -> same result
-            payload = {"op": op, "records": [p.as_json() for p in ops if not isinstance(p, RecordCheck)],
-                       "blobs": blob_refs or [], "checks": checks}
+        identity = request_identity(op, ops, blob_refs)  # also rejects non-finite numbers up front
+        if txid is not None:  # idempotent retry (ADR-017/021): same txid + same request -> same result
             for s_ in reversed(self.journal_seqs()):
                 prior = self.read_entry(s_)
                 if prior.get("txid") == txid:
-                    if {"op": prior["op"], "records": prior["records"], "blobs": prior["blobs"],
-                        "checks": prior.get("checks", [])} != payload:
+                    recorded = prior.get("request") or {}
+                    if recorded.get("version") != REQUEST_IDENTITY_VERSION:
+                        raise IdentityUnverifiable(txid, s_)
+                    if recorded.get("digest") != identity:
                         raise TxidReuseError(f"txid {txid} was already used for a different change (entry {s_})")
                     if self.is_fenced(prior):
                         raise LockLostError(f"fenced: txid {txid} (entry {s_}) never took effect")
@@ -701,6 +741,7 @@ class Workspace:
         writes = [p for p in ops if not isinstance(p, RecordCheck)]
         entry = {"seq": seq, "txid": txid or uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
                  "op": op, "records": [p.as_json() for p in writes], "blobs": blob_refs or [], "checks": checks,
+                 "request": {"version": REQUEST_IDENTITY_VERSION, "digest": identity},
                  "writer_token": self._lock_token}
         entry["digest"] = entry_digest(entry)
         try:

@@ -499,6 +499,34 @@ exists. Adding more token re-checks only narrows the window.
   That is unavailability, not corruption.
 - Atomic rename and exclusive create on SMB are unverified. There is no multi-host claim.
 
+### ADR-021 Versioned canonical request identity for txid idempotency — IMPLEMENTED
+Adopts the Distributed Systems proposal (PR #7 comment, `docs/ADR017_FULL_REQUEST_IDENTITY_PROPOSAL.md`
+on PR #4).
+
+- **Identity v2:** `request_identity(op, ops, blob_refs)` is SHA-256 over
+  `b"revisionworx/commit-request/v2\0"` plus the compact, recursively key-sorted UTF-8 JSON of
+  `{version: 2, op, operations, blob_refs}`.
+  - `operations` lists every RecordPut, RecordDelete and RecordCheck **in submitted order**, each with
+    `type`, `kind`, `id` and an explicit nullable `expect_rev`. Put data has `_rev` stripped.
+  - Non-finite numbers are rejected (`ValueError`, nothing written). Previously NaN could enter the
+    journal.
+  - Every new entry stores `request: {version: 2, digest}`, covered by the entry digest.
+- **Retry rules:**
+
+  | Situation | Result |
+  |---|---|
+  | Same txid, equal digest | Original sequence returned; nothing written (lost-ACK or restart retry). |
+  | Same txid, different digest (changed, reordered or added operations, preconditions or payload) | `TxidReuseError`. |
+  | Same txid, prior entry has **no v2 identity** (written before ADR-021) | **`IdentityUnverifiable`** (`classify` → `identity-unverifiable`); nothing written. |
+
+  The caller uses `transaction_outcome(txid)`, which still answers committed/fenced/not-found for
+  every entry. A legacy request is never silently treated as identical.
+- **Migration:** none. Historical entries are immutable and never rewritten. Pre-ADR-021 txids lose
+  only *retry replay*, not outcome lookup. The existing `checks` field stays for readability; identity
+  comes from `request`.
+- **Contract:** `RequestIdentityV2Contract` (reordering, check-only, key order, non-finite values)
+  plus legacy-entry tests. The coordinator must implement the same identity bytes.
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).
