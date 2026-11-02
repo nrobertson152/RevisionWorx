@@ -107,9 +107,9 @@ test before opening a defect report.
 ## 4. Independent test evidence and remaining certification
 
 Local Linux CPython 3.13.5: `python -m unittest -v prototype.test_authority` initially
-passed 10 tests, then was extended to **12 passing tests** covering mandatory
-`expected_revision` and simultaneous override-versus-publication. The real Phase 1
-test was **skipped** locally without a separate checkout. GitHub Actions workflow
+passed 10 tests, then was extended to **14 passing tests** covering mandatory
+`expected_revision`, simultaneous override-versus-publication, and independent-process crashes before and after the SQLite commit point. The real Phase 1
+test and cache watermark probes were **skipped** locally without a separate checkout. GitHub Actions workflow
 `.github/workflows/distributed-authority-research.yml` was added to execute
 the prototype on Linux/Windows and the opt-in Phase 1 reproduction from its actual
 Git branch; record workflow results separately when completed.
