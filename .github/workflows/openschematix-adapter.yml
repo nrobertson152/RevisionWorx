@@ -1,0 +1,26 @@
+name: OpenSchematix adapter regression
+on:
+  push:
+    branches:
+      - integration/openschematix
+  pull_request:
+    paths:
+      - 'revisionworx_integrations/**'
+      - 'tests/test_openschematix_adapter.py'
+      - 'tests/fixtures/openschematix/**'
+      - '.github/workflows/openschematix-adapter.yml'
+  workflow_dispatch:
+jobs:
+  adapter:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify standalone OpenSchematix adapter
+        run: python -m unittest discover -s tests -p 'test_openschematix_adapter.py' -v
