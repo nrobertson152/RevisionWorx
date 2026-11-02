@@ -207,6 +207,17 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(UnsupportedFormat):
             inspect_bytes(b"{}", ".bin")
 
+    def test_immutable_revision_snapshot_survives_working_file_edit(self):
+        path = self.legacy()
+        pinned = path.read_bytes()
+        expected = hashlib.sha256(pinned).hexdigest()
+        path.write_text('{"format":"not OpenSchematix"}', encoding="utf-8")
+        report = inspect_bytes(pinned, ".osch")
+        self.assertEqual(report["file_sha256"], expected)
+        self.assertEqual(len(report["components"]), 1)
+        with self.assertRaises(UnsupportedFormat):
+            inspect(path)
+
     def test_unknown_extension(self):
         path = self.root / "example.step"
         path.write_text("{}")
