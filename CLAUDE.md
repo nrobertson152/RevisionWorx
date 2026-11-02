@@ -23,5 +23,10 @@ You are the principal software architect and implementation engineer for Revisio
 - Keep `docs/ARCHITECTURE.md` synchronized with actual design decisions. Mark unimplemented ideas as proposed.
 - Do not merge, tag or publish releases without the project director's approval.
 
-## Next session
-Read all three documents above, inspect the repository, select and justify an initial stack, establish a safe foundational architecture, and implement Phase 1 in small verifiable increments. Record what truly exists and what remains.
+## Next session — Director handoff (2026-11-01)
+
+**Do not restart Phase 1.** Read [`docs/agents/CLAUDE_RESUME_HANDOFF.md`](docs/agents/CLAUDE_RESUME_HANDOFF.md) on latest `main` and your existing `docs/DEVELOPMENT_PROGRESS.md` on `phase2-documents`. Inspect latest PRs #2/#3/#4/#6/#7, issues #5/#8/#9/#10 and exact CI status before implementing.
+
+Primary corrective code ownership: (1) Issue #8 effective pre-audit lock-break revocation race, (2) Issue #9 LocalIndex watermark inconsistency, (3) Issue #10 intermittent Windows writer-lock release `WinError 32`; prioritize critical integrity and choose a safe incremental change that can be independently QA tested. Production authority integration remains Claude-owned; the optional LAN coordinator is approved as a design but **not** production-certified.
+
+QA, Integration and Distributed Systems agents have completed significant tests and handoffs; use them rather than duplicating their work. Standard hosted Actions are generally free on this public repo, but avoid unnecessary matrix churn and do not trigger billable private-repo work. No merges, releases, or production multiuser claims without Director approval.
