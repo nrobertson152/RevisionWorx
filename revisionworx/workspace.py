@@ -156,6 +156,14 @@ class RecordPut:
 
 
 @dataclass
+class RecordCheck:
+    """Assert a record is still at ``expect_rev`` without writing it (not journaled)."""
+    kind: str
+    id: str
+    expect_rev: int
+
+
+@dataclass
 class RecordDelete:
     kind: str
     id: str
@@ -427,8 +435,9 @@ class Workspace:
                 if actual != item.expect_rev:
                     raise ConflictError(item.kind, item.id, item.expect_rev, actual)
         seq = self.head_seq() + 1
+        writes = [p for p in ops if not isinstance(p, RecordCheck)]
         entry = {"seq": seq, "txid": txid or uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
-                 "op": op, "records": [p.as_json() for p in ops], "blobs": blob_refs or [],
+                 "op": op, "records": [p.as_json() for p in writes], "blobs": blob_refs or [],
                  "writer_token": self._lock_token}
         entry["digest"] = entry_digest(entry)
         try:
