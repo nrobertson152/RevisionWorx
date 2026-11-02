@@ -6,6 +6,7 @@ separate local-disk file and MUST NOT be restored with an older DB snapshot.
 from __future__ import annotations
 
 import os
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import uuid
@@ -107,7 +108,7 @@ class CoordinatorResearch:
         self.guard.verify()
         if not isinstance(cursor, int) or cursor < 0 or not 1 <= limit <= 1000:
             raise ValueError("invalid cursor/limit")
-        with sqlite3.connect(self.authority.path) as db:
+        with closing(sqlite3.connect(self.authority.path)) as db:
             rows = db.execute("""SELECT sequence,txid,resource,resulting_revision,payload
                               FROM commits WHERE sequence>? ORDER BY sequence LIMIT ?""",
                               (cursor, limit)).fetchall()
