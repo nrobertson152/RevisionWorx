@@ -8,11 +8,13 @@ manufacturing BOM, and is not claimed equivalent to OpenSchematix bom.generate.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 from pathlib import Path
 import zipfile
 
+MAX_SOURCE = 256 * 1024 * 1024
 MAX_MEMBER = 200 * 1024 * 1024
 MAX_TOTAL = 1024 * 1024 * 1024
 MAX_MEMBERS = 100_000
@@ -149,14 +151,17 @@ def _sheet(data: dict, fallback_uid: str) -> dict:
 def inspect(path: str | Path) -> dict:
     """Index exactly one explicitly chosen file; never browse neighboring files."""
     path = Path(path)
-    digest = hashlib.sha256()
+    # Hash and parse the same bounded immutable byte snapshot. A separate
+    # hash pass and filesystem parse can otherwise observe different revisions.
     with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
+        raw = handle.read(MAX_SOURCE + 1)
+    if len(raw) > MAX_SOURCE:
+        raise InvalidProject("source file exceeds size limit")
+    digest = hashlib.sha256(raw)
     if path.suffix.lower() == ".osch":
-        if path.stat().st_size > MAX_MEMBER:
+        if len(raw) > MAX_MEMBER:
             raise InvalidProject("legacy file exceeds size limit")
-        data = _json(path.read_bytes(), "legacy drawing")
+        data = _json(raw, "legacy drawing")
         if data.get("format") != "OpenSchematix":
             raise UnsupportedFormat("not an OpenSchematix drawing")
         schema = _version(data.get("schema", 1), 3, "legacy sheet schema")
@@ -172,7 +177,7 @@ def inspect(path: str | Path) -> dict:
         warnings = ["Legacy sheet identity is content-derived and changes on edit."]
     elif path.suffix.lower() == ".schematix":
         try:
-            with zipfile.ZipFile(path) as archive:
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                 infos = archive.infolist()
                 if len(infos) > MAX_MEMBERS or sum(i.file_size for i in infos) > MAX_TOTAL:
                     raise InvalidProject("ZIP size/member count limit exceeded")
@@ -181,7 +186,7 @@ def inspect(path: str | Path) -> dict:
                     raise InvalidProject("ambiguous duplicate ZIP member names")
                 if not infos or infos[0].filename != "mimetype" or infos[0].compress_type != zipfile.ZIP_STORED:
                     raise InvalidProject("missing first uncompressed mimetype member")
-                if archive.read("mimetype") != MIMETYPE:
+                if infos[0].file_size != len(MIMETYPE) or archive.read("mimetype") != MIMETYPE:
                     raise UnsupportedFormat("unrecognized project MIME type")
                 def member(name):
                     if name not in names or archive.getinfo(name).file_size > MAX_MEMBER:
