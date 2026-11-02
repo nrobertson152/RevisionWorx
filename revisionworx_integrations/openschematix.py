@@ -11,6 +11,8 @@ import hashlib
 import io
 import json
 import math
+import os
+import stat
 from pathlib import Path
 import zipfile
 
@@ -18,6 +20,7 @@ MAX_SOURCE = 256 * 1024 * 1024
 MAX_MEMBER = 200 * 1024 * 1024
 MAX_TOTAL = 1024 * 1024 * 1024
 MAX_MEMBERS = 100_000
+MAX_INSPECTED_MEMBERS = 1000
 MAX_DEPTH = 64
 MIMETYPE = b"application/x-openschematix-project"
 
@@ -151,12 +154,23 @@ def _sheet(data: dict, fallback_uid: str) -> dict:
 def inspect(path: str | Path) -> dict:
     """Index exactly one explicitly chosen file; never browse neighboring files."""
     path = Path(path)
-    # Hash and parse the same bounded immutable byte snapshot. A separate
-    # hash pass and filesystem parse can otherwise observe different revisions.
+    # Reject links before following their targets, mirroring document registration.
+    mode = os.lstat(path).st_mode
+    if not stat.S_ISREG(mode):
+        raise InvalidProject("source must be a regular file, not a link or device")
+    # The immutable snapshot is hashed and parsed exactly once. Detect edits
+    # during capture rather than reporting a possibly torn source as current.
     with path.open("rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise InvalidProject("source must be a regular file")
         raw = handle.read(MAX_SOURCE + 1)
+        after = os.fstat(handle.fileno())
     if len(raw) > MAX_SOURCE:
         raise InvalidProject("source file exceeds size limit")
+    if (before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns or len(raw) != after.st_size):
+        raise InvalidProject("source changed during inspection")
     digest = hashlib.sha256(raw)
     if path.suffix.lower() == ".osch":
         if len(raw) > MAX_MEMBER:
@@ -184,6 +198,15 @@ def inspect(path: str | Path) -> dict:
                 names = [i.filename for i in infos]
                 if len(names) != len(set(names)):
                     raise InvalidProject("ambiguous duplicate ZIP member names")
+                for info in infos:
+                    n = info.filename
+                    # Treat all members as untrusted, including ignored symbols/revisions.
+                    if (not n or n.startswith("/") or "\\\\" in n or ":" in n
+                            or any(p in ("", ".", "..") for p in n.split("/"))
+                            or info.file_size < 0 or info.compress_size < 0):
+                        raise InvalidProject("unsafe ZIP member path or size")
+                if len(infos) > MAX_INSPECTED_MEMBERS:
+                    raise InvalidProject("ZIP exceeds inspection member limit")
                 if not infos or infos[0].filename != "mimetype" or infos[0].compress_type != zipfile.ZIP_STORED:
                     raise InvalidProject("missing first uncompressed mimetype member")
                 if infos[0].file_size != len(MIMETYPE) or archive.read("mimetype") != MIMETYPE:
@@ -191,7 +214,11 @@ def inspect(path: str | Path) -> dict:
                 def member(name):
                     if name not in names or archive.getinfo(name).file_size > MAX_MEMBER:
                         raise InvalidProject(f"missing or oversized member: {name}")
-                    return _json(archive.read(name), name)
+                    with archive.open(name) as stream:
+                        content = stream.read(MAX_MEMBER + 1)
+                    if len(content) > MAX_MEMBER:
+                        raise InvalidProject(f"decompression limit exceeded: {name}")
+                    return _json(content, name)
                 manifest = member("manifest.json")
                 if manifest.get("format") != "OpenSchematix Project":
                     raise UnsupportedFormat("unrecognized manifest format")
@@ -207,6 +234,8 @@ def inspect(path: str | Path) -> dict:
                 entries = manifest.get("sheets")
                 if not isinstance(entries, list):
                     raise InvalidProject("invalid manifest sheets")
+                if len(entries) > MAX_INSPECTED_MEMBERS:
+                    raise InvalidProject("too many sheets")
                 sheets = []
                 for entry in entries:
                     if not isinstance(entry, dict):
@@ -230,7 +259,7 @@ def inspect(path: str | Path) -> dict:
                     warnings.append("Internal revision snapshots not indexed; use RevisionWorx immutable file revisions.")
                 if manifest.get("symbols"):
                     warnings.append("Embedded custom symbols not interpreted; symbol-specific BOM classification unavailable.")
-        except (zipfile.BadZipFile, RuntimeError, EOFError, NotImplementedError) as exc:
+        except (zipfile.BadZipFile, RuntimeError, EOFError, NotImplementedError, OSError) as exc:
             raise InvalidProject(f"damaged ZIP container: {type(exc).__name__}") from exc
     else:
         raise UnsupportedFormat("supported extensions: .schematix and .osch")
