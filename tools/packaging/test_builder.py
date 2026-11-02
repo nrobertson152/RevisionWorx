@@ -47,6 +47,17 @@ class SnapshotSafetyTests(unittest.TestCase):
             self.assertNotEqual(a, b)
             self.assertEqual(set(a), {"folder/sample.txt"})
 
+
+    def test_offline_proxy_and_python_executable_are_not_on_frozen_child_path(self):
+        from smoke_workspace import isolated_env
+        with TemporaryDirectory() as tmp:
+            env = isolated_env(Path(tmp))
+            self.assertEqual(env["PATH"], "")
+            self.assertEqual(env["PIP_NO_INDEX"], "1")
+            self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:9")
+            self.assertNotIn("PYTHONPATH", env)
+            self.assertNotIn("PYTHONHOME", env)
+
     def test_isolated_environment_clears_real_workspace_variable(self):
         import os
         from unittest.mock import patch

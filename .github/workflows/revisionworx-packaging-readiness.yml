@@ -43,14 +43,28 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xkb1 libxcb-icccm4 libxcb-shape0
-      - name: Verify packaging path and overwrite safeguards
+      - name: Verify packaging path, sandbox and overwrite safeguards
         run: python tools/packaging/test_builder.py
+      - name: Inject disposable permission, disk-full and postcommit recovery failures
+        env:
+          REVISIONWORX_PHASE2_SOURCE: ${{ github.workspace }}/external/revisionworx-phase2
+        run: python -m unittest discover -s tools/packaging -p 'test_failure_recovery.py' -v
       - name: Build experimental bundles and run isolated smoke
         run: >-
           python tools/packaging/build.py
           --source external/revisionworx-phase2
           --output packaging-prototype-output
           --expected-sha d656884b39401134149273dd0121ef620b76eb8e
+      - name: Frozen Linux runtime without Python or reachable network
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker build -f tools/packaging/offline_container.Dockerfile -t revisionworx-offline-qt tools/packaging
+          docker run --rm --network none --cap-drop ALL --read-only \
+            --tmpfs /tmp:rw,nosuid,size=128m \
+            --mount "type=bind,src=${{ github.workspace }}/packaging-prototype-output/dist,dst=/bundles,readonly" \
+            --mount "type=bind,src=${{ github.workspace }}/tools/packaging,dst=/harness,readonly" \
+            revisionworx-offline-qt /bin/sh /harness/smoke_offline_container.sh
       - name: Print version and dependency provenance
         if: success()
         run: python -c "from pathlib import Path; print((Path('packaging-prototype-output') / 'provenance.json').read_text())"

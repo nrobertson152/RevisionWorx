@@ -43,8 +43,22 @@ def isolated_env(home: Path) -> dict[str, str]:
         "XDG_STATE_HOME": str(home / "state"),
         "QT_QPA_PLATFORM": "offscreen",
         "PYTHONNOUSERSITE": "1",
+        # Frozen artifacts run with no Python executable on PATH. This is
+        # narrower than proving Python is absent from the entire OS.
+        "PATH": "",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "ALL_PROXY": "http://127.0.0.1:9",
+        "http_proxy": "http://127.0.0.1:9",
+        "https_proxy": "http://127.0.0.1:9",
+        "all_proxy": "http://127.0.0.1:9",
+        "NO_PROXY": "",
+        "no_proxy": "",
+        "PIP_NO_INDEX": "1",
     })
-    env.pop("REVISIONWORX_WORKSPACE", None)
+    for key in ("REVISIONWORX_WORKSPACE", "PYTHONHOME", "PYTHONPATH",
+                "VIRTUAL_ENV", "CONDA_PREFIX", "PIP_CONFIG_FILE"):
+        env.pop(key, None)
     return env
 
 
@@ -57,6 +71,19 @@ def checked_cli(cli: Path, args: list[str], home: Path, env: dict[str, str]) -> 
     )
     if proc.returncode != 0:
         raise RuntimeError(f"bundled CLI {args!r} failed ({proc.returncode}): {proc.stdout[-2500:]}")
+    return proc.stdout
+
+
+def rejected_cli(cli: Path, args: list[str], home: Path, env: dict[str, str]) -> str:
+    """An anticipated failure must be explicit and cannot mutate source data."""
+    proc = subprocess.run(
+        [str(cli), *args], cwd=home, env=env,
+        text=True, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        timeout=30, check=False,
+    )
+    if proc.returncode == 0:
+        raise AssertionError(f"invalid workspace command unexpectedly succeeded: {args!r}")
     return proc.stdout
 
 
@@ -126,6 +153,58 @@ def exercise(cli: Path, gui: Path) -> None:
         if snapshot(original) != before_original:
             raise AssertionError("original disposable workspace changed during copy smoke")
 
+        # An absent path and a file masquerading as a workspace must fail
+        # closed. No authoritative directory should be created as a side
+        # effect of a read-only command.
+        missing = base / "Missing network root"
+        rejected_cli(cli, ["--workspace", str(missing), "--json", "status"], home, env)
+        if missing.exists():
+            raise AssertionError("failed read unexpectedly created a missing root")
+        not_directory = base / "Blocked location Ω"
+        not_directory.write_bytes(b"read-only sentinel; not a workspace")
+        marker_hash = hashlib.sha256(not_directory.read_bytes()).hexdigest()
+        rejected_cli(cli, ["--workspace", str(not_directory), "--json", "status"], home, env)
+        if hashlib.sha256(not_directory.read_bytes()).hexdigest() != marker_hash:
+            raise AssertionError("invalid-path rejection altered a sentinel")
+
+        # A read-only metadata FILE is not an ACL denial simulation. It
+        # establishes only that the frozen read path tolerates file flags.
+        meta_file = copied / ".revisionworx" / "workspace.json"
+        old_mode = meta_file.stat().st_mode
+        try:
+            import stat
+            os.chmod(meta_file, stat.S_IREAD)
+            checked_cli(cli, ["--workspace", str(copied), "--json", "status"], home, env)
+        finally:
+            os.chmod(meta_file, old_mode)
+        if snapshot(copied) != before_copy:
+            raise AssertionError("read-only metadata read changed copied workspace")
+
+        # Separate disposable 'interrupted upgrade' rehearsal: intentionally
+        # corrupt a TEST COPY, verify refusal without further mutation, then
+        # restore from another untouched TEST COPY. This does NOT test a
+        # product schema migration, real power loss or installer rollback.
+        backup = base / "Immutable disposable backup"
+        broken = base / "Interrupted upgrade rehearsal"
+        shutil.copytree(copied, backup)
+        backup_hashes = snapshot(backup)
+        shutil.copytree(backup, broken)
+        (broken / ".revisionworx" / "workspace.json").write_bytes(b'{"format":')
+        broken_hashes = snapshot(broken)
+        rejected_cli(cli, ["--workspace", str(broken), "--json", "status"], home, env)
+        if snapshot(broken) != broken_hashes:
+            raise AssertionError("failed open wrote to malformed copied workspace")
+        shutil.rmtree(broken)
+        shutil.copytree(backup, broken)
+        status_after_rollback = json.loads(
+            checked_cli(cli, ["--workspace", str(broken), "--json", "status"], home, env))
+        if status_after_rollback["workspace_id"] != status["workspace_id"]:
+            raise AssertionError("restored copy has a different authoritative identity")
+        if snapshot(broken) != backup_hashes or snapshot(backup) != backup_hashes:
+            raise AssertionError("backup/rollback changed authoritative fixture bytes")
+        if snapshot(original) != before_original or snapshot(copied) != before_copy:
+            raise AssertionError("negative tests changed original or working copy")
+
         print(
             "COPIED_WORKSPACE_READONLY_EVIDENCE "
             + json.dumps({
@@ -136,10 +215,18 @@ def exercise(cli: Path, gui: Path) -> None:
                 "after_gui_sha_unchanged": True,
                 "original_unchanged": True,
                 "unicode_and_spaces_path": True,
+                "python_on_child_path": False,
+                "proxy_endpoints": "unreachable localhost; does not prove no network attempts",
+                "missing_root_rejected": True,
+                "not_directory_rejected": True,
+                "read_only_metadata_read_preserved": True,
+                "interrupted_rehearsal_fail_closed": True,
+                "disposable_backup_rollback_verified": True,
                 "gui_mode": "Qt offscreen process, not an interactive display",
                 "unexecuted": [
                     "real customer workspace migration", "Windows ACL denial",
-                    "long path and UNC mount", "visible installed GUI",
+                    "long path and UNC mount", "actual ENOSPC / true ACL denial",
+                    "visible installed GUI",
                     "native installer", "physical multi-host SMB",
                 ],
             }, sort_keys=True)
