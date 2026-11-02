@@ -51,3 +51,12 @@
 - Continued on `integration/openschematix`; PR #2 remains draft.
 - No tests executed during this documentation migration; prior test status remains UNVERIFIED.
 - Next: verify real fixtures and run adapter regression tests, then update this log.
+
+## Standing orders session — 2026-11-01
+- Read assignment README and OpenSchematix Integration Engineer standing orders from `main`; reread `CLAUDE.md`, requirements, architecture, development status, existing integration progress, PR #2 discussion, and Phase 1 source `filetypes.py` / `scan.py`.
+- New deliverable: documented Phase 1 content-sniffing boundary, proposed adapter handoff, provenance and coverage semantics, revision comparison constraints, and Lead Architect's fixture/test findings in `docs/OPENSchematix_INTEGRATION.md` (commit `3d83e4f4c55ed172c51077fe5841e57d3c8f4f3c`).
+- Verified results **reported by Lead Architect in PR #2**, not rerun here: 6/6 unittest tests passed on `af5307a`, Python 3.13.18/Linux. Real upstream examples: 3/26, 1/7, 1/9 sheet/component counts match; native BOM vs prototype candidates 16/5, 5/0, 7/0. Adapter BOM candidates are not a complete BOM.
+- Tests executed in this session: **none**. GitHub file reads and documentation commit succeeded.
+- Risks: BOM semantics incomplete, duplicate source UIDs after copying, hash/parse race, unverified managed part associations, and PR conflict with Phase 1 development progress. No core files modified; no merge.
+- Architecture coordination: Lead Architect proposes document revision pinning by SHA-256 and unresolved component/part edges pending managed part registry; handoff contract requires approval before core integration.
+- Next tasks: (1) add actual upstream fixture-driven parser tests; (2) establish full native BOM equivalence and negative cases; (3) make read/hash consistent snapshot; (4) reconcile PR target/conflict with Lead Architect; (5) keep draft until validated.
