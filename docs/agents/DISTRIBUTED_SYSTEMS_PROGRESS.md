@@ -47,3 +47,12 @@ No main-branch files modified; no merge performed.
 - Historical commits and findings preserved; previous log path removed.
 - Role name for all future GitHub coordination: **Distributed Systems Engineer**.
 - Draft PR #4 updated to role-based identification; Lead Architect retains application architecture ownership.
+
+## Standing orders / Phase 1 inspection — 2026-11-01
+- Read `docs/agents/README.md` and `docs/agents/DISTRIBUTED_SYSTEMS_ORDERS.md` from `main`.
+- Inspected `phase1-foundation` versions of `docs/ARCHITECTURE.md`, `revisionworx/atomicio.py`, `revisionworx/workspace.py`, and `revisionworx/index.py`.
+- Actual Phase 1 implements POSIX link-based exclusive journal publication, Windows rename alternative, temp-file fsync, directory fsync on POSIX, writer.lock token, manual lock break, journal recovery and local SQLite incremental cache.
+- **High-severity confirmed code-path risk:** `Workspace.break_writer_lock` checks token then `os.replace` moves the lock without a coordination barrier; a previously opened `Workspace` checks only `self.writable` in `_require_writable`, not current token/epoch. Its `commit` may still publish after revocation. The Phase 1 architecture explicitly acknowledges this.
+- **Additional review concern (not yet reproduced):** `LocalIndex.rebuild()` captures journal head before iterating materialized records and pending overlay. Concurrent commits may cause index contents newer than the saved cursor, so rebuild consistency should be tested under concurrent publication. This is a hypothesis, not a verified defect.
+- No executable tests run this session. No cross-host behavior validated. No claims of production readiness.
+- Next: build an isolated deterministic regression/fault-injection harness for stale-writer revocation and cache rebuild concurrency; record actual results; coordinate protocol interface with Lead Architect.
