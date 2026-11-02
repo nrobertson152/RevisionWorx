@@ -1,52 +1,69 @@
-# RevisionWorx — Independent QA merge-readiness assessment
+# RevisionWorx — QA acceptance and PR merge-readiness handoff
 
-**QA Engineer | 2026-11-01 | Advisory, not merge approval**
+**QA Engineer • 2026-11-01 ET • Evidence-based advisory, NOT merge or release approval**
 
-## Architecture and scope
+## 1. Current engineering decision
 
-- PR #3: QA infrastructure, independent tests, Linux/Windows CI. Base: `phase1-foundation`.
-- PR #6: Phase 1 reliability and PySide6. Base: `main`. Head `412e69ab90bb1d8b74c1a3cf5519f581e4420e63`.
-- PR #7: Phase 2 document/revision/checkouts. Base: `phase1-foundation`. Head `47d81658764cd6bde60e391ac9aac24e722317e8`.
-- The user/Project Director approves merges. This report is a quality assessment, not permission to merge or deploy.
+**PR #3 (independent QA infrastructure) is reviewable by Claude and the Director.** The new #8/#9/#10 corrective code on Claude's Phase 2 branch has passed the independent local-filesystem acceptance suite and the real Windows checkout stress specified below. This is **not** an approval to merge or release. A physically installed GUI and supported multi-user SMB deployment remain unqualified.
 
-| PR | Test infrastructure / review readiness | Product release readiness | Required action |
+| PR | Branch and current inspected SHA | Independent review disposition | Product release status |
 | --- | --- | --- | --- |
-| #3 — QA | **Ready for director's review**, subject to no newer failing CI: independent QA suites and Windows/Linux matrix execute; the strict fencing xfail is transparent. PR remains draft. | **Not ready.** A green QA PR cannot certify the PDM product. | Director/Claude decide base/merge sequencing; preserve regression test for issue #8. |
-| #6 — Phase 1 + PySide6 | **Reviewable, with independent CI evidence.** QA-on-PR-base run [41380328108](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380328108) passed Ubuntu/Windows Python 3.11/3.13; GUI tests run with offscreen Qt in CI. | **Not ready for shared multi-user production use.** Writer-break TOCTOU, unqualified SMB/NFS, and no installed desktop validation. | Resolve issue #8 before claiming concurrent safety; qualify native GUI and share behavior. |
-| #7 — Phase 2 | **Reviewable, with cross-platform integrated CI evidence.** Disposable QA overlay [run 41382170092](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382170092), Phase 2 `47d81658764cd6bde60e391ac9aac24e722317e8`, QA `20cd42368244a1b4daa6eed62230994d106503db`: Linux Python 3.13 **33 QA passed/3 xfailed**, full **190 passed/3 xfailed**; Windows **33 QA passed/3 xfailed**, full **189 passed/1 skipped/3 xfailed**. | **Not ready for production multi-user deployment.** Pre-audit revocation can still allow a stale mutation; index rebuild cursor mismatch is unresolved. | Claude owns fixes for #8/#9/#10, approved ADR-014 coordinator, and native Windows/SMB qualification. Director controls merge and release. |
+| [#3 — QA](https://github.com/nrobertson152/RevisionWorx/pull/3) | `qa/testing-infrastructure`; QA test SHA `454391dfd6bd66059b97631701f6e5722b5e862e` in verified run; subsequent workflow-only commits tracked in progress log | **Ready for Director/Claude review.** Tests, failpoints, CI and evidence, no changes to production code. Remains draft. | QA green status does not certify product. |
+| [#6 — Phase 1](https://github.com/nrobertson152/RevisionWorx/pull/6) | `phase1-foundation` `412e69ab90bb1d8b74c1a3cf5519f581e4420e63` | Phase 1 + QA PR integration runs on Linux/Windows; still needs approved integration order. | No installed-desktop or physical-share qualification. |
+| [#7 — Phase 2](https://github.com/nrobertson152/RevisionWorx/pull/7) | `phase2-documents` `f3c54386e41a0587df0b97d0bfcf4b54cd92c0a6` | **#8 effective revocation, #9 index consistency, #10 local Windows lock cleanup accepted under exact CI configurations.** Full suite and focused stress green except explicitly retained physical-artifact xfail. | Standalone *testable/reviewable*, but no product-release approval; multi-user **NOT qualified**. |
 
-## What the test results mean
+## 2. Current exact-revision execution evidence
 
-The **strict xfail** `test_paused_writer_break_after_lock_check_must_not_publish` is a deterministic reproduction of the non-atomic **physical publication** window. ADR-015 has an independently passing positive test for **post-audit logical fencing**, but it still permits the late physical journal file. An additional strict acceptance xfail tests the distinct **lock-renamed-before-audit** window, where even logical replay can accept a stale mutation. Issue #8 remains open. The runner reports overall success because the defect is explicitly recorded as expected, **not because the requirement passed**. If a relevant defect is corrected, its strict test should become XPASS and fail CI, prompting QA to revise the oracle only after verifying that the corrected authority contract meets the **intended invariant**. A late file that is provably ignored may satisfy logical safety but not an oracle that prohibits physical publication; these are different claims.
+Full integration [GitHub Actions run 41387311002](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387311002), disposable Phase 2 `f3c54386e41a0587df0b97d0bfcf4b54cd92c0a6` plus QA `454391dfd6bd66059b97631701f6e5722b5e862e`, executed with `python -m pytest -q -ra tests/qa` and `python -m pytest -q -ra`:
 
-Windows Phase 2's one skipped test is `tests/test_projects.py`'s case-sensitive-filesystem assumption; it is not a failed Phase 2 feature. GitHub-hosted offscreen Qt tests demonstrate widget execution but not installed native GUI behavior, interactive dialogs, rendering quality, or accessibility.
+| Host | Python | Independent QA | Complete Phase 2 suite |
+| --- | --- | --- | --- |
+| Linux | 3.11 | 37 passed, 1 skipped, 1 strict xfailed | **211 passed, 1 skipped, 1 strict xfailed** |
+| Linux | 3.13 | 37 passed, 1 skipped, 1 strict xfailed | **211 passed, 1 skipped, 1 strict xfailed** |
+| Windows | 3.11 | 38 passed, 1 strict xfailed | **211 passed, 1 skipped, 1 strict xfailed** |
+| Windows | 3.13 | 38 passed, 1 strict xfailed | **211 passed, 1 skipped, 1 strict xfailed** |
 
-The integrated Phase 2 workflow copies only QA tests into a disposable Phase 2 checkout. It **does not** merge PR #3 into PR #7 or test an approved final merge commit. Final integration and post-merge tests remain mandatory.
+Skipped: Linux QA skips the Windows NTFS-specific fault injection; Windows full suite skips a case-sensitive-filesystem-only test. The remaining strict xfail is the physical late-journal-file oracle under #8 (see below).
 
-## Blocking qualification evidence
+Focused [run 41387311010](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387311010), same two SHAs, Linux and Windows Python **3.13.17**, commands:
 
-1. **Known release-blocking defect:** [issue #8](https://github.com/nrobertson152/RevisionWorx/issues/8) administrative lock break can permit a stale writer to publish after its last token check. The Director's audited override requirement remains mandatory. ADR-014 approves an optional local LAN coordinator for multi-user deployments, initially Windows-hosted with SMB. **It is not integrated or physically certified**; ADR-015's post-audit logical fencing does not close the pre-audit lock-rename window.
-2. **No real shared-filesystem certification:** no separate-host SMB/NFS fault injection, lock-break race, disconnect/reconnect, lease/rename semantics or Windows share contention verification.
-3. **No installed desktop smoke:** test Windows and Linux packaged builds, document registration, checkout/check-in, dialogs, path-preserving native CAD files and recovery under a real GUI session.
-4. **Final integration not tested:** stacked PRs and QA overlays were verified at the exact SHAs above, not at a director-approved final merged revision.
-5. **Separately reproduced cache defect:** [issue #9](https://github.com/nrobertson152/RevisionWorx/issues/9): `LocalIndex.rebuild` mixes newer records/deletions with an older journal cursor. Independent strict expected-failure regressions for both insert and delete; correction belongs to Claude.
-6. **Intermittent Windows multi-process checkout failure:** [issue #10](https://github.com/nrobertson152/RevisionWorx/issues/10), verified [Windows CI failure 41382433694](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382433694): one checkout succeeded, two conflicted and three timed out; worker `Workspace.close()` raised `PermissionError: [WinError 32]` while unlinking `writer.lock` in the presence of competing processes. Same-source [rerun 41382488751](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382488751) was green, making this an intermittent race rather than an invariably failing test. QA added a Windows-only strict failpoint acceptance test for a transient sharing violation; fix belongs to Claude.
+```bash
+python -m pytest -q -ra tests/qa/test_integrity.py
+python tests/qa/windows_checkout_stress.py --trials 5 --workers 6 --timeout 100
+```
 
-## Minimal Windows installed-GUI smoke procedure
+Linux: **16 passed, 1 skipped, 1 strict xfailed**. Windows: **17 passed, 1 strict xfailed**.
 
-Use a clean Windows VM and an actual installed build produced by the approved release pipeline. Keep a disposable test directory with an assembly referencing a part by relative path; save the directory fingerprint before testing. Open the app, create/open a workspace, register a native CAD drawing, filter it in the Documents tab, check it out, modify the file, check in a revision, inspect history and export an earlier revision. Verify the original assembly and part paths and bytes remain unchanged except for the deliberately edited file, and that the previous content snapshot hashes to its recorded SHA-256. Repeat on a Linux desktop with an installed package. Test ordinary users and permission-denied locations. Record OS/build SHA, screenshot or log evidence, and pass/fail for every action. Offscreen CI is not a substitute for this manual qualification.
+**Windows Server 2025 runner 10.0.26100, local temporary filesystem:** 5 independent trials × 6 spawned processes = **30 attempts**. Each trial: `won=1`, `conflict=5`, all six exit codes zero, no orphaned writer lock, one durable checkout, original immutable revision unchanged, journal head 5, zero `Workspace.verify()` problems. **5/5 trials passed; 0 crashes, 0 timeouts.** This is local NTFS-like CI evidence, *not* a physical two-host SMB certification or a long-duration soak.
 
-**QA conclusion:** **PR #3's test infrastructure can be reviewed independently** of the product release blockers, once all QA jobs at the chosen merge SHA complete successfully. This is not approval to merge. Phase 1/2 remain **not certified for production multi-user shared-folder writes**; issues #8, #9, #10 and physical Windows/SMB qualification require Lead Architect ownership. The Director authorizes integration and releases.
+## 3. Five independent safety and reliability acceptance oracles
 
-## Current independent verification snapshot and limitations
+All test paths are relative to the QA branch. Claude owns production fixes; QA owns verification and historical regressions.
 
-- **Latest verified complete Phase 2 + QA before the newest cache-delete/restore-history tests:** [run 41382170092](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382170092), Phase 2 `47d81658764cd6bde60e391ac9aac24e722317e8`, QA `20cd42368244a1b4daa6eed62230994d106503db`. Linux/Python 3.13 **33 QA passed/3 xfailed, full 190 passed/3 xfailed**; Windows/Python 3.13 **33 QA passed/3 xfailed, full 189 passed/1 skipped/3 xfailed**. Strict xfails cover post-audit physical publication (#8), pre-audit-rename stale mutation (#8), and LocalIndex watermark mismatch (#9). The separately **passing** ADR-015 logical post-audit fencing test is included.
-- **Real PySide6 tests:** `tests/qa/test_qt_documents.py` executes genuine Qt widgets offscreen (not stubs) on Linux and Windows. The initial two cases for status warning and validation passed in [run 41381681615](https://github.com/nrobertson152/RevisionWorx/actions/runs/41381681615); the authoritative checkout-conflict dialog case also passed on both platforms in [run 41382022898](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382022898).
-- **Issue #8 remaining window:** in addition to the original post-audit physical append, the Distributed Systems Engineer identified an administratively broken lock that is *renamed before its audit entry is committed*. Current ADR-015 journal ordering does not fence a stale write published in this gap. The independent strict expected-failure test was **verified** as XFAIL on both operating systems in [run 41382170092](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382170092). This confirms a stale mutation can take effect before the audit despite ADR-015.
-- **Historical CI failures and correction:** the first index watermark acceptance test used `expect_rev=0`, which the original Phase 1 `RecordPut` lacked. This was QA test incompatibility, **not** a production defect. Commit `4f2f40f` removed that unnecessary argument, and [run 41381768439](https://github.com/nrobertson152/RevisionWorx/actions/runs/41381768439) completed successfully on Linux and Windows, confirming repaired QA-branch testing.
+| Issue / invariant | Independent regression path | Exact-current candidate outcome | Claude handoff / follow-up |
+| --- | --- | --- | --- |
+| [#8](https://github.com/nrobertson152/RevisionWorx/issues/8): an old writer must not create a physical journal file after revoked | `tests/qa/test_integrity.py::test_paused_writer_break_after_lock_check_must_not_publish` | **STRICT XFAIL remains**, deliberately. A late journal file can physically exist. | ADR-015 rev.2 explicitly allows a provably **fenced, logically ineffective** artifact. Physical nonpublication is a stronger and *unmet* oracle; do not conflate it with an effective stale mutation. |
+| [#8](https://github.com/nrobertson152/RevisionWorx/issues/8): revocation before evidence lock move must block an effective stale write | `tests/qa/test_integrity.py::test_writer_revoked_before_admin_audit_cannot_take_effect`; positive `test_revoked_writer_publication_is_logically_fenced_on_replay` | **PASS** on Linux/Windows; revocation journal entry linearizes before lock-file evidence. | Maintain token-checked reason-required audited override. Revalidate every later authority protocol change, especially coordinator transitions. |
+| [#9](https://github.com/nrobertson152/RevisionWorx/issues/9): index cannot include an N+1 insert under cursor N | `tests/qa/test_integrity.py::test_index_rebuild_does_not_include_records_newer_than_its_watermark` | **PASS** on Linux/Windows. | Bounded stable-snapshot retry accepted for tested deterministic insertion; independently verify again if replay architecture changes. |
+| [#9](https://github.com/nrobertson152/RevisionWorx/issues/9): index cannot omit an N record because of a deletion at N+1 | `tests/qa/test_integrity.py::test_index_rebuild_does_not_omit_pre_watermark_records_due_to_late_delete` | **PASS** on Linux/Windows. | Verify bounded-retry failure-closed behavior under ongoing publication in future load tests. |
+| [#10](https://github.com/nrobertson152/RevisionWorx/issues/10): transient Windows sharing violation must preserve lock ownership, retry boundedly and allow successor | `tests/qa/test_integrity.py::test_windows_writer_lock_close_survives_transient_sharing_violation` plus `tests/qa/windows_checkout_stress.py` | **PASS** Windows injected violation and real **5/5 six-process trials**. | Preserve ownership checks each retry; later test persistent denial, reassignment and longer contention on release candidates. |
 
-The latest current-head CI must still be inspected before assigning any final merge-readiness status. New tests **not yet executed** at this snapshot cannot be counted in the numbers above.
+The version-aware strict `xfail` markers remain active **only on older implementations** for the four *corrected* invariants. They become normal passing tests on the current implementation; an unexpected error still fails CI. The physical-file oracle remains an explicit strict expected failure because the artifact can exist but has no authoritative effect. Its presence must never be counted as a passing physical-nonpublication requirement.
 
-## Pending later exact-head CI
+## 4. Qualification tiers and outstanding gates
 
-QA branch added a new delete-side cache-watermark strict xfail (`8ab09596`), history-preserving revision restore regression (`19941a90`), and a Windows-only transient lock-file sharing-violation strict failpoint (`745bbb84`). The Phase 2 overlay was expanded from Python 3.13 to **Python 3.11 and 3.13 on both Linux and Windows** (`e413722d`). Do not represent these later tests or runner configurations as verified until the corresponding exact-head CI completes. The intermittent real Windows checkout failure in issue #10 must not be hidden by unrelated green retries.
+**QA infrastructure review (#3):** Independent tests, reproducible fixtures, actual PySide6 offscreen widget tests, CLI subprocess tests, deterministic fault injection, Windows processes and pinned current Phase 2 code provide a reviewable QA PR. The approved integration order and any merge decision remain Director-controlled.
+
+**Standalone single-user desktop release:** Local application behavior and revised storage checks are independently tested, but a clean, **installed native Windows and Linux build** has not been manually qualified for actual interactive dialogs, installation/upgrades, long-file paths, CAD application roundtrip, backups or unexpected permission failures. Do not infer a release from passing offscreen widgets.
+
+**Supported multi-user deployment:** ADR-014 authorizes an optional offline Windows-hosted LAN coordinator plus SMB. **Not production-certified.** Before qualification: atomically fenced generation/transaction authority, authenticated audited override, durable txid replay and restore witnessing, real separate-host SMB 3.x contention/failure tests (disconnect, power loss, server reboot, permissions, backup rollback), and committed-object integrity. Local Windows 30-process-attempt evidence proves none of those network properties. NFS/Linux hosting are later targets.
+
+## 5. Retest recipe and ownership
+
+1. Resolve one immutable candidate Phase 2 commit SHA **once for the whole matrix** (the QA workflow now pins a single head; previously independently starting jobs could test different Claude commits).
+2. Overlay `tests/qa` from an exact QA SHA into a *disposable* Phase 2 checkout; run `python -m pytest -q -ra tests/qa` and `python -m pytest -q -ra` on Linux/Windows Python 3.11/3.13. Record **both** SHAs, every pass/skip/xfail/XPASS/failure and job URLs.
+3. Run the **focused** `test_integrity.py` and real Windows `windows_checkout_stress.py --trials 5 --workers 6` against the same Phase 2 SHA. A failed/timeout trial must print worker outcomes and exits, not be retried away silently.
+4. For any changed fix, verify its test stops being a strict expected failure and becomes a real pass **for the intended invariant**. A logical-fencing pass is not a physical-no-file pass. On failures, file reproducible details in issues #8/#9/#10; never alter authoritative storage from the QA branch.
+5. Before Director-approved merge/release, retest the **actual intended integration commit** and qualify native UI and physical supported SMB separately.
+
+**QA recommendation:** PR #3 may be reviewed independently of production release readiness. Claude may evaluate closing the locally corrected #8/#9/#10 implementation defects after reviewing this evidence, while keeping physical-artifact semantics explicit and all shared-network qualification gates open. **No PR merge, release or deployment approval is given by QA.**
