@@ -100,3 +100,23 @@
 3. Ask Lead Architect to approve `inspect_bytes(raw,suffix)` as the isolated Phase 2 handoff and decide who validates immutable revision digest and stores disposable index observations.
 4. Coordinate conflict-free PR retargeting after Phase 1 and Phase 2 integration sequencing is approved.
 5. Add more real fixtures including schema 3, custom symbols, multiunit devices, and malformed deflate files; verify Windows and Qt separately in their respective assignments.
+
+## Director request: verify and complete assignment — 2026-11-01
+
+**Orders and activity:** Reread `docs/agents/README.md`, `OPENSchematix_INTEGRATION_ORDERS.md` from `main`, prior progress, draft PRs #2/#6/#7 and issue #8. No scope change: isolated read-only adapter only. PR #6/#7 remain unmerged. GitHub checkout from local container still fails DNS resolution; used GitHub Actions as executable validation.
+
+### Deliverables committed/pushed
+- `.github/workflows/openschematix-adapter.yml`: standalone Linux Python 3.11/3.13 unittest matrix; commit `bbd88a6092e5191841682e07be0ec011ebb4095e`. Later removed duplicate pull_request trigger and added concurrency cancellation in `ad1898addfaf4264a3af7c3dcef1d88e7394eb9a`.
+- `tests/fixtures/openschematix/hydraulic_cylinder_circuit.osch`: third actual upstream v1.1.0 fixture, Git blob `ae01e0ce70ae89292f2a1a3f05b3904a6959c62c`; commit `4655d07f6f218f3e1d5c3e06bfdbf4e7eafa9690`. Added fixture regression (1 sheet, 9 components, 0 candidate parts) in `b7bde39380185c5ec7a4d1ec4e5061c4e2fd87c8` and provenance README update in `6ebdda7eb43217e30d6f431b7331c77fe41e8df5`.
+- `revisionworx_integrations/openschematix.py`: validate `sheet_order` even when falsey/malformed (`fac6fecc5b8394900e7181dd01b6c50bcaeb7428`); classify oversized `mimetype` ZIP member as malformed `InvalidProject` rather than `UnsupportedFormat` (`5eaea7751f7f97a6245993bcfe56d5d09db6f38c`).
+- `docs/OPENSchematix_INTEGRATION.md`: CI evidence, defect and third fixture record (`92c0619875cd6227cd6b71c2d7862315815a3de3`).
+
+### Independently verified CI evidence
+- GitHub Actions run [41373728900](https://github.com/nrobertson152/RevisionWorx/actions/runs/41373728900) executed the actual adapter on Linux CPython 3.11.17 and 3.13.17, **23 tests run, 22 passed, 1 error on both versions**. Exact failure: `test_reject_oversized_mimetype_member` expected `InvalidProject`, received `UnsupportedFormat`. All other tests, including real upstream native/legacy fixtures and archive security cases, passed. Read and diagnosed full GitHub Actions job logs. Fixed exception type in commit `5eaea775`.
+- The third fixture increases the current suite to **24 tests**. Latest CI run on the fix/latest HEAD was queued at last inspection, so **24/24 is NOT yet verified**. Do not mark PR ready until a successful latest-head matrix result is confirmed.
+
+### Risks, architecture and exact next steps
+- Source parsing and component extraction now have real fixture coverage. Full native BOM parity is **not** implemented; reference native BOM counts 16/5/7 versus 5/0/0 candidate groups. Never publish candidates as BOM.
+- `inspect_bytes(raw,suffix)` remains a proposed Phase 2 boundary awaiting Claude approval. Immutable revision SHA must be checked by the caller; no authoritative part/dependency writes are implemented.
+- Issue #8 confirms a separate stale-writer fencing defect in Phase 1. Do not imply RevisionWorx is multiuser-safe or that the integration fixes it.
+- Check GitHub Actions for 24/24 Python 3.11 and 3.13 success at exact latest head; fix any further failure. Coordinate approval of the immutable bytes interface and PR retargeting with Claude. Retain draft PR and no merge/release until approved.
