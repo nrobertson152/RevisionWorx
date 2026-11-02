@@ -234,8 +234,7 @@ def test_index_rebuild_does_not_include_records_newer_than_its_watermark(tmp_pat
                     monkeypatch.setattr(ws, "head_seq", original_head)
                     committed = ws.commit("qa.index.concurrent", [
                         RecordPut("root", injected_id,
-                                  {"id": injected_id, "name": "newer than cursor"},
-                                  expect_rev=0)
+                                  {"id": injected_id, "name": "newer than cursor"})
                     ])
                     injected_seq.append(committed)
                 return seq
