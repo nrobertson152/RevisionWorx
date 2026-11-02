@@ -73,6 +73,11 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-01 (session 3) — issue #8 fenced (ADR-015)
+- Reproduced Agent D's procedure as `tests/test_issue8_fencing.py`. Both tests failed first: the stale commit succeeded.
+- Implemented journal-order fencing. The full suite gives **153 passed, 1 skipped**.
+- Multi-user use is still gated on the coordinator and on SMB verification.
+
 ### 2026-11-01 (session 2, part 3) — independent agents' work executed; decision pending
 Agents B and D opened PR #3, PR #4 and issue #5 during this session. Their tests had not been run
 against the application, so I ran them; nothing in their branches was modified.

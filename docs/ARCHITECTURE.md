@@ -337,6 +337,19 @@ Implementation notes beyond the original design:
 - **Ownership:** Agent D owns the coordinator prototype and the SMB test rig. The lead architect owns the seam and its integration.
 - **Release gate:** issue #8 (the stale-writer vulnerability; see ADR-008 residual risk) must be closed by coordinator fencing and verified on real SMB before any production multi-user claim.
 
+### ADR-015 Journal-order fencing of revoked writers (issue #8) — IMPLEMENTED (standalone mode)
+- **Rule:** an audited lock break (`workspace.lock.break`) records the revoked token. Any journal entry signed (`writer_token`) with a token that an **earlier** entry revoked is **fenced**.
+- **Effect:**
+  - Fenced entries are never applied: by readers (overlay), replay (`recover`), the local index, or the stale writer itself, which gets `LockLostError("fenced…")`.
+  - `transaction_outcome` reports `fenced`.
+  - `verify` reports `fenced-entry`.
+  - The stale file may still exist on disk, but it has no effect.
+- **Closes:** the logical stale-writer vulnerability that Agent D reproduced (pause after the lock check, admin break, resume).
+- **Does not close:**
+  - It still relies on the file share's exclusive-create and ordering semantics, which are unverified on SMB.
+  - Multi-user production still requires the coordinator (ADR-014). The coordinator should apply the same generation check inside its commit transaction.
+- **Tests:** `tests/test_issue8_fencing.py`.
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).
