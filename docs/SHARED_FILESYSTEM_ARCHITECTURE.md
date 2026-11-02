@@ -1,6 +1,6 @@
 # Shared Filesystem Architecture: Research Decision
 
-**Decision: no production deployment approval.** The inspected repository baseline contains specifications but no verified shared coordination code. A shared folder is not a transactional database.
+**Status: research only, no multi-user deployment approval.** Phase 1 (`phase1-foundation`, draft PR #6) has an implemented local-filesystem journal and writer lock; Phase 2 (`phase2-documents`, stacked draft PR #7) adds checkouts and immutable revisions. Neither branch certifies SMB/NFS nor closes the administrative lock-break TOCTOU publication race. A shared folder is not a transactional database.
 
 ## System map
 
@@ -13,7 +13,7 @@
 
 1. At most one effective checkout authority per document; all mutations serialized under a proven cross-host gate.
 2. A checkout must bind owner, random token, monotonic per-document fencing generation, workspace epoch and expected base revision.
-3. The current authority must verify every one of these fields immediately before check-in. Never infer permission from a local SQLite cache.
+3. The **authoritative generation, owner, epoch and expected record revisions must be checked atomically with commit-marker publication**, not as an earlier preflight; otherwise an administrator may revoke between checking and publishing. Never infer permission from a local SQLite cache.
 4. Publish all immutable CAD content, metadata, BOM/dependencies and audit intent before a single durable commit marker containing a complete manifest hash.
 5. The commit marker is the sole logical visibility point. Heads and search change records are rebuildable projections; readers must not treat unrecovered projections as current.
 6. Recovery must refuse writes when any committed blob is missing, any hash disagrees, sequence continuity is broken, or workspace epoch unexpectedly changes.
@@ -36,10 +36,10 @@ A small offline-capable on-premise coordinator using a local SQLite database in 
 
 ## Prototype limits
 
-The isolated Python sample demonstrates local POSIX mkdir serialization, random checkout tokens, SHA-256 blobs, PREPARED/COMMIT markers, projection replay and sequential events. It does not support multi-document manifests, monotonic fencing generations, portable Windows fsync, authenticated administration, operational mutex recovery, NAS failure or network partitions. Its process-crash dead mutex deliberately requires manual intervention. The prototype is **not production-ready**.
+The *actual* isolated prototype is `prototype/authority.py`, a serialized local SQLite authority model (not a shared-filesystem mutex): it records monotonically increasing fencing generations, audited administrative override, idempotent commit IDs, revision preconditions and ordered transaction markers in one ACID transaction. It does **not** write a real RevisionWorx journal, publish immutable CAD blobs, provide a service transport, authenticate operators, or protect against database rollback/restore without an external epoch. `prototype/test_phase1_lock_race.py` separately provides an opt-in regression harness against a real Phase 1 checkout. Neither prototype is production-ready.
 
 ## Interface contract to Claude
 
 `acquire(doc, actor, expected_head) -> {token, generation, epoch, base}`; `verify(doc, token, generation, epoch)`; `revoke(doc, operator, reason)`; `prepare(txid, base_heads, immutable_manifest_digest)`; `commit(txid) -> {sequence, revisions}`; `changes(epoch, cursor, limit)`; `snapshot(epoch)`.
 
-Do not modify the core PDM entity model here. Add protocol integration only after the authority implementation and cross-host tests pass. Facts: original docs explicitly say coordination is proposed; local prototype tests passed; remote semantics remain unverified.
+Do not modify the core PDM entity model here. The Lead Architect owns the `CommitAuthority` seam. **10 local Python unittest cases passed** (Python 3.13.5, Linux; 2026-11-01) against an equivalent local prototype checkout; an opt-in real Phase 1 regression harness was skipped without a separate Phase 1 checkout. The former five-test result in early research notes was unsubstantiated and is withdrawn. Remote SMB/NFS semantics remain unverified. Option B is a proposal awaiting the Project Director's decision in issue #5.
