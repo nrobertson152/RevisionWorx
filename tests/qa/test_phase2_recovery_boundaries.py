@@ -34,12 +34,7 @@ def _journal_entries(ws):
     return [ws.read_entry(seq) for seq in ws.journal_seqs()]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Issue #10: manual orphan-clear moves evidence before its administrative journal audit",
-)
-def test_manual_orphan_clear_crash_must_not_silently_authorize_a_new_writer(tmp_path, monkeypatch):
+def test_manual_orphan_clear_crash_must_not_silently_authorize_a_new_writer(tmp_path, monkeypatch, request):
     """P1 failpoint: crash after clear's evidence rename, before its audit.
 
     A pre-existing corrupt release file blocks all new writers. An attempted
@@ -49,6 +44,11 @@ def test_manual_orphan_clear_crash_must_not_silently_authorize_a_new_writer(tmp_
     """
     if not hasattr(Workspace, "clear_orphaned_release"):
         pytest.skip("Phase 2 ADR-019 manual orphan clearance unavailable")
+    if not hasattr(Workspace, "_orphan_clear_audits"):
+        request.node.add_marker(pytest.mark.xfail(
+            strict=True, raises=AssertionError,
+            reason="legacy ADR-019 moved orphan evidence before durable audit",
+        ))
     root = tmp_path / "workspace"
     with Workspace.create(root, "QA orphan clear interruption"):
         pass
@@ -251,3 +251,80 @@ def test_verified_revision_read_rejects_boundary_overlimit_and_same_length_corru
         D.read_revision_bytes(ws, rev_a["id"], max_bytes=size)
     assert source.read_bytes() == b"mutable working file is not an immutable revision"
     assert ws.get("revision", rev_a["id"])["sha256"] == hashlib.sha256(original).hexdigest()
+
+
+def test_audited_orphan_clear_survives_crash_before_evidence_move(tmp_path, monkeypatch):
+    """ADR-019 rev.2: durable audit must precede move; scanner resumes once."""
+    if not hasattr(Workspace, "_complete_orphan_clear"):
+        pytest.skip("ADR-019 rev.2 audit-first completion is not implemented")
+    root = tmp_path / "workspace"
+    with Workspace.create(root, "QA audited interrupted disposition"):
+        pass
+    locks = root / ".revisionworx" / "locks"
+    name = ".releasing-" + "b" * 16
+    orphan = locks / name
+    raw = b"{unparseable-lock-owner-bytes"
+    orphan.write_bytes(raw)
+    with pytest.raises(WorkspaceCorruptError):
+        Workspace.open(root, writable=True)
+
+    with monkeypatch.context() as m:
+        def crash_before_evidence_move(*args, **kwargs):
+            raise SystemExit("QA crash after durable administrative audit")
+        m.setattr(Workspace, "_complete_orphan_clear", crash_before_evidence_move)
+        with pytest.raises(SystemExit, match="after durable administrative audit"):
+            Workspace.clear_orphaned_release(root, name, "confirmed former holder stopped")
+
+    assert orphan.read_bytes() == raw
+    with Workspace.open(root) as reader:
+        audits = [e for e in _journal_entries(reader) if e.get("op") == "workspace.orphan.clear"]
+        assert len(audits) == 1
+        rec = audits[0]["records"][0]["data"]
+        assert rec["file"] == name and rec["file_sha256"] == hashlib.sha256(raw).hexdigest()
+        committed_audit_seq = audits[0]["seq"]
+
+    with Workspace.open(root, writable=True) as successor:
+        assert not orphan.exists()
+        rid = "root_" + "7" * 32
+        successor.commit("qa.after.audited.recovery", [
+            RecordPut("root", rid, {"name": "authoritative new writer"}, expect_rev=0)
+        ])
+        assert successor.get("root", rid)["name"] == "authoritative new writer"
+    evidence = list(locks.glob("writer.lock.orphaned-*"))
+    assert any(p.read_bytes() == raw for p in evidence)
+    Workspace.clear_orphaned_release(root, name, "idempotent supervised retry")
+    with Workspace.open(root) as reader:
+        audits = [e for e in _journal_entries(reader) if e.get("op") == "workspace.orphan.clear"]
+        assert len(audits) == 1
+        assert audits[0]["seq"] == committed_audit_seq
+        assert reader.verify()["problems"] == []
+
+
+def test_audited_orphan_clear_does_not_authorize_changed_evidence(tmp_path, monkeypatch):
+    """An audit over bytes X must not authorize a different tokenless orphan Y."""
+    if not hasattr(Workspace, "_complete_orphan_clear"):
+        pytest.skip("ADR-019 rev.2 audit-first completion is not implemented")
+    root = tmp_path / "workspace"
+    with Workspace.create(root, "QA changed audited evidence"):
+        pass
+    locks = root / ".revisionworx" / "locks"
+    name = ".releasing-" + "c" * 16
+    orphan = locks / name
+    initial = b"{first-tokenless-evidence"
+    orphan.write_bytes(initial)
+    with monkeypatch.context() as m:
+        def crash_after_audit(*args, **kwargs):
+            raise SystemExit("QA paused before disposition")
+        m.setattr(Workspace, "_complete_orphan_clear", crash_after_audit)
+        with pytest.raises(SystemExit, match="paused"):
+            Workspace.clear_orphaned_release(root, name, "verified stopped holder")
+    orphan.write_bytes(b"{DIFFERENT-tokenless-evidence")
+    with pytest.raises(WorkspaceCorruptError):
+        Workspace.open(root, writable=True)
+    assert Workspace.read_writer_lock(root) is None
+    assert orphan.is_file()
+    assert not list(locks.glob("writer.lock.orphaned-*"))
+    with Workspace.open(root) as reader:
+        audits = [e for e in _journal_entries(reader) if e.get("op") == "workspace.orphan.clear"]
+        assert len(audits) == 1
+        assert audits[0]["records"][0]["data"]["file_sha256"] == hashlib.sha256(initial).hexdigest()

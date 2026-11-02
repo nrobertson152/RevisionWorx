@@ -130,21 +130,21 @@ def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, mod
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="ADR-017 canonical full operation ordering: checks and writes are stored in separate arrays",
-)
-def test_identical_txid_reordered_check_across_write_must_be_rejected(tmp_path):
+def test_identical_txid_reordered_check_across_write_must_be_rejected(tmp_path, request):
     """Same checks and writes, but different *interleaved* operation order.
 
-    The current ADR-017 journal records separate checks and writes arrays.
-    Reordering just the checks is already rejected; moving a check across a
-    RecordPut is also a different submitted request under the full ordered
-    operation-list proposal. Retain strict xfail until Claude decides and
-    implements/version-controls the canonical identity contract.
+    Legacy ADR-017 journals lose the check/write interleaving and are strict
+    expected failures; ADR-021 v2 journals include the complete ordered list
+    digest and MUST pass normally.
     """
     location, a, b, target, txid, op, operations, seq, target_revision = _setup_committed_request(tmp_path)
+    with Workspace.open(location) as reader:
+        recorded = reader.read_entry(seq)
+        if (recorded.get("request") or {}).get("version") != 2:
+            request.node.add_marker(pytest.mark.xfail(
+                strict=True, raises=AssertionError,
+                reason="legacy ADR-017 lost interleaved full-operation ordering",
+            ))
     ordered = operations()
     changed = [ordered[0], ordered[2], ordered[1]]
     with Workspace.open(location, writable=True) as writer:
@@ -165,3 +165,61 @@ def test_identical_txid_reordered_check_across_write_must_be_rejected(tmp_path):
             "same txid accepted reordered RecordCheck across RecordPut: "
             "request identity discarded the original operation interleaving"
         )
+
+def test_legacy_transaction_without_request_identity_refuses_ambiguous_retry(tmp_path):
+    """ADR-021 cannot infer historical RecordCheck preconditions retroactively."""
+    if not hasattr(workspace_mod, "IdentityUnverifiable"):
+        pytest.skip("ADR-021 explicit legacy identity refusal not present on prior Phase 2")
+    root = tmp_path / "legacy-journal"
+    rid = "root_" + "e" * 32
+    txid = "9" * 32
+    put = RecordPut("root", rid, {"id": rid, "name": "historical record"}, expect_rev=0)
+    with Workspace.create(root, "QA legacy identity") as writer:
+        seq = writer.head_seq() + 1
+        historical = {
+            "seq": seq,
+            "txid": txid,
+            "time": workspace_mod.now_iso(),
+            "actor": workspace_mod.current_actor(),
+            "op": "qa.legacy.entry",
+            "records": [put.as_json()],
+            "blobs": [],
+            "writer_token": writer._lock_token,
+            # Deliberately no v2 "request" field: an actual pre-ADR021 format.
+        }
+        historical["digest"] = workspace_mod.entry_digest(historical)
+        from revisionworx import atomicio
+        atomicio.publish_exclusive(
+            root / ".revisionworx" / "journal" / f"{seq:020d}.json",
+            atomicio.dumps_json(historical),
+        )
+        writer.recover()
+        assert writer.get("root", rid)["name"] == "historical record"
+        assert writer.transaction_outcome(txid) == {"state": "committed", "seq": seq}
+    with Workspace.open(root, writable=True) as writer:
+        before = writer.head_seq()
+        with pytest.raises(workspace_mod.IdentityUnverifiable) as error:
+            writer.commit("qa.legacy.entry", [put], txid=txid)
+        assert error.value.seq == seq
+        assert writer.head_seq() == before
+        assert writer.transaction_outcome(txid) == {"state": "committed", "seq": seq}
+        assert writer.get("root", rid)["_rev"] == seq
+        assert writer.verify()["problems"] == []
+
+
+def test_adr021_rejects_nonfinite_payload_before_journal_publication(tmp_path):
+    """Non-canonical NaN must not acquire a durable txid identity."""
+    if not hasattr(workspace_mod, "REQUEST_IDENTITY_VERSION"):
+        pytest.skip("canonical request identity not present on earlier Phase 2")
+    root = tmp_path / "reject-nonfinite"
+    with Workspace.create(root, "QA nonfinite payload") as writer:
+        rid = "root_" + "8" * 32
+        seq = writer.head_seq()
+        txid = "8" * 32
+        with pytest.raises(ValueError):
+            writer.commit("qa.nonfinite", [
+                RecordPut("root", rid, {"id": rid, "value": float("nan")}, expect_rev=0)
+            ], txid=txid)
+        assert writer.head_seq() == seq
+        assert writer.transaction_outcome(txid) == {"state": "not-found"}
+        assert writer.get("root", rid) is None
