@@ -40,6 +40,15 @@ def _crash_worker(db, guard, ledger, token, checkpoint):
         os._exit(52)
 
 
+
+def _rotate_crash_worker(db, guard, ledger, token):
+    identity = TestIdentityProvider(_ACCOUNTS, _KEY)
+    model = WitnessedCoordinatorResearch(db, guard, ledger, identity)
+    model.rotate_epoch("revoke all leases", token,
+                       after_guard_replace=lambda: os._exit(54))
+
+
+
 def _acquire_worker(db, guard, ledger, identity_token, gate, q):
     identity = TestIdentityProvider(_ACCOUNTS, _KEY)
     model = WitnessedCoordinatorResearch(db, guard, ledger, identity)
@@ -135,6 +144,58 @@ class WitnessedCoordinatorTests(unittest.TestCase):
         with self.assertRaises(Fenced):
             fresh.publish(cred, self.alice, "tx2", "new", expected_revision=0)
         self.assertEqual(fresh.snapshot("drawing")[2], 1)
+
+    def test_supervised_epoch_rotation_fences_all_credentials(self):
+        first = self.co.acquire("drawing", self.alice)
+        second = self.co.acquire("assembly", self.bob)
+        self.co.publish(first, self.alice, "prior-tx", "durable", expected_revision=0)
+        result = self.co.rotate_epoch("planned authority recovery", self.admin)
+        self.assertNotEqual(result["old_epoch"], result["new_epoch"])
+        self.assertEqual(result["invalidated_checkouts"], 2)
+        fresh = self.restart()
+        self.assertEqual(fresh.core.guard.epoch, result["new_epoch"])
+        self.assertEqual(fresh.outcome("prior-tx", self.alice)["state"], "committed")
+        with self.assertRaises(Fenced):
+            fresh.publish(first, self.alice, "old-lease", "bad", expected_revision=1)
+        with self.assertRaises(Fenced):
+            fresh.release(second, self.bob)
+        new_lease = fresh.acquire("drawing", self.alice)
+        self.assertEqual(new_lease["epoch"], result["new_epoch"])
+        self.assertGreater(new_lease["generation"], first["generation"])
+        self.assertEqual(fresh.publish(new_lease, self.alice, "fresh-lease", "good",
+                                       expected_revision=1), "committed")
+        audit = fresh.audit("assembly", self.admin)
+        self.assertEqual(audit[-1][5], "epoch-rotated")
+        self.assertEqual(audit[-1][4], "operator")
+
+    def test_epoch_rotation_requires_admin_and_reason(self):
+        old = self.co.acquire("drawing", self.alice)
+        with self.assertRaises(Fenced):
+            self.co.rotate_epoch("no authority", self.alice)
+        with self.assertRaises(ValueError):
+            self.co.rotate_epoch("", self.admin)
+        fresh = self.restart()
+        self.assertEqual(fresh.core.guard.epoch, old["epoch"])
+        self.assertEqual(fresh.snapshot("drawing")[:2],
+                         (old["generation"], "alice"))
+
+    def test_empty_authority_can_rotate_epoch(self):
+        old = self.co.core.guard.epoch
+        rotated = self.co.rotate_epoch("planned bootstrap rotation", self.admin)
+        self.assertNotEqual(old, rotated["new_epoch"])
+        self.assertEqual(rotated["invalidated_checkouts"], 0)
+        self.assertEqual(self.restart().core.guard.epoch, rotated["new_epoch"])
+
+    def test_guard_updated_but_db_commit_interrupted_fails_closed(self):
+        self.co.acquire("drawing", self.alice)
+        ctx = mp.get_context("spawn")
+        p = ctx.Process(target=_rotate_crash_worker,
+                        args=(str(self.db), str(self.guard), str(self.ledger), self.admin))
+        p.start()
+        p.join(20)
+        self.assertEqual(p.exitcode, 54)
+        with self.assertRaises(Fenced):
+            self.restart()
 
     def test_backup_restore_older_database_fails_closed(self):
         old = self.co.acquire("drawing", self.alice)
