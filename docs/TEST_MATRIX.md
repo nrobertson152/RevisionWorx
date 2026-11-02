@@ -41,3 +41,11 @@ The QA PR is currently based on `phase1-foundation`. The dedicated `tests/qa/tes
 The journal crash test has been updated for ADR-008's `CommittedNotApplied` exception, caller `txid`, and `_rev` materialized-record metadata. The writer-break test is an **xfail(strict=True)** known safety deficit; it does not count as a passing production requirement. Unexpected pass should prompt review of the fencing implementation and removal of the marker only after genuine cross-client verification.
 
 The local Python checkout cannot resolve `github.com`. The GitHub connector supports source inspection and commits but does not execute repository tests. Exact-head full-suite, Phase 2, live Qt, Windows NTFS and SMB/NFS execution remain unverified by this QA role in the current session.
+
+## Verified Phase 2 integrated execution — 2026-11-01
+
+GitHub Actions [run 41371698368](https://github.com/nrobertson152/RevisionWorx/actions/runs/41371698368), Linux Python 3.13, disposable overlay of QA tests at `2905632fe9b84e97bf121edf94a45f2bb44f5aa3` on Phase 2 implementation `77419e34a35a27d29dd9eab3bce858a1ad93871b`: **QA 24 passed, 1 xfailed**; **full suite 179 passed, 1 xfailed**. The eight Phase 2 integrity tests all ran and passed. No skips. The strict xfail is the independently reproduced stale-writer publication after audited administrative break; see issue #8. A successful job is not a passing fencing requirement.
+
+GitHub Actions [PR integration run 41371702767](https://github.com/nrobertson152/RevisionWorx/actions/runs/41371702767) succeeded across Linux and Windows, Python 3.11/3.13, with PySide6 available and Linux Qt runtime libraries installed. These PR-merged-base jobs validate Phase 1+QA; Phase 2 tests remain skipped there because Phase 2 is not on that PR's base. Installed desktop GUI and actual SMB/NFS are still unverified.
+
+Two additional toolkit-independent DocumentListModel/DocumentPanel tests have been committed after the above verified run; they must not be counted as passed until a later Phase 2 integration job executes them. They cover live Controller-backed filtering, checkout/cancel action state, preservation of working bytes and rejection of blank check-in descriptions.
