@@ -9,10 +9,11 @@ concurrency:
   cancel-in-progress: true
 jobs:
   adapter:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +41,7 @@ jobs:
           path: external/revisionworx-phase2
           persist-credentials: false
       - name: Verify immutable revision adapter boundary against Phase 2
+        if: runner.os == 'Linux'
         env:
           REVISIONWORX_PHASE2_SOURCE: ${{ github.workspace }}/external/revisionworx-phase2
         run: python -m unittest discover -s tests -p 'test_openschematix_phase2_contract.py' -v
