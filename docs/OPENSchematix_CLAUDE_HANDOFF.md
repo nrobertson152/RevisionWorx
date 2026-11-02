@@ -186,12 +186,17 @@ at source SHA `ffcfb463bc050ff460279fd92f6758e0215f73e3`:
    #2 retargeted to Phase 2 after Director approval; QA #3 incorporated
    by its target. **No merge or PR retarget was authorized.**
 
-**Actual verification:** Existing Linux/Windows matrix at
-[run 41387383189](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387383189)
-used the older Phase 2 SHA. The new bounded-reader contract tests were
-committed at `da1f01e43628cf165f4fbac6bd3a3171d3657bd8` and
-target the newer `ffcfb463`. Treat their results as **pending** until
-the corresponding CI run completes.
+**Actual verification:** [GitHub Actions run 41389139273](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389139273)
+at adapter/test code SHA `da1f01e43628cf165f4fbac6bd3a3171d3657bd8`
+and pinned Phase 2 SHA `ffcfb463bc050ff460279fd92f6758e0215f73e3`
+passed four jobs: Linux Python 3.11 and 3.13 each **36 adapter +
+4 native BOM oracle + 4 bounded immutable-revision contract = 44
+passing tests**; Windows Python 3.11 and 3.13 each **36 adapter +
+4 native BOM oracle = 40 passing tests**. There were **168 passing
+test executions** in total. Windows Phase 2 storage was not run. The
+new negative contract case checks `ContentTooLarge`, corrupted
+same-size SHA data, and no journal mutations in a disposable workspace.
+It does not certify independent #8/#9/#10 safety acceptance.
 
 ## 3. Native BOM oracle and demonstrated limitations
 
