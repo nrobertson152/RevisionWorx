@@ -113,6 +113,8 @@ class CoordinatorResearch:
                               FROM commits WHERE sequence>? ORDER BY sequence LIMIT ?""",
                               (cursor, limit)).fetchall()
             high = db.execute("SELECT COALESCE(MAX(sequence),0) FROM commits").fetchone()[0]
+        if cursor > high:
+            raise Fenced("cursor beyond authoritative high watermark; restore/rebuild required")
         if rows and rows[0][0] != cursor + 1:
             raise Fenced("missing authoritative sequence; rebuild required")
         for a, b in zip(rows, rows[1:]):
