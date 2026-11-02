@@ -23,7 +23,7 @@ No entry below claims SMB, NFS or NAS testing. H=possible authority/data loss, M
 
 ## Local prototype evidence
 
-Executed `python -m unittest -v prototype.test_authority` from an isolated local checkout on Linux, Python 3.13.5: **10 tests passed, 0 failed**, approximately five seconds. Coverage includes six-process checkout contention, a paused writer revoked across processes, atomic generation and revision precondition checks, txid replay, audit persistence across restart, and SQL constraint rollback. The opt-in `prototype.test_phase1_lock_race` harness ran **one skipped** because a Phase 1 checkout could not be fetched into the execution environment; the underlying real-code defect remains to be independently reproduced at runtime.
+Executed `python -m unittest -v prototype.test_authority` from an isolated local checkout on Linux, Python 3.13.5: **12 tests passed, 0 failed**, approximately five seconds. Coverage includes six-process checkout contention, a paused writer revoked across processes, atomic generation and revision precondition checks, txid replay, audit persistence across restart, and SQL constraint rollback. The opt-in `prototype.test_phase1_lock_race` harness ran **one skipped** because a Phase 1 checkout could not be fetched into the execution environment; the underlying real-code defect remains to be independently reproduced at runtime.
 
 Earlier entries claiming five tested POSIX mkdir/COMMIT-marker prototype cases were **incorrect**: no such prototype was committed or executed. They are withdrawn. No physical Windows/SMB/Samba/NFS/NAS, power-cut, server crash, network partition, authenticated override or real multi-file manifest test was executed. A SQLite model is not a certified distributed product.
 
