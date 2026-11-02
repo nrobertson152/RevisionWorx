@@ -175,3 +175,87 @@ def test_drawing_register_csv_preserves_source_path_and_revision(ws, managed_doc
     assert "QA-DWG-002" in csv_text
     assert "pump-skid.idw" in csv_text
     assert "Pump skid drawing" in csv_text
+
+
+def test_document_viewmodel_checkout_status_and_filter(tmp_path):
+    """View-model smoke uses the real Controller and no Qt dependency."""
+    import time
+
+    from revisionworx.gui.controller import Controller
+    from revisionworx.gui.viewmodels import DocumentListModel, DocumentPanel
+
+    ctl = Controller(cfg_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache",
+                     state_dir=tmp_path / "state")
+    root = tmp_path / "share"
+    (root / "Engineering").mkdir(parents=True)
+    ctl.create_workspace(root, "QA viewmodels")
+    ctl.add_root("Engineering", root / "Engineering")
+    project = ctl.create_project(NewProject(name="QA project", rel_path="QA-project"))
+    native = root / "Engineering" / "QA-project" / "03 Drawings" / "Native" / "vm.idw"
+    native.write_bytes(b"QA drawing bytes")
+    ctl.start_register(project["id"], native, number="QA-VM-001")
+    deadline = time.monotonic() + 15
+    listing = DocumentListModel(ctl)
+    listing.load(project["id"])
+    while not listing.rows and time.monotonic() < deadline:
+        ctl.drain()
+        listing.refresh()
+        time.sleep(0.01)
+    assert len(listing.rows) == 1, listing.error
+    listing.text = "not-present"
+    listing.refresh()
+    assert listing.rows == []
+    listing.text = "QA-VM-001"
+    listing.refresh()
+    assert len(listing.rows) == 1
+    doc_id = listing.row_id(0)
+    panel = DocumentPanel(ctl)
+    panel.load(doc_id)
+    assert panel.can_checkout
+    assert not panel.can_checkin
+    panel.checkout()
+    assert not panel.can_checkout
+    assert panel.can_checkin
+    assert panel.can_cancel
+    panel.cancel(revert=False)
+    assert panel.can_checkout
+    assert not panel.can_checkin
+    assert native.read_bytes() == b"QA drawing bytes"
+
+
+def test_document_viewmodel_rejects_empty_checkin_without_journal_mutation(tmp_path):
+    """An empty check-in message must not enqueue a write or consume checkout."""
+    import time
+
+    from revisionworx.gui.controller import Controller
+    from revisionworx.gui.viewmodels import DocumentPanel
+
+    ctl = Controller(cfg_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache",
+                     state_dir=tmp_path / "state")
+    root = tmp_path / "share"
+    (root / "Engineering").mkdir(parents=True)
+    ctl.create_workspace(root, "QA message validation")
+    ctl.add_root("Engineering", root / "Engineering")
+    project = ctl.create_project(NewProject(name="QA project", rel_path="QA-project"))
+    native = root / "Engineering" / "QA-project" / "03 Drawings" / "Native" / "empty.idw"
+    native.write_bytes(b"QA drawing")
+    ctl.start_register(project["id"], native)
+    deadline = time.monotonic() + 15
+    doc_id = None
+    while doc_id is None and time.monotonic() < deadline:
+        ctl.drain()
+        docs = ctl.documents(project["id"])
+        if docs:
+            doc_id = docs[0]["id"]
+        time.sleep(0.01)
+    assert doc_id is not None
+    panel = DocumentPanel(ctl)
+    panel.load(doc_id)
+    panel.checkout()
+    before = panel.detail["latest"]["id"]
+    assert panel.start_checkin("   ") is False
+    assert "Describe the change" in panel.message
+    panel.reload()
+    assert panel.detail["latest"]["id"] == before
+    assert panel.can_checkin
+    assert native.read_bytes() == b"QA drawing"
