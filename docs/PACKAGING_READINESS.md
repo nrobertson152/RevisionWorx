@@ -1,7 +1,7 @@
 # RevisionWorx — experimental Windows/Linux packaging readiness
 
 **Owner:** OpenSchematix Integration Engineer (isolated draft PR #2).  
-**Status:** PRE-ALPHA EXPERIMENT. No installer, upgrade mechanism, signed package or release is created.
+**Status:** PRE-ALPHA EXPERIMENT. Frozen Windows/Linux CLI and Qt-offscreen startup smoke **PASS** at Phase 2 SHA ffcfb463, [CI run 41388877999](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388877999). No installer, upgrade mechanism, signed package or release is created.
 
 ## Source and build contract
 
@@ -30,6 +30,8 @@ On Windows PowerShell, with Python 3.11 available through python:
     python tools\packaging\test_builder.py
     .\tools\packaging\build-windows.ps1 --source C:\Temp\revisionworx-phase2 --output C:\Temp\revisionworx-bundle-test --expected-sha ffcfb463bc050ff460279fd92f6758e0215f73e3
 
+On Ubuntu-family Linux systems, the PySide6 6.8.3 runtime requires system graphics libraries. The verified GitHub Actions environment installed **libegl1, libgl1, libopengl0, libxkbcommon-x11-0** and the relevant libxcb libraries (cursor, image, keysyms, render-util, xkb, icccm and shape). These are OS packages and are **not** guaranteed to be embedded by PyInstaller. Missing libEGL.so.1 caused the first Linux GUI smoke to exit, so native dependency resolution is an explicit deployment requirement.
+
 Both wrappers invoke the same tools/packaging/build.py and create an isolated build virtual environment. Build dependencies must be downloaded, but bundles are not designed to require cloud services. To build without internet, provide a separately vetted offline wheelhouse and dependency lock; offline build itself is NOT TESTED.
 
 ## Scope and interpretation of the smoke test
@@ -38,13 +40,21 @@ The build script invokes tools/packaging/smoke_installed.py against the **bundle
 
 This checks bundled executable **startup**, not an actual installed desktop UI, visual rendering, navigation, file dialogs, shortcuts, DPI, signing, an installer, or native OS integration. Qt-offscreen success cannot be substituted for interactive installed GUI acceptance. The workflow does not upload binaries or publish releases.
 
+## Independently observed packaging execution
+
+- [Run 41388621198](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388621198), source SHA **ffcfb463**: Windows Python 3.11 bundling/CLI and Qt-offscreen startup succeeded; Linux bundled GUI exited 3 from a masked PySide6 import failure. The CLI build itself completed.
+- [Run 41388766343](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388766343): explicit top-level QtWidgets import in the experimental GUI entry point exposed the Linux dependency error **libEGL.so.1 not found**; failure was correctly retained rather than accepted as a skipped GUI test.
+- **[Run 41388877999](https://github.com/nrobertson152/RevisionWorx/actions/runs/41388877999)**, integration packaging SHA **17cc1cce846df63b4ddab0dc137f495e3f3101d9**, pinned Phase 2 SHA **ffcfb463bc050ff460279fd92f6758e0215f73e3**: both Ubuntu and Windows Python 3.11 jobs **SUCCESS**. Each executed **2 packaging safety unittests passed**, built separate frozen GUI and CLI one-dir directories, passed frozen CLI help, passed frozen Qt GUI startup survival in a disposable Qt-offscreen profile, and emitted provenance with application version **0.1.0.dev0** and binary SHA-256. **No user-visible interactive GUI, native installer, migration or existing-data acceptance was performed.**
+
+This confirms the isolated bundle *startup* gate only. The initial Linux failure is an environmental prerequisite discovered and corrected in the experimental CI environment, not a production-code change.
+
 ## Non-destructive upgrade, migration and path/permissions matrix
 
 **NOT EXECUTED** is an explicit unverified release gate, not a successful test. All future data tests must use a disposable **copy**, never a live customer workspace.
 
 | Gate | Required scenario and acceptance | Status | Severity / owner |
 | --- | --- | --- | --- |
-| OS-specific bundled GUI/CLI startup | Windows/Linux CI, frozen CLI help and offscreen GUI process | CI pending; do not claim installed interactive GUI | P1 / Integration |
+| OS-specific bundled GUI/CLI startup | Windows/Linux CI, frozen CLI help and offscreen GUI process | PASS (Windows/Linux Python 3.11 bundled CLI+GUI, run 41388877999); not interactive | P1 / Integration |
 | GUI interaction in native desktop | Visible windows, menus, file dialogs, icons, keyboard/mouse, DPI, Wayland/X11 and Windows desktop | NOT EXECUTED | P1 / QA |
 | Signed native installer/uninstaller | Windows MSI/wizard, Linux AppImage/deb, shortcuts, publisher identity, clean rollback | NOT IMPLEMENTED | P1 / Director |
 | Existing workspace non-destruction | Copy workspace, compare journal/records/content SHA before/after packaged read | NOT EXECUTED | P0 / Claude+QA |
