@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - qa/testing-infrastructure
+    paths-ignore:
+      - 'docs/**'
   pull_request:
     branches:
       - phase1-foundation
+    paths-ignore:
+      - 'docs/**'
   workflow_dispatch:
 
 permissions:
@@ -14,6 +18,8 @@ permissions:
 
 jobs:
   core-and-qa:
+    # GitHub PR merge checkout covers Phase 1+QA. Don't repeat on push.
+    if: github.event_name != 'push'
     name: "${{ matrix.os }} / Python ${{ matrix.python-version }}"
     runs-on: ${{ matrix.os }}
     env:
@@ -40,13 +46,30 @@ jobs:
       - name: Run full regression suite
         run: python -m pytest -q -ra
 
-# A green run is evidence only for this specific runner and branch revision.
-# It does not certify live PySide6 widgets, real Windows desktop interaction,
-# SMB/NFS semantics, or cross-host recovery.
+# A green run validates actual Qt widgets offscreen but does not certify an
+# installed native GUI, SMB/NFS semantics, or cross-host recovery.
+
+  resolve-phase2-head:
+    # Capture ONE immutable Phase 2 source SHA, preventing mixed-app matrix jobs
+    # if Claude pushes another commit while runners start.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.pin.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase2-documents
+      - id: pin
+        shell: bash
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git rev-parse HEAD
 
   phase2-stacked-regressions:
     name: "Phase 2 integrated QA / ${{ matrix.os }} Python ${{ matrix.python-version }}"
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
+    needs: resolve-phase2-head
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -59,12 +82,12 @@ jobs:
       - name: Checkout Claude's stacked Phase 2 implementation
         uses: actions/checkout@v4
         with:
-          ref: phase2-documents
+          ref: ${{ needs.resolve-phase2-head.outputs.sha }}
           path: phase2
       - name: Checkout QA engineering branch
         uses: actions/checkout@v4
         with:
-          ref: qa/testing-infrastructure
+          ref: ${{ github.sha }}
           path: qa
       - uses: actions/setup-python@v5
         with:
