@@ -116,3 +116,62 @@ def test_administrative_checkout_release_invalidates_old_token(ws, managed_docum
     assert ws.get("checkout", doc["id"])["token"] == successor["token"]
     assert ws.get("document", doc["id"])["latest_rev_id"] == rev_a["id"]
     assert D.verify_revisions(ws, doc["id"]) == []
+
+
+def test_release_supersedes_prior_revision_without_mutating_history(ws, managed_document):
+    folder, source, assembly, before, doc, rev_a = managed_document
+    for state in ("in_review", "approved", "released"):
+        D.transition(ws, rev_a["id"], state, comment="QA approval A")
+    assert ws.get("document", doc["id"])["released_rev_id"] == rev_a["id"]
+    old_sha = ws.get("revision", rev_a["id"])["sha256"]
+    co = D.checkout(ws, doc["id"])
+    source.write_bytes(b"Inventor synthetic revision B after approval\n")
+    rev_b = D.checkin(ws, doc["id"], co["token"], "Revise approved design")
+    for state in ("in_review", "approved", "released"):
+        D.transition(ws, rev_b["id"], state, comment="QA approval B")
+    earlier = ws.get("revision", rev_a["id"])
+    newer = ws.get("revision", rev_b["id"])
+    assert earlier["state"] == "superseded"
+    assert earlier["sha256"] == old_sha
+    assert earlier["label"] == "A"
+    assert newer["state"] == "released"
+    assert ws.get("document", doc["id"])["released_rev_id"] == rev_b["id"]
+    assert len([t for t in earlier["transitions"] if t["to"] == "superseded"]) == 1
+    assert ws.verify()["problems"] == []
+    assert D.verify_revisions(ws, doc["id"]) == []
+
+
+def test_corrupt_content_blocks_release_without_journal_mutation(ws, managed_document):
+    from revisionworx.workspace import WorkspaceError
+
+    folder, source, assembly, before, doc, rev_a = managed_document
+    D.transition(ws, rev_a["id"], "in_review", comment="review")
+    D.transition(ws, rev_a["id"], "approved", comment="approved")
+    before_seq = ws.head_seq()
+    blob = ContentStore(ws).path_for(rev_a["sha256"])
+    blob.write_bytes(b"damaged content object")
+    with pytest.raises(WorkspaceError):
+        D.transition(ws, rev_a["id"], "released", comment="attempt invalid release")
+    assert ws.head_seq() == before_seq
+    assert ws.get("revision", rev_a["id"])["state"] == "approved"
+    assert ws.get("document", doc["id"])["released_rev_id"] is None
+    assert [p["revision_id"] for p in D.verify_revisions(ws, doc["id"])] == [rev_a["id"]]
+
+
+def test_drawing_register_csv_preserves_source_path_and_revision(ws, managed_document):
+    folder, source, assembly, before, doc, rev_a = managed_document
+    drawing = folder / "pump-skid.idw"
+    drawing.write_bytes(b"IDW synthetic drawing revision A\n")
+    draw_doc, draw_rev = D.register_document(
+        ws, doc["project_id"], drawing, number="QA-DWG-002",
+        title="Pump skid drawing")
+    assert draw_rev is not None
+    rows = D.drawing_register(ws, doc["project_id"])
+    item = next(r for r in rows if r["number"] == "QA-DWG-002")
+    assert item["source_file"] == "pump-skid.idw"
+    assert item["revision"] == "A"
+    assert item["title"] == "Pump skid drawing"
+    csv_text = D.drawing_register_csv(rows)
+    assert "QA-DWG-002" in csv_text
+    assert "pump-skid.idw" in csv_text
+    assert "Pump skid drawing" in csv_text
