@@ -52,3 +52,9 @@ python -m unittest -v prototype.test_authority prototype.test_coordinator_resear
 ```
 
 Expected discovery count is **29 tests** (14 authority + 9 coordinator + 6 manifest). This is **not** a verified pass count until CI confirms it. The separate real Phase 1 probes remain **2/2 confirmed** on earlier completed GitHub CI.
+
+## Verified latest crash-injection matrix
+
+[GitHub Actions run 41380924556](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380924556) **SUCCESS**: inspected logs show **31/31 tests passed** on each Ubuntu Python 3.11, Ubuntu Python 3.13, Windows Python 3.11 and Windows Python 3.13; actual Phase 1 regression job **2/2 passed**. The new manifest tests spawn independent workers that exit without normal cleanup immediately after staging or immediately after durable local SQLite commit. Recovery checks verify that staged-only content is not a committed revision and that the committed transaction remains idempotently discoverable.
+
+This is **process-crash simulation**, not actual power-loss durability or real SMB/network-host testing. `docs/COORDINATOR_RESTORE_FENCING_PROTOCOL.md` proposes a nonrollbackable external epoch/high-water and controlled restore process; no such mechanism is implemented. The prototype's known same-epoch rollback weakness remains.
