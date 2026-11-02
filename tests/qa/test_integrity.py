@@ -311,3 +311,115 @@ def test_revoked_writer_publication_is_logically_fenced_on_replay(tmp_path, monk
     with Workspace.open(store, writable=True) as recovered:
         assert recovered.get("root", late_id) is None
         assert recovered.transaction_outcome(txid)["state"] == "fenced"
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError,
+    reason="Issue #8: standalone override moves writer.lock before audit; a stale writer can commit in the gap",
+)
+def test_writer_revoked_before_admin_audit_cannot_take_effect(tmp_path):
+    """Secondary issue #8 race: revocation rename precedes the audit entry.
+
+    Unlike the post-audit positive control, this intentionally pauses the
+    administrator AFTER moving writer.lock but BEFORE writing the lock-break
+    audit. The old writer passed preflight and then resumes. An acceptance
+    implementation must not apply its late write, regardless of journal order.
+    This is deterministic LOCAL concurrency, not an SMB certification.
+    """
+    if not hasattr(Workspace, "is_fenced"):
+        pytest.skip("ADR-015 journal-order fencing not present on original Phase 1")
+    import threading
+    from unittest.mock import patch
+    from revisionworx.workspace import new_id
+
+    store = tmp_path / "store"
+    writer = Workspace.create(store, "QA administrative boundary")
+    old_token = Workspace.read_writer_lock(store)["token"]
+    rid = new_id("root")
+    original_check = writer._check_lock_still_held
+    original_open = Workspace.open
+    preflight = threading.Event()
+    renamed = threading.Event()
+    release_admin = threading.Event()
+    writer_done = threading.Event()
+    errors = []
+    outcomes = []
+    admin_thread = None
+    stale_thread = None
+
+    def checked_then_pause():
+        original_check()
+        preflight.set()
+        if not renamed.wait(15):
+            raise TimeoutError("administrator never moved the writer lock")
+
+    def intercept_open(*args, **kwargs):
+        if threading.current_thread() is admin_thread and kwargs.get("writable"):
+            # break_writer_lock() opens its new writer only AFTER renaming the
+            # original lock; hold that audit transaction until the old writer finishes.
+            renamed.set()
+            if not release_admin.wait(15):
+                raise TimeoutError("administrator test pause was not released")
+        return original_open(*args, **kwargs)
+
+    def late_writer():
+        try:
+            seq = writer.commit("qa.stale.before.audit", [
+                RecordPut("root", rid, {"id": rid, "name": "revoked session"})
+            ])
+            outcomes.append(("published", seq))
+        except workspace_mod.LockLostError:
+            outcomes.append(("rejected", None))
+        except Exception as exc:
+            errors.append(("late-writer", repr(exc)))
+        finally:
+            writer_done.set()
+
+    def override():
+        try:
+            Workspace.break_writer_lock(store, old_token, "QA race before audit")
+        except Exception as exc:
+            errors.append(("administrator", repr(exc)))
+        finally:
+            release_admin.set()
+
+    try:
+        writer._check_lock_still_held = checked_then_pause
+        with patch.object(Workspace, "open", side_effect=intercept_open):
+            stale_thread = threading.Thread(target=late_writer, name="qa-paused-writer")
+            stale_thread.start()
+            if not preflight.wait(15):
+                raise RuntimeError("QA writer preflight barrier was not reached")
+            admin_thread = threading.Thread(target=override, name="qa-paused-admin")
+            admin_thread.start()
+            if not renamed.wait(15):
+                raise RuntimeError("QA administrator lock-rename barrier was not reached")
+            if not writer_done.wait(15):
+                raise RuntimeError("QA writer did not finish while administrator was paused")
+            release_admin.set()
+            stale_thread.join(15)
+            admin_thread.join(15)
+        if any(t is not None and t.is_alive() for t in (stale_thread, admin_thread)):
+            raise RuntimeError("QA injected worker thread did not terminate")
+        if errors or len(outcomes) != 1:
+            raise RuntimeError(f"QA race infrastructure failed: {errors!r}, outcomes={outcomes!r}")
+        with original_open(store) as reader:
+            audits = [reader.read_entry(n) for n in reader.journal_seqs()
+                      if reader.read_entry(n)["op"] == "workspace.lock.break"]
+            if len(audits) != 1:
+                raise RuntimeError("QA expected exactly one audited override")
+            # The actual acceptance oracle. Current ADR-015 fences only stale
+            # entries AFTER the audit, so this assertion is expected to fail.
+            assert reader.get("root", rid) is None, (
+                "revoked writer's mutation is visible after lock rename, "
+                "before the later audit entry"
+            )
+    finally:
+        release_admin.set()
+        renamed.set()
+        if stale_thread is not None:
+            stale_thread.join(5)
+        if admin_thread is not None:
+            admin_thread.join(5)
+        writer._lock_token = None
+        writer.close()
