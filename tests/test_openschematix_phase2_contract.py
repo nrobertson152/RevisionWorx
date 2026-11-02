@@ -14,7 +14,7 @@ import sys
 import tempfile
 import unittest
 
-from revisionworx_integrations.openschematix import inspect_bytes
+from revisionworx_integrations.openschematix import MAX_SOURCE, inspect_bytes
 
 
 PHASE2 = os.environ.get("REVISIONWORX_PHASE2_SOURCE")
@@ -30,11 +30,13 @@ class Phase2ImmutableRevisionContractTests(unittest.TestCase):
             raise AssertionError(f"missing Phase 2 source checkout: {source}")
         sys.path.insert(0, str(source))
         from revisionworx import documents, projects
-        from revisionworx.content import ContentStore
-        from revisionworx.workspace import Workspace
+        from revisionworx.content import ContentStore, ContentTooLarge
+        from revisionworx.workspace import Workspace, WorkspaceCorruptError
         cls.documents = documents
         cls.projects = projects
         cls.ContentStore = ContentStore
+        cls.ContentTooLarge = ContentTooLarge
+        cls.WorkspaceCorruptError = WorkspaceCorruptError
         cls.Workspace = Workspace
 
     def _registered_fixture(self, base: Path, name: str):
@@ -66,7 +68,9 @@ class Phase2ImmutableRevisionContractTests(unittest.TestCase):
                     store = self.ContentStore(ws)
                     self.assertTrue(store.verify(revision["sha256"]))
                     immutable_path = store.path_for(revision["sha256"])
-                    immutable_bytes = immutable_path.read_bytes()
+                    verified_rev, immutable_bytes = self.documents.read_revision_bytes(
+                        ws, revision["id"], MAX_SOURCE)
+                    self.assertEqual(verified_rev["id"], revision["id"])
                     self.assertEqual(immutable_bytes, original)
 
                     before_seq = ws.head_seq()
@@ -84,7 +88,11 @@ class Phase2ImmutableRevisionContractTests(unittest.TestCase):
                     # committed revision. Only the committed bytes may be used
                     # for a revision-linked index observation.
                     path.write_bytes(b"uncommitted working-copy change")
-                    observation_again = inspect_bytes(immutable_path.read_bytes(), path.suffix)
+                    observed_rev, read_again = self.documents.read_revision_bytes(
+                        ws, revision["id"], MAX_SOURCE)
+                    self.assertEqual(observed_rev["source_rel_path"], revision["source_rel_path"])
+                    observation_again = inspect_bytes(
+                        read_again, Path(observed_rev["source_rel_path"]).suffix.lower())
                     self.assertEqual(observation_again, observation)
                     self.assertEqual(ws.head_seq(), before_seq)
                     self.assertEqual(ws.get("revision", revision["id"]), before_revision)
@@ -108,7 +116,9 @@ class Phase2ImmutableRevisionContractTests(unittest.TestCase):
                 self.assertNotEqual(rev_a["id"], rev_b["id"])
                 self.assertEqual(rev_a["sha256"], rev_b["sha256"])
                 store = self.ContentStore(ws)
-                data = store.path_for(rev_a["sha256"]).read_bytes()
+                observed_rev, data = self.documents.read_revision_bytes(
+                    ws, rev_a["id"], MAX_SOURCE)
+                self.assertEqual(observed_rev["id"], rev_a["id"])
                 before_seq = ws.head_seq()
                 source_a = inspect_bytes(data, ".schematix")
                 source_b = inspect_bytes(data, ".schematix")
@@ -140,10 +150,10 @@ class Phase2ImmutableRevisionContractTests(unittest.TestCase):
                 self.assertNotEqual(rev_a["sha256"], rev_b["sha256"])
                 store = self.ContentStore(ws)
                 before_seq = ws.head_seq()
-                first = inspect_bytes(
-                    store.path_for(rev_a["sha256"]).read_bytes(), ".osch")
-                second = inspect_bytes(
-                    store.path_for(rev_b["sha256"]).read_bytes(), ".osch")
+                stored_a, bytes_a = self.documents.read_revision_bytes(ws, rev_a["id"], MAX_SOURCE)
+                stored_b, bytes_b = self.documents.read_revision_bytes(ws, rev_b["id"], MAX_SOURCE)
+                first = inspect_bytes(bytes_a, Path(stored_a["source_rel_path"]).suffix.lower())
+                second = inspect_bytes(bytes_b, Path(stored_b["source_rel_path"]).suffix.lower())
                 self.assertEqual(first["file_sha256"], rev_a["sha256"])
                 self.assertEqual(second["file_sha256"], rev_b["sha256"])
                 self.assertNotEqual(first["project_metadata"]["title"],
@@ -155,6 +165,33 @@ class Phase2ImmutableRevisionContractTests(unittest.TestCase):
                 self.assertTrue(store.verify(rev_b["sha256"]))
                 self.assertEqual(ws.get("document", doc["id"])["latest_rev_id"],
                                  rev_b["id"])
+            finally:
+                ws.close()
+
+
+    def test_bounded_reader_rejects_oversize_and_tampering_without_journal_writes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ws, path, original, doc, rev = self._registered_fixture(
+                Path(temp), "start_stop_latch.osch")
+            try:
+                seq = ws.head_seq()
+                with self.assertRaises(self.ContentTooLarge):
+                    self.documents.read_revision_bytes(ws, rev["id"], len(original) - 1)
+                self.assertEqual(ws.head_seq(), seq)
+
+                immutable = self.ContentStore(ws).path_for(rev["sha256"])
+                # Deliberate corruption is confined to this disposable test
+                # workspace; the normal adapter never modifies content bytes.
+                immutable.write_bytes(b"x" * len(original))
+                with self.assertRaises(self.WorkspaceCorruptError):
+                    self.documents.read_revision_bytes(ws, rev["id"], MAX_SOURCE)
+                self.assertEqual(ws.head_seq(), seq)
+                self.assertEqual(path.read_bytes(), original)
+                immutable.write_bytes(original)
+                restored, actual = self.documents.read_revision_bytes(ws, rev["id"], MAX_SOURCE)
+                report = inspect_bytes(actual, Path(restored["source_rel_path"]).suffix.lower())
+                self.assertEqual(report["file_sha256"], rev["sha256"])
+                self.assertEqual(ws.head_seq(), seq)
             finally:
                 ws.close()
 
