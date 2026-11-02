@@ -52,8 +52,12 @@ jobs:
         run: python -m unittest -v prototype.test_phase1_lock_race prototype.test_phase1_cache_watermark
 
   phase2-lock-break-order:
-    name: Phase 2 real-code administrative override ordering (research)
-    runs-on: ubuntu-latest
+    name: ADR-019 successor safety and ADR-017 txid identity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout distributed research
         uses: actions/checkout@v4
@@ -67,11 +71,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Verify journal-first fencing and ADR-019 successor safety
+      - name: Verify revocation, successor safety and classify txid contract gap
         working-directory: research
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
-        run: python -m unittest -v prototype.test_phase2_lock_break_order prototype.test_phase2_lock_release_race
+        run: python -m unittest -v prototype.test_phase2_lock_break_order prototype.test_phase2_lock_release_race prototype.test_phase2_txid_check_reuse
 
   phase2-commit-authority-conformance:
     name: ADR-017 exact contract on witnessed batch prototype (Ubuntu 3.13)
