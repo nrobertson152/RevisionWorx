@@ -416,6 +416,47 @@ afterwards and is only evidence.
   remains an implementation detail.
 - The historical extension comes from `revision.source_rel_path`.
 
+### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED, awaiting QA
+**Defect.** Reproduced by Distributed Systems (run 41387552435) and here
+(`tests/test_lock_release_race.py`, which failed on `d202b28`):
+1. Writer A verifies the token in `writer.lock`, then pauses before its pathname `unlink`.
+2. An administrator revokes A, and writer B acquires.
+3. A resumes and deletes **B's** lock.
+
+The cause: check-then-unlink is not atomic, and no portable "delete if content matches" primitive
+exists. Adding more token re-checks only narrows the window.
+
+**Design** (the only primitive relied on is an atomic rename):
+1. If the journal shows our token revoked, release never touches `writer.lock`.
+2. `os.replace(writer.lock, .releasing-<uuid>)` atomically takes whatever is at the name. We then
+   inspect *that* file, which is exactly what we removed.
+3. If it is ours, delete it. If it is someone else's, restore it with an exclusive create
+   (`link` on POSIX, `rename` on Windows).
+4. **Fail closed** if a third writer took the name during the microsecond gap and the restore fails:
+   - publish a journaled revocation of the displaced token (the ADR-015 mechanism);
+   - keep the displaced file as `writer.lock.displaced-*` evidence.
+
+   The displaced writer can then never take effect, and the new holder keeps its lock.
+
+**Preserved:**
+- ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.
+- ADR-016 bounded retry on Windows sharing violations (`PermissionError` on the rename).
+- If the journal is unreadable, our own lock is still released (step 2 alone is safe).
+
+**Tests:**
+- successor keeps its lock *and* can commit;
+- a revoked writer never touches the lock;
+- third writer in the restore window: the displaced writer is fenced, the new holder keeps the
+  lock, evidence is kept;
+- normal and repeated release; crash, then admin break, then new writer;
+- the three #10 cases, now injected at the rename.
+
+**Limitations:**
+- Step 4 can revoke a legitimate writer B, but only in the double race (admin revocation of A, B's
+  acquisition and C's acquisition all inside A's release). B gets `LockLostError` and must reopen.
+  That is unavailability, not corruption.
+- Atomic rename and exclusive create on SMB are unverified. There is no multi-host claim.
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).

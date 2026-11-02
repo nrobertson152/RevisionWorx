@@ -157,26 +157,30 @@ def test_rebuild_and_sync_agree_across_insert_delete_restart(ws, cache_dir):
 
 
 # ---------------------------------------------------------------- issue #10
+# Release moves writer.lock aside with os.replace (ADR-019), so Windows sharing violations are injected
+# there: the operation that actually touches the shared lock file.
+import os  # noqa: E402
+
+import revisionworx.workspace as wsmod  # noqa: E402
+
+REAL_REPLACE = os.replace
+
+
 def _sharing_violation(times):
     calls = {"n": 0}
 
-    def unlink(self, *a, **kw):
-        if self.name == "writer.lock" and calls["n"] < times:
+    def replace(src, dst, *a, **kw):
+        if str(src).endswith(os.sep + "writer.lock") and calls["n"] < times:
             calls["n"] += 1
             raise PermissionError(32, "The process cannot access the file because it is being used")
-        return REAL_UNLINK(self, *a, **kw)
-    return unlink, calls
-
-
-from pathlib import Path  # noqa: E402
-
-REAL_UNLINK = Path.unlink
+        return REAL_REPLACE(src, dst, *a, **kw)
+    return replace, calls
 
 
 def test_close_retries_transient_sharing_violation(share, monkeypatch):
     ws = Workspace.create(share, "W")
-    unlink, calls = _sharing_violation(5)
-    monkeypatch.setattr(Path, "unlink", unlink)
+    replace, calls = _sharing_violation(5)
+    monkeypatch.setattr(wsmod.os, "replace", replace)
     ws.close()
     monkeypatch.undo()
     assert calls["n"] == 5 and Workspace.read_writer_lock(share) is None
@@ -187,24 +191,25 @@ def test_close_never_deletes_another_writers_lock_while_retrying(share, monkeypa
     lock = share / ".revisionworx" / "locks" / "writer.lock"
     calls = {"n": 0}
 
-    def unlink(self, *a, **kw):
-        if self.name == "writer.lock":
+    def replace(src, dst, *a, **kw):
+        if str(src).endswith(os.sep + "writer.lock") and calls["n"] == 0:
             calls["n"] += 1
-            # while we retry, our lock is broken and someone else acquires a new one
+            # while we retry, our lock is replaced by someone else's
             atomicio.atomic_write_json(lock, {**atomicio.read_json(lock), "token": "new-owner"})
             raise PermissionError(32, "sharing violation")
-        return REAL_UNLINK(self, *a, **kw)
-    monkeypatch.setattr(Path, "unlink", unlink)
+        return REAL_REPLACE(src, dst, *a, **kw)
+    monkeypatch.setattr(wsmod.os, "replace", replace)
     ws.close()
     monkeypatch.undo()
     assert calls["n"] == 1 and atomicio.read_json(lock)["token"] == "new-owner"
+    assert not [p for p in lock.parent.iterdir() if p.name.startswith(".releasing")]
 
 
 def test_close_reports_persistent_failure_and_keeps_lock(share, monkeypatch):
     ws = Workspace.create(share, "W")
     ws.LOCK_RELEASE_ATTEMPTS, ws.LOCK_RELEASE_DELAY = 3, 0
-    unlink, _ = _sharing_violation(10**6)
-    monkeypatch.setattr(Path, "unlink", unlink)
+    replace, _ = _sharing_violation(10**6)
+    monkeypatch.setattr(wsmod.os, "replace", replace)
     with pytest.raises(WorkspaceError, match="still held"):
         ws.close()
     monkeypatch.undo()

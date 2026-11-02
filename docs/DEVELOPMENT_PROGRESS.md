@@ -73,6 +73,16 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-02 (session 7) — P0: successor-lock deletion race fixed (ADR-019), awaiting QA
+- **Reproduced first:** `tests/test_lock_release_race.py::test_paused_releaser_never_deletes_successor_lock`
+  failed on `d202b28` (B's lock deleted).
+- **Fix:** atomic move-then-verify release, with a fail-closed journaled revocation if the restore
+  fails.
+- **Tests:** full suite **177 passed, 1 skipped (Qt)** (Linux, Python 3.13.18). The checkout and lock
+  multi-process races were repeated 3×, all passing. Windows not executed here.
+- **Phase 1 backport authorization withheld** by the coordinator. `phase1-backport-8-9-10` must
+  gain this fix once QA accepts it; PR #6 is unchanged.
+
 ### 2026-11-02 (session 6) — QA acceptance received; Phase 1 backport branch; ADR-018
 - **QA accepted the #8/#9/#10 fixes on local filesystems** (run 41387311010; Linux and Windows,
   Python 3.13):
