@@ -128,3 +128,40 @@ def test_changed_recordcheck_replay_is_rejected_even_after_restart(tmp_path, mod
             f"txid {txid} accepted materially changed RecordCheck "
             f"preconditions ({modification}) for already committed seq {seq}"
         )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="ADR-017 canonical full operation ordering: checks and writes are stored in separate arrays",
+)
+def test_identical_txid_reordered_check_across_write_must_be_rejected(tmp_path):
+    """Same checks and writes, but different *interleaved* operation order.
+
+    The current ADR-017 journal records separate checks and writes arrays.
+    Reordering just the checks is already rejected; moving a check across a
+    RecordPut is also a different submitted request under the full ordered
+    operation-list proposal. Retain strict xfail until Claude decides and
+    implements/version-controls the canonical identity contract.
+    """
+    location, a, b, target, txid, op, operations, seq, target_revision = _setup_committed_request(tmp_path)
+    ordered = operations()
+    changed = [ordered[0], ordered[2], ordered[1]]
+    with Workspace.open(location, writable=True) as writer:
+        assert writer.head_seq() == seq
+        try:
+            writer.commit(op, changed, txid=txid)
+        except TxidReuseError:
+            assert writer.head_seq() == seq
+            assert writer.transaction_outcome(txid) == {"state": "committed", "seq": seq}
+            assert writer.get("root", target)["_rev"] == target_revision
+            return
+        except Exception as exc:
+            pytest.fail(
+                f"reordered full operation list must raise TxidReuseError; "
+                f"got {type(exc).__name__}: {exc}"
+            )
+        assert False, (
+            "same txid accepted reordered RecordCheck across RecordPut: "
+            "request identity discarded the original operation interleaving"
+        )
