@@ -196,3 +196,47 @@ def test_altered_recordcheck_is_txid_reuse_in_research_adapter(authority):
             RecordPut("project", rid, {"name": "A"}, expect_rev=0)],
             txid="c" * 32)
     assert authority.transaction_outcome("c" * 32) == {"state": "committed", "seq": first}
+
+
+def test_reordered_checks_reuse_is_rejected_by_local_model(authority):
+    rid = "prj_" + "7" * 32
+    checks = [RecordCheck("project", "prj_" + "8" * 32, 0),
+              RecordCheck("project", "prj_" + "9" * 32, 0)]
+    write = RecordPut("project", rid, {"name": "A"}, expect_rev=0)
+    seq = authority.commit("two-checks", checks + [write], txid="7" * 32)
+    with pytest.raises(TxidReuseError):
+        authority.commit("two-checks", list(reversed(checks)) + [write],
+                         txid="7" * 32)
+    assert authority.transaction_outcome("7" * 32) == {"state": "committed", "seq": seq}
+
+
+def test_dropped_check_reuse_is_rejected_by_local_model(authority):
+    rid = "prj_" + "6" * 32
+    check = RecordCheck("project", "prj_" + "5" * 32, 0)
+    write = RecordPut("project", rid, {"name": "A"}, expect_rev=0)
+    seq = authority.commit("with-check", [check, write], txid="8" * 32)
+    with pytest.raises(TxidReuseError):
+        authority.commit("with-check", [write], txid="8" * 32)
+    assert authority.transaction_outcome("8" * 32) == {"state": "committed", "seq": seq}
+
+
+def test_identical_txid_replay_even_after_lease_revoked_is_outcome_not_new_write(authority, revoke):
+    ops = [RecordPut("project", "prj_" + "4" * 32, {"name": "first"}, expect_rev=0)]
+    seq = authority.commit("first", ops, txid="9" * 32)
+    revoke(authority)
+    assert authority.transaction_outcome("9" * 32) == {"state": "committed", "seq": seq}
+    assert authority.commit("first", ops, txid="9" * 32) == seq
+    assert authority.head_seq() == seq
+    with pytest.raises(LockLostError):
+        authority.commit("second", [RecordPut("project", "prj_" + "3" * 32,
+                                             {"name": "new"})], txid="a" * 32)
+    assert authority.get("project", "prj_" + "3" * 32) is None
+
+
+def test_reordered_writes_change_canonical_request_identity(authority):
+    a = RecordPut("project", "prj_" + "1" * 32, {"k": 1}, expect_rev=0)
+    b = RecordPut("project", "prj_" + "2" * 32, {"k": 2}, expect_rev=0)
+    seq = authority.commit("two", [a, b], txid="d" * 32)
+    with pytest.raises(TxidReuseError):
+        authority.commit("two", [b, a], txid="d" * 32)
+    assert authority.head_seq() == seq

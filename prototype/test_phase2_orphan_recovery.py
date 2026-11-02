@@ -145,6 +145,158 @@ class Phase2OrphanedReleaseSafety(unittest.TestCase):
                 a._lock_token = None
                 a.close()
 
+
+    def test_unreadable_orphan_permits_two_effective_writers_UNSAFE_reproduction(self):
+        """UNSAFE demonstration: a malformed orphan is archived without revoking B.
+
+        Confirm distinct *effective* journal entries from both B (preflighted
+        before displacement) and C (freshly acquired), not merely an xfail.
+        This test PASSES because it proves the unsafe state currently exists.
+        """
+        Workspace, RecordPut, _, _ = self._load()
+        with tempfile.TemporaryDirectory() as directory:
+            a = Workspace.create(Path(directory) / "ws", "UnreadableOrphanProof")
+            meta = a.meta_dir
+            Workspace.break_writer_lock(meta, a._lock_token, "admin revokes A")
+            b = Workspace.open(meta, writable=True)
+            token_b = b._lock_token
+            check = b._check_lock_still_held
+            events = []
+            try:
+                def displace_and_commit_c():
+                    check()
+                    events.append("B-preflight")
+                    lock = meta / "locks" / "writer.lock"
+                    evidence = meta / "locks" / ".releasing-corrupt"
+                    os.replace(lock, evidence)
+                    evidence.write_text("{not-valid-json", encoding="utf-8")
+                    with Workspace.open(meta, writable=True) as c:
+                        events.append("C-acquired")
+                        c.commit("C.document", [
+                            RecordPut("project", "prj_" + "c" * 32,
+                                      {"writer": "C"})], txid="c" * 32)
+                    events.append("C-committed")
+                b._check_lock_still_held = displace_and_commit_c
+                b_seq = b.commit("B.document.after-C", [
+                    RecordPut("project", "prj_" + "b" * 32, {"writer": "B"})],
+                    txid="b" * 32)
+                self.assertEqual(events, ["B-preflight", "C-acquired", "C-committed"])
+                with Workspace.open(meta) as reader:
+                    self.assertEqual(reader.get("project", "prj_" + "b" * 32)["writer"], "B")
+                    self.assertEqual(reader.get("project", "prj_" + "c" * 32)["writer"], "C")
+                    self.assertEqual(reader.transaction_outcome("b" * 32),
+                                     {"state": "committed", "seq": b_seq})
+                    self.assertNotIn(token_b, Workspace._revoked_tokens(meta))
+            finally:
+                b._lock_token = None
+                b.close()
+                a._lock_token = None
+                a.close()
+
+    def test_concurrent_successor_acquirers_single_winner_after_orphan(self):
+        """Two local clients start together while abandoned B custody is pending."""
+        import queue
+        import threading
+        Workspace, RecordPut, LockLostError, WorkspaceLockedError = self._load()
+        with tempfile.TemporaryDirectory() as directory:
+            a, b, meta, orphan, token_b = self._displaced_b(
+                Workspace, Path(directory))
+            start = threading.Barrier(3)
+            release = threading.Event()
+            outcomes = queue.Queue()
+            workers = []
+            def acquire_and_hold(identifier):
+                try:
+                    start.wait(timeout=15)
+                    try:
+                        with Workspace.open(meta, writable=True) as writer:
+                            outcomes.put(("won", identifier, writer._lock_token))
+                            if not release.wait(15):
+                                raise AssertionError("concurrent test release timed out")
+                            writer.commit("concurrent.owner", [
+                                RecordPut("project", "prj_" + identifier * 32,
+                                          {"winner": identifier})])
+                    except WorkspaceLockedError:
+                        outcomes.put(("conflict", identifier, None))
+                except BaseException as exc:
+                    outcomes.put(("error", identifier, repr(exc)))
+            try:
+                for identifier in ("d", "e"):
+                    t = threading.Thread(target=acquire_and_hold,
+                                         args=(identifier,), daemon=True)
+                    workers.append(t)
+                    t.start()
+                start.wait(timeout=15)
+                observed = [outcomes.get(timeout=20) for _ in workers]
+                self.assertCountEqual([o[0] for o in observed], ["won", "conflict"])
+                release.set()
+                for t in workers:
+                    t.join(15)
+                    self.assertFalse(t.is_alive())
+                with Workspace.open(meta) as reader:
+                    revocations = [reader.read_entry(i)
+                                   for i in reader.journal_seqs()
+                                   if reader.read_entry(i).get("revokes") == token_b]
+                    self.assertEqual(len(revocations), 1)
+                    winner = next(o[1] for o in observed if o[0] == "won")
+                    self.assertIsNotNone(reader.get("project", "prj_" + winner * 32))
+                    self.assertIsNone(reader.get("project", "prj_" +
+                                                ({"d", "e"} - {winner}).pop() * 32))
+                with self.assertRaises(LockLostError):
+                    b.commit("B.late", [
+                        RecordPut("project", "prj_" + "b" * 32, {"wrong": True})])
+                self.assertFalse(orphan.exists())
+            finally:
+                release.set()
+                for t in workers:
+                    t.join(5)
+                b._lock_token = None
+                b.close()
+                a._lock_token = None
+                a.close()
+
+    def test_crash_after_durable_revocation_before_orphan_custody(self):
+        """Restart must not create a second revocation after a file move crashes."""
+        Workspace, RecordPut, LockLostError, _ = self._load()
+        import revisionworx.workspace as wsmod
+        with tempfile.TemporaryDirectory() as directory:
+            a, b, meta, orphan, token_b = self._displaced_b(
+                Workspace, Path(directory))
+            real_replace = wsmod.os.replace
+            try:
+                def die_before_evidence_move(src, dst, *args, **kwargs):
+                    if (Path(src).name.startswith(".releasing-")
+                            and Path(dst).name.startswith("writer.lock.orphaned-")):
+                        raise SystemExit("crash after journal fence")
+                    return real_replace(src, dst, *args, **kwargs)
+                with patch.object(wsmod.os, "replace",
+                                  side_effect=die_before_evidence_move):
+                    with self.assertRaises(SystemExit):
+                        Workspace.open(meta, writable=True)
+                self.assertIn(token_b, Workspace._revoked_tokens(meta))
+                leaked = Workspace.read_writer_lock(meta)
+                self.assertIsNotNone(leaked)
+                self.assertTrue(orphan.exists())
+                Workspace.break_writer_lock(meta, leaked["token"],
+                                            "recover from process death after durable revocation")
+                with Workspace.open(meta, writable=True) as d:
+                    d.commit("safe.post-recovery", [
+                        RecordPut("project", "prj_" + "f" * 32, {"safe": True})])
+                with Workspace.open(meta) as reader:
+                    self.assertEqual(sum(
+                        reader.read_entry(i).get("revokes") == token_b
+                        for i in reader.journal_seqs()), 1)
+                    self.assertIsNotNone(reader.get("project", "prj_" + "f" * 32))
+                self.assertFalse(orphan.exists())
+                with self.assertRaises(LockLostError):
+                    b.commit("B.after-recovery", [
+                        RecordPut("project", "prj_" + "b" * 32, {"unsafe": True})])
+            finally:
+                b._lock_token = None
+                b.close()
+                a._lock_token = None
+                a.close()
+
     def test_interrupted_orphan_revocation_fails_closed_until_admin_recovery(self):
         Workspace, RecordPut, LockLostError, WorkspaceLockedError = self._load()
         with tempfile.TemporaryDirectory() as directory:
