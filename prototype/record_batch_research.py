@@ -164,9 +164,11 @@ class BatchAuthorityResearch(WitnessedCoordinatorResearch):
                              "checked": typ == "check"}
             writes += typ != "check"
             result.append(raw)
-        if not writes:
-            raise ValueError("a batch must change at least one record")
-        if len(_json(result).encode("ascii")) > 1_048_576:
+        # ADR-021 admits check-only transactions with a durable outcome.
+        # Reject non-finite JSON before acquiring authority.
+        serialized = json.dumps(result, sort_keys=True, separators=(",", ":"),
+                                ensure_ascii=True, allow_nan=False)
+        if len(serialized.encode("ascii")) > 1_048_576:
             raise ValueError("operation payload too large")
         return result
 
