@@ -180,8 +180,24 @@ def inspect(path: str | Path) -> dict:
     if (before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns
             or before.st_ctime_ns != after.st_ctime_ns or len(raw) != after.st_size):
         raise InvalidProject("source changed during inspection")
+    return inspect_bytes(raw, path.suffix.lower())
+
+
+def inspect_bytes(raw: bytes, suffix: str) -> dict:
+    """Index immutable revision content using its registered original extension.
+
+    This does not resolve paths, access the workspace, or change source bytes.
+    The caller must validate the content digest against the authoritative
+    RevisionWorx revision record before attaching any extracted observations.
+    """
+    if not isinstance(raw, bytes):
+        raise TypeError("raw must be bytes")
+    if len(raw) > MAX_SOURCE:
+        raise InvalidProject("source file exceeds size limit")
+    if suffix not in (".osch", ".schematix"):
+        raise UnsupportedFormat("supported extensions: .schematix and .osch")
     digest = hashlib.sha256(raw)
-    if path.suffix.lower() == ".osch":
+    if suffix == ".osch":
         if len(raw) > MAX_MEMBER:
             raise InvalidProject("legacy file exceeds size limit")
         data = _json(raw, "legacy drawing")
@@ -198,7 +214,7 @@ def inspect(path: str | Path) -> dict:
         fmt = "osch"
         manifest_version = None
         warnings = ["Legacy sheet identity is content-derived and changes on edit."]
-    elif path.suffix.lower() == ".schematix":
+    elif suffix == ".schematix":
         try:
             with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                 infos = archive.infolist()
