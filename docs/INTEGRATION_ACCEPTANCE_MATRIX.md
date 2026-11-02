@@ -11,10 +11,10 @@ This is a snapshot, not a claim that later GitHub heads remain unchanged.
 | PR | Branch and base | Inspected head SHA | Role |
 | --- | --- | --- | --- |
 | [#6](https://github.com/nrobertson152/RevisionWorx/pull/6) | `phase1-foundation` → `main` | `412e69ab90bb1d8b74c1a3cf5519f581e4420e63` | Claude: core Phase 1/GUI/CLI |
-| [#7](https://github.com/nrobertson152/RevisionWorx/pull/7) | `phase2-documents` → `phase1-foundation` | `d656884b39401134149273dd0121ef620b76eb8e` | Claude: documents, immutable revisions, checkout/ADR-018/ADR-019 |
-| [#3](https://github.com/nrobertson152/RevisionWorx/pull/3) | `qa/testing-infrastructure` → `phase1-foundation` | `ee0b6978fe0a5459932e27b45e177fa4e8841f6d` | Independent QA |
-| [#4](https://github.com/nrobertson152/RevisionWorx/pull/4) | `research/shared-filesystem-protocol` → `main` | `9df169bd435567b2ecdd2bd536c430485e2f0a22` | Isolated protocol research, NOT production coordinator |
-| [#2](https://github.com/nrobertson152/RevisionWorx/pull/2) | `integration/openschematix` → `main` | Adapter code SHA `31255080407518f7156e81722c40449bd26dc53d`; packaging code SHA `19ba7329e96ed76abf7cafe4cc9b23499798b145` (docs updated after) | CAD adapter, bounded revision compatibility, packaging experiment |
+| [#7](https://github.com/nrobertson152/RevisionWorx/pull/7) | `phase2-documents` → `phase1-foundation` | `366d4355abcde7543122551fadaab01ac9832e01` (newer than tested target `d656884b`) | Claude: documents, immutable revisions, checkout/ADR-018/ADR-019 |
+| [#3](https://github.com/nrobertson152/RevisionWorx/pull/3) | `qa/testing-infrastructure` → `phase1-foundation` | `6f0fb5a5b7b40de60cc81890c88e92349db8752d` | Independent QA |
+| [#4](https://github.com/nrobertson152/RevisionWorx/pull/4) | `research/shared-filesystem-protocol` → `main` | `924917fe13c898ff7e9b5544f7bb2028eb5b78b2` | Isolated protocol research, NOT production coordinator |
+| [#2](https://github.com/nrobertson152/RevisionWorx/pull/2) | `integration/openschematix` → `main` | Adapter SHA `312550804`; latest verified packaging SHA `ccb5520b` (Phase 2 `d656884b`) | CAD adapter, bounded revision compatibility, packaging experiment |
 
 All inspected PRs were **draft**. #7's base is #6, whereas #2 has not been stacked on either. QA #3 also targets #6. #4 remains independent research rather than an enabled network write service.
 
@@ -34,7 +34,7 @@ All inspected PRs were **draft**. #7's base is #6, whereas #2 has not been stack
 | --- | --- | --- | --- | --- |
 | P0 | #8 audited writer revocation and #10 Windows lock release / Claude+QA | QA [run 41389199207](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199207) on exact Phase 2 `d656884b`: independent local Linux and Windows positive ADR-019 tests, with separate strict xfail for physical late journal artifact | **Not** physical nonpublication, power-loss or two-host SMB safety | Independent final QA at approved production SHA; record P0 scope and remain single-user until separate network gate |
 | P0 | #9 consistent LocalIndex watermark / Claude+QA | QA local CI tests in current Phase 2 acceptance suite; read latest QA report for exact state | No physical SMB consistency claim | Check accepted insert/delete, sync/rebuild/restart + error handling on approved source |
-| P0 | Content durability, idempotency and GC / Claude+QA | Phase 2 `d656884b` includes revision/content and ADR-017 changes | **Known P1 contract gap:** altered `RecordCheck` with same `txid` can replay prior success; independently reproduced by Distributed Systems, [run 41389488005](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389488005). GC/chain integrity acceptance ongoing | Claude resolve full-operation txid request identity; QA retest loss/restart/GC, schema and corruption |
+| P0 | Content durability, idempotency and GC / Claude+QA | Phase 2 `d656884b` includes revision/content and ADR-017 changes | **Historical P1 contract gaps:** QA/Distributed reproduced changed/reordered `RecordCheck` semantics. Claude has since committed ADR-021 versioned request identity on PR #7 head `366d4355`, which **requires new independent acceptance**; our packaging tests still pin `d656884b` | Claude resolve full-operation txid request identity; QA retest loss/restart/GC, schema and corruption |
 | P0 | Recovery, migration, permissions, cross-version rollback / Claude+QA | Existing source integrity tests; disposable new copied-workspace harness added to #2 | **NOT EXECUTED** as real upgrade/install, crash recovery, Unix/Windows ACLs or rollback | Fully cloned older workspace, checksummed before/after actual upgrade, destructive failure injection in sandbox |
 | P0 | Two-host SMB and authenticated coordinator / Distributed+Claude+QA | Research and local concurrency oracles in draft #4 | **NOT IMPLEMENTED / NOT PHYSICALLY QUALIFIED** | Atomic authority, durable/antirollback recovery and authenticated administration over real hosts/share |
 | P1 | Immutable read-only adapter / Integration | [run 41390411127](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390411127) on adapter SHA `312550804` and exact Phase 2 SHA `d656884b`: Linux/Windows parser+oracle plus Linux bounded revision compatibility | Windows Phase 2 revision/store tests remain **NOT EXECUTED** in this adapter workflow; no managed-part index writes | Obtain approved index/cache owner and test combined production branch after authorized stack integration |
@@ -62,6 +62,37 @@ The adapter reports unresolved explicit manufacturer-part candidates with `quant
 - **QA** of `d656884b` reported local ADR-019 acceptance in [run 41389199207](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389199207); its one strict xfail tracks *physical late journal publication*, not positive effective stale mutation. It is not physical nonpublication or production SMB certification. A separate P1 ADR-017 `RecordCheck` txid replay identity gap is currently independently reproduced by Distributed Systems and awaits Claude/QA correction.
 
 Both workflow sources remain pinned to exact commits; documentation-only updates do not repeat expensive build jobs. No full native GUI interactions, true installer installation, migrator, PowerShell/ACL denial, hostile/long UNC path or actual network share was executed.
+
+### Offline runtime and failure/recovery qualification
+
+[Windows/Ubuntu run 41392572210](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392572210), packaging/workflow SHA
+`ccb5520b31209eeb4e03943afc89b8b981474fc1`, pinned Phase 2 `d656884b39401134149273dd0121ef620b76eb8e`:
+- **Per OS:** 5 packaging-safeguard unit tests passed, 3 injected
+  source-level failure/recovery tests passed, plus bundled CLI and Qt-offscreen
+  startup, disposable read-only copied-workspace SHA checks, absent-path and
+  invalid metadata rejection, and disposable backup rollback rehearsal.
+- **Injected pre-commit:** ENOSPC and EACCES refused without publication.
+  **Injected post-commit:** ENOSPC after journal publication reported
+  `CommittedNotApplied`; reopening replayed exactly one committed revision.
+  These are deterministic injections, not physical disk-full or power outages.
+- **Ubuntu Linux:** network-disabled, Python-free Docker runtime launched
+  frozen CLI/GUI. The image itself was constructed with network available.
+  No attempt tracing; do not assert zero network activity or account/telemetry
+  code in every path. Windows had Python removed from child `PATH` and
+  unreachable proxy endpoints, **not** an internet-disconnected machine.
+- **Windows:** extended-length path PASSED, **401-character local path
+  PASSED**, localhost admin UNC read PASSED, byte-range-locked metadata read
+  rejected, original file hashes preserved. This is **not** remote,
+  concurrent two-host SMB certification or an actual denied ACL test.
+- **Other:** older workspace migration, native installer, interactive UI
+  render, real OS denial, power-loss, offline Windows VM, telemetry call
+  audit and physical SMB remain **not executed**.
+
+The complete evidence/limits are in
+[`docs/OFFLINE_FAILURE_QUALIFICATION.md`](OFFLINE_FAILURE_QUALIFICATION.md).
+The newer draft Phase 2 head `366d4355` includes substantial authority
+changes, which were **not** in the pinned `d656884b` compatibility run.
+Do not transfer test acceptance to it automatically.
 
 ## 4. Manual release qualification
 

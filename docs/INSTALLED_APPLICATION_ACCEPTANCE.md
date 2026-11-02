@@ -18,6 +18,19 @@ The acceptance matrix must distinguish four levels:
 
 **Current evidence reaches level B only.** Linux/Windows [run 41390661790](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390661790) also demonstrates **copied-workspace preservation for five files** and Unicode/spaces paths in a disposable Qt-offscreen test; it does **not** reach level C interactive desktop or level D actual installer/migration. The packaging jobs are experimental one-directory bundles, not MSI, AppImage, .deb or system installers.
 
+### Latest qualified scope (not level C or D)
+
+[Run 41392572210](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392572210) (packaging `ccb5520b31209eeb4e03943afc89b8b981474fc1`,
+Phase 2 `d656884b39401134149273dd0121ef620b76eb8e`) demonstrated Ubuntu frozen binaries starting inside a
+network-disabled container without Python/pip. The Windows frozen CLI
+qualified a **401-character local path**, a Windows extended-length path, an
+existing localhost administrative UNC share and rejection of a byte-range
+locked workspace manifest, without mutating the sample workspace.
+Both platforms passed injected journal failures and a disposable
+backup/recovery rehearsal; these are **not actual installer migration,
+real power-loss, physical ENOSPC or production ACL denial**. A clean Windows
+VM with Python uninstalled and outbound network blocked is still required.
+
 ## 2. Explicitly safe test-data preparation
 
 - [ ] Create a new dedicated VM or test user; record operating-system build and filesystem (NTFS, ext4, etc.).
@@ -58,13 +71,13 @@ The acceptance matrix must distinguish four levels:
 
 | Gate | Current status | Owner |
 | --- | --- | --- |
-| Pinned onedir Linux/Windows bundled startup | Automated offscreen smoke verified on earlier Phase 2 `ffcfb463`; new `d656884b` rerun is a separate result | Integration |
+| Pinned onedir Linux/Windows bundled startup | **PASS** on exact Phase 2 `d656884b`: frozen offline/failure readiness [run 41392572210](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392572210) | Integration |
 | Copied existing workspace preservation under frozen CLI and Qt-offscreen GUI | **PASS** (disposable current-schema copy, 5 hashed files, Windows/Linux Python 3.11, 41390661790); not an old-version migration | Integration |
 | Fully interactive installed GUI on actual Windows/Linux desktop | **NOT EXECUTED** | QA + Director |
 | Native installer and uninstaller, signing and redistribution compliance | **NOT IMPLEMENTED** | Release engineering |
-| Actual migration, backward compatibility, power-loss rollback and ACLs | **NOT EXECUTED** | Claude + QA |
+| Actual migration, backward compatibility, power-loss rollback and ACLs | **PARTIAL** disposable corrupt-copy backup restoration and injected I/O; **NOT EXECUTED** real old-version migration, power interruption or ACL denial | Claude + QA |
 | #8 writer fencing, #9 index snapshot, #10 Windows lock correctness | Issues remain open; independent acceptance must be separately cited | Claude + QA |
 | GC/reference safety, txid idempotency, revision chain integrity | New Phase 2 changes need independent acceptance | Claude + QA |
-| Real two-host authenticated SMB coordinator with failure/recovery | **NOT EXECUTED** | Distributed Systems + QA |
+| Real two-host authenticated SMB coordinator with failure/recovery | **NOT EXECUTED** (localhost admin UNC read is not two-host certification) | Distributed Systems + QA |
 
 **Director approval is required** before PR retarget, merge, release or publication. PR #2 is a draft research/verification branch. No packaging smoke test authorizes production multi-user claims, migration, or destructive actions.

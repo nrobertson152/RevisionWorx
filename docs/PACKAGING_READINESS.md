@@ -3,6 +3,17 @@
 **Owner:** OpenSchematix Integration Engineer (isolated draft PR #2).  
 **Status:** PRE-ALPHA EXPERIMENT. Windows/Linux frozen CLI, Qt-offscreen and disposable **copied-workspace preservation** smoke **PASS** against Phase 2 `d656884b39401134149273dd0121ef620b76eb8e` in [CI run 41390661790](https://github.com/nrobertson152/RevisionWorx/actions/runs/41390661790). No interactive installed GUI, migration, native installer, signed package or release exists.
 
+**New offline/failure qualification:** [run 41392572210](https://github.com/nrobertson152/RevisionWorx/actions/runs/41392572210) passed
+Windows and Ubuntu Python 3.11 at experimental packaging code `ccb5520b31209eeb4e03943afc89b8b981474fc1` against
+exact Phase 2 `d656884b39401134149273dd0121ef620b76eb8e`. Each OS ran **5/5 packaging safety tests** and
+**3/3 source-level injected failure/recovery tests**, froze GUI and CLI, and
+verified a disposable copied-workspace and rollback rehearsal. The Linux
+container ran the frozen GUI/CLI with `--network none` and **no Python/pip**.
+Windows also passed 401-character and extended paths, localhost UNC read and
+byte-range-lock rejection. See
+[`OFFLINE_FAILURE_QUALIFICATION.md`](OFFLINE_FAILURE_QUALIFICATION.md) for
+precise evidence and limits.
+
 ## Source and build contract
 
 The inspected Phase 2 source has Python >=3.10, a standard-library CLI, optional PySide6-Essentials GUI, and separate GUI/CLI entry points. Its declared version is **0.1.0.dev0**. This builder intentionally narrows validation to **Python 3.11**.
@@ -71,18 +82,18 @@ The frozen CLI Unicode mitigation does not establish that *source* `python -m re
 | OS-specific bundled GUI/CLI startup | Windows/Linux CI, frozen CLI help and offscreen GUI process | PASS (Windows/Linux Python 3.11 bundled CLI+GUI, run 41388877999); not interactive | P1 / Integration |
 | GUI interaction in native desktop | Visible windows, menus, file dialogs, icons, keyboard/mouse, DPI, Wayland/X11 and Windows desktop | NOT EXECUTED | P1 / QA |
 | Signed native installer/uninstaller | Windows MSI/wizard, Linux AppImage/deb, shortcuts, publisher identity, clean rollback | NOT IMPLEMENTED | P1 / Director |
-| Existing workspace non-destruction | Copy workspace, compare journal/records/content SHA before/after packaged read | NOT EXECUTED | P0 / Claude+QA |
+| Existing workspace non-destruction | Copy workspace, compare journal/records/content SHA before/after packaged read | **PASS** disposable current-schema five-file snapshot; 41392572210; older-version upgrade still NOT EXECUTED | P0 / Claude+QA |
 | Versioned migration or downgrade | Old snapshot, version gate, dry run, restore/rollback without rewriting original | NOT IMPLEMENTED | P0 / Claude |
-| Upgrade crash/power interruption | Interrupted installation and first app launch against cloned workspace, no data loss | NOT EXECUTED | P0 / Claude+QA |
-| Cross-platform CAD paths | UNC, spaces, Unicode, long paths, case collisions, POSIX mounts, intact native CAD references | NOT EXECUTED | P0 / QA |
-| Permissions/read-only app dir | Windows Program Files UAC, Linux read-only install, user cache/config/state, denied ACL | NOT EXECUTED | P0/P1 / QA |
+| Upgrade crash/power interruption | Interrupted installation and first app launch against cloned workspace, no data loss | **PARTIAL:** corrupted disposable copy rejected, backup bytes restored; actual interrupted install/upgrade/power loss NOT EXECUTED | P0 / Claude+QA |
+| Cross-platform CAD paths | UNC, spaces, Unicode, long paths, case collisions, POSIX mounts, intact native CAD references | **PARTIAL** local Windows extended path, 401-character path and localhost UNC read passed; actual two-host UNC, case collisions and native CAD references NOT EXECUTED | P0 / QA |
+| Permissions/read-only app dir | Windows Program Files UAC, Linux read-only install, user cache/config/state, denied ACL | **PARTIAL:** metadata read-only attribute and injected EACCES tested; real denied ACL/UAC/read-only Program Files NOT EXECUTED | P0/P1 / QA |
 | Revision checkout/check-in/restore | Verified digest, immutable history, lock cleanup and interrupted release on Windows/Linux | NOT EXECUTED for installed build | P0 / Claude+QA |
 | Concurrent Windows writer lock | Repeated six-process races; no WinError 32, lost token or stale mutation (#8/#10) | Independent acceptance pending | P0 / Claude+QA |
 | Local index consistency | Insert/delete watermark and restart (#9) | Independent acceptance pending | P0 / Claude+QA |
 | GC/txid/history correctness | Phase 2 newer GC, idempotency, revision-chain corruption and recovery | Independent acceptance pending | P0 / Claude+QA |
 | Physical two-host SMB certification | Disconnect/restart/fencing, crash consistency, authenticated coordinator for multiuser mode | NOT EXECUTED | P0 / Distributed+QA |
 | Qt/licensing dependencies | GPL/LGPL license text, notices, Qt plugin audit, PyInstaller redistribution obligations | NOT EXECUTED | P1 / Director |
-| Offline operation and install | No network/account/telemetry, offline wheelhouse and runtime, audit dependency calls | NOT EXECUTED | P1 / QA |
+| Offline operation and install | No network/account/telemetry, offline wheelhouse and runtime, audit dependency calls | **PARTIAL:** Ubuntu frozen GUI/CLI offline container (no Python and no network); build/download and clean Windows VM, socket-attempt tracing, offline installer NOT EXECUTED | P1 / QA |
 | Bundle integrity/reproducibility | Full transitive hashed locks, signatures and artifact manifests, multi-run bitwise comparison | NOT EXECUTED | P1 / Packaging |
 
 **Data-preservation rule:** never install, upgrade, or uninstall application files inside a .revisionworx authoritative workspace or a managed CAD directory. Uninstall must never delete journal records, immutable revisions, checkout tokens, engineering files, or user backups. There is no implemented migration/updater here.
