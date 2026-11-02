@@ -23,6 +23,7 @@ if importlib.util.find_spec("revisionworx.documents") is None:
 
 from revisionworx import atomicio, documents as D
 from revisionworx.content import ContentStore, ContentTooLarge
+from .test_phase2_integrity import managed_document  # shared synthetic CAD fixture
 from revisionworx.workspace import (
     CommittedNotApplied, RecordPut, Workspace, WorkspaceCorruptError,
     WorkspaceError,
