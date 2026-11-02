@@ -511,6 +511,35 @@ def test_index_rebuild_does_not_omit_pre_watermark_records_due_to_late_delete(tm
             )
 
 
+def _intercept_writer_lock_release(monkeypatch, lock, injection):
+    """Intercept the *actual* release operation for both historical contracts.
+
+    Pre ADR-019 release unlinks writer.lock by path; ADR-019 atomically moves
+    writer.lock to a private .releasing-* file and examines that moved file.
+    The failpoint is deliberately tied to the operation, not a stale syscall.
+    """
+    if hasattr(Workspace, "_restore_foreign_lock"):
+        original_replace = workspace_mod.os.replace
+
+        def releasing_replace(src, dst, *args, **kwargs):
+            if Path(src) == lock and Path(dst).name.startswith(".releasing-"):
+                return injection(lambda: original_replace(src, dst, *args, **kwargs))
+            return original_replace(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(workspace_mod.os, "replace", releasing_replace)
+        return "atomic-move"
+
+    original_unlink = Path.unlink
+
+    def legacy_unlink(path, *args, **kwargs):
+        if path == lock:
+            return injection(lambda: original_unlink(path, *args, **kwargs))
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", legacy_unlink)
+    return "legacy-unlink"
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows NTFS sharing-violation semantics only")
 @pytest.mark.xfail(
     not _windows_lock_release_retry_supported(), strict=True, raises=PermissionError,
@@ -529,16 +558,15 @@ def test_windows_writer_lock_close_survives_transient_sharing_violation(tmp_path
     real_unlink = Path.unlink
     attempts = []
 
-    def transient_share_violation(path, *args, **kwargs):
-        if path == lock:
-            attempts.append(True)
-            if len(attempts) == 1:
-                raise PermissionError(13, "QA injected Windows sharing violation", str(path))
-        return real_unlink(path, *args, **kwargs)
+    def transient_share_violation(proceed):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise PermissionError(13, "QA injected Windows sharing violation", str(lock))
+        return proceed()
 
     try:
         with monkeypatch.context() as m:
-            m.setattr(Path, "unlink", transient_share_violation)
+            _intercept_writer_lock_release(m, lock, transient_share_violation)
             writer.close()
         assert len(attempts) >= 2, "release should retry after the transient sharing violation"
         assert not lock.exists(), "released writer lock must not remain orphaned"
@@ -658,17 +686,15 @@ def test_windows_persistent_lock_unlink_denial_is_reported_and_retained(tmp_path
     real_unlink = Path.unlink
     attempts = []
 
-    def persistently_denied(path, *args, **kwargs):
-        if path == lock:
-            attempts.append(True)
-            raise PermissionError(13, "QA injected persistent WinError 32", str(path))
-        return real_unlink(path, *args, **kwargs)
+    def persistently_denied(_proceed):
+        attempts.append(True)
+        raise PermissionError(13, "QA injected persistent WinError 32", str(lock))
 
     try:
         with monkeypatch.context() as m:
             m.setattr(Workspace, "LOCK_RELEASE_ATTEMPTS", 3)
             m.setattr(Workspace, "LOCK_RELEASE_DELAY", 0)
-            m.setattr(Path, "unlink", persistently_denied)
+            _intercept_writer_lock_release(m, lock, persistently_denied)
             with pytest.raises(workspace_mod.WorkspaceError, match="could not release"):
                 writer.close()
         assert len(attempts) == 3
@@ -698,20 +724,24 @@ def test_windows_lock_release_does_not_unlink_reassigned_token(tmp_path, monkeyp
     real_unlink = Path.unlink
     attempts = []
 
-    def ownership_changes_on_first_unlink(path, *args, **kwargs):
-        if path == lock:
-            attempts.append(True)
-            # Simulate a second holder replacing the token immediately after
-            # our first ownership read, before a sharing-violation retry.
-            lock.write_text(json.dumps({**original, "token": successor_token}), encoding="utf-8")
-            raise PermissionError(13, "QA simulated sharing violation and ownership change", str(path))
-        return real_unlink(path, *args, **kwargs)
+    def ownership_changes_during_release(proceed):
+        attempts.append(True)
+        # This is a controlled private test fixture mutation at the release
+        # linearization boundary, not an assertion of valid lock ownership.
+        lock.write_text(json.dumps({**original, "token": successor_token}), encoding="utf-8")
+        if hasattr(Workspace, "_restore_foreign_lock"):
+            # ADR-019 moves the new B token aside and must restore it;
+            # a check-then-unlink implementation would delete B's lock here.
+            return proceed()
+        # Historical release retries after sharing violation and then
+        # observes the changed token.
+        raise PermissionError(13, "QA simulated sharing violation and ownership change", str(lock))
 
     try:
         with monkeypatch.context() as m:
             m.setattr(Workspace, "LOCK_RELEASE_ATTEMPTS", 3)
             m.setattr(Workspace, "LOCK_RELEASE_DELAY", 0)
-            m.setattr(Path, "unlink", ownership_changes_on_first_unlink)
+            _intercept_writer_lock_release(m, lock, ownership_changes_during_release)
             writer.close()
         assert attempts == [True]
         assert lock.exists(), "never delete a lock held by a successor token"
