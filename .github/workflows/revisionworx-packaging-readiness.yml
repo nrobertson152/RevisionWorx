@@ -1,0 +1,51 @@
+name: RevisionWorx experimental packaging readiness
+
+on:
+  push:
+    branches:
+      - integration/openschematix
+    paths:
+      - 'tools/packaging/**'
+      - '.github/workflows/revisionworx-packaging-readiness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revisionworx-packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-offscreen-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - name: Checkout integration-only packaging tools
+        uses: actions/checkout@v4
+      - name: Checkout pinned RevisionWorx Phase 2 source
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: ffcfb463bc050ff460279fd92f6758e0215f73e3
+          path: external/revisionworx-phase2
+          persist-credentials: false
+      - name: Select Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify packaging path and overwrite safeguards
+        run: python tools/packaging/test_builder.py
+      - name: Build experimental bundles and run isolated smoke
+        run: >-
+          python tools/packaging/build.py
+          --source external/revisionworx-phase2
+          --output packaging-prototype-output
+          --expected-sha ffcfb463bc050ff460279fd92f6758e0215f73e3
+      - name: Print version and dependency provenance
+        if: success()
+        run: python -c "from pathlib import Path; print((Path('packaging-prototype-output') / 'provenance.json').read_text())"
