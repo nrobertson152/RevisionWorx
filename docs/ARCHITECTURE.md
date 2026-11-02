@@ -325,6 +325,18 @@ Implementation notes beyond the original design:
   which is verified only on local Linux filesystems. Production multi-user use waits for Agent D's
   findings (issue #1) and real SMB/NFS tests.
 
+### ADR-014 Multi-user authority: optional LAN coordinator — APPROVED (director, 2026-11-01), NOT IMPLEMENTED
+- **Decision:** the supported multi-user architecture is an optional on-premise coordinator (issue #5), following Agent D's design (PR #4). It provides authoritative write control, fencing generations checked atomically with each commit, ordered transactions, txid-idempotent recovery and audited override.
+- **Standalone mode** keeps the current file journal (ADR-004/005/008). It is single writer at a time, is fully offline and needs no coordinator.
+- **First target:** a Windows-hosted coordinator and SMB shares. Linux hosting and NFS come later.
+- **Integration plan:**
+  - extract a `CommitAuthority` interface from `Workspace.commit`, preserving its contract (`expect_rev`, `RecordCheck`, `RecordDelete`, `ConflictError`, `LockLostError`, `CommittedNotApplied`, `transaction_outcome`);
+  - the file journal and the coordinator are two implementations of it;
+  - the coordinator must evaluate `expect_rev` inside its commit transaction;
+  - `documents.py` does not change.
+- **Ownership:** Agent D owns the coordinator prototype and the SMB test rig. The lead architect owns the seam and its integration.
+- **Release gate:** issue #8 (the stale-writer vulnerability; see ADR-008 residual risk) must be closed by coordinator fencing and verified on real SMB before any production multi-user claim.
+
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).

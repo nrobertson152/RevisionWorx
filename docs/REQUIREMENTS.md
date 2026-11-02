@@ -51,7 +51,11 @@ All implementation claims require verification. Unsupported integrations must be
 
 ## 5. Collaboration and authoritative shared data
 
-Preferred deployment: local clients and local SQLite metadata/search caches, with a shared network `.revisionworx` authoritative registry, locks, immutable revisions, durable journals and recovery state. No required cloud or dedicated server.
+**Amended 2026-11-01 by project director decision (issue #5, ADR-014):**
+- **Standalone single-user mode** (no coordinator) remains fully functional offline: local clients, local SQLite caches, and an authoritative `.revisionworx` journal on local disk or a share, with one writer at a time. No accounts, cloud services or subscriptions in any mode.
+- **Supported multi-user mode** uses an **optional on-premise local-network coordinator**. The coordinator owns authoritative write control, fencing tokens, transaction ordering and safe recovery. Immutable content objects remain on the shared folder.
+- **Initial multi-user target:** a Windows-hosted coordinator with SMB shared folders. Linux hosting and other share types will be evaluated later.
+- Multi-user operation is **not production-ready** until the stale-writer vulnerability (issue #8) is resolved by coordinator fencing and verified on real SMB shares.
 
 A file share alone is **not** a transactional database. Design, prove and test atomic coordination semantics on supported SMB/NFS filesystem configurations, including race prevention, interrupted writes, disk-full, lost connectivity, permissions, competing clients and stale locks. Never use naive check-then-create locks, silently steal a stale lock, or place a single writable SQLite database on a network share for concurrent clients.
 

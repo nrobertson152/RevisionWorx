@@ -87,7 +87,7 @@ against the application, so I ran them; nothing in their branches was modified.
   sound because the generation check and the commit are one local SQLite transaction. Review notes
   posted (unclosed connections; the payload must carry `expect_rev` semantics).
 - **PR #2 (OpenSchematix, Agent C):** 6/6 passed; compared against upstream; see the session 2 log.
-- **Issue #5, architecture decision: PENDING DIRECTOR APPROVAL.**
+- **Issue #5, architecture decision: APPROVED by the director (20:36). See ADR-014 and the REQUIREMENTS §5 amendment.**
   - Recommendation: keep the serverless shared folder for single-writer use (not certified for
     concurrent writes), and make the optional LAN coordinator the supported multi-user mode, behind
     a `CommitAuthority` seam that implements the existing `Workspace.commit` contract.
@@ -222,7 +222,7 @@ against the application, so I ran them; nothing in their branches was modified.
 - **Revision listing reads all revision records**, which is a scaling limit (see ARCHITECTURE).
 
 ## Next concrete tasks
-1. Install PySide6 (allow pypi.org for the session, or run locally) and run `tests/test_qt_gui.py`.
+1. **The director has allowlisted PyPI.** Install PySide6 and run `QT_QPA_PLATFORM=offscreen python -m pytest`, which includes `tests/test_qt_gui.py`.
    Launch the window on Linux and Windows; fix whatever the stub smoke could not catch.
 2. Run the full suite on Windows (NTFS) to verify the `rename`-based exclusive publish and path rules.
 3. Add CI (GitHub Actions: Linux + Windows, Python 3.10 and 3.13) — needs director approval for workflow files.
@@ -231,7 +231,7 @@ against the application, so I ran them; nothing in their branches was modified.
    change record linkage, optional read-only policy.
 5. Integrate Agent C's OpenSchematix adapter (PR #2) once retargeted. Schematic documents can then
    carry extracted component/part candidates as `unresolved` provenance until Phase 4 parts exist.
-6. **Blocked on the director's decision (issue #5):**
+6. **Unblocked by the ADR-014 approval (Windows coordinator + SMB first; issue #8 is the release gate):**
    - Extract a `CommitAuthority` interface from `Workspace.commit`: the file journal is one
      implementation, and the LAN coordinator (Agent D) would be the other.
    - Add named failpoints for QA (issue #1).
