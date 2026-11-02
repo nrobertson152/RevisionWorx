@@ -4,10 +4,13 @@ A FOSS PDM software that integrates seamlessly with OpenSchematix.
 RevisionWorx is an offline, accountless, telemetry-free engineering Product Data Management tool for
 small and medium engineering departments, for Windows and Linux. Licensed GPL-3.0-or-later.
 
-> **Status: pre-alpha (Phase 1 foundation).** Workspaces, engineering roots, folder templates,
-> project creation, opt-in adoption of existing project folders and a local search index work and are
-> tested on Linux. Revisions, check-in/check-out, parts, BOMs, Where Used, Before You Revise and CAD
-> reference handling are **not implemented yet**. Multi-user writes on network shares are **not yet
+> **Status: pre-alpha.**
+> - **Tested on Linux:** workspaces, engineering roots, folder templates, project creation, opt-in
+>   adoption, a local search index and (on the `phase2-documents` branch) document registration,
+>   immutable SHA-256 revisions, lifecycle states, and check-out/check-in.
+> - **Not implemented yet:** parts, BOMs, Where Used, Before You Revise and native CAD reference
+>   extraction.
+> - **Desktop window:** written for PySide6 but not yet run. Multi-user writes on network shares are **not yet
 > verified**: use one writer at a time. See `docs/DEVELOPMENT_PROGRESS.md`.
 
 ## What works today
@@ -42,6 +45,11 @@ python -m revisionworx project preview "/mnt/eng/Projects/Acme/2019/J-1100"
 python -m revisionworx project adopt   "/mnt/eng/Projects/Acme/2019/J-1100" --name "Lift table"
 python -m revisionworx project list pump
 python -m revisionworx status
+python -m revisionworx doc register PROJECT_ID "/mnt/eng/Projects/Acme/J-2001 Pump skid/03 Drawings/Native/frame.idw" --number DWG-1
+python -m revisionworx doc checkout DOC_ID      # edit the file in place with your CAD tool
+python -m revisionworx doc checkin DOC_ID -m "Add weld symbols"
+python -m revisionworx rev transition REV_ID in_review
+python -m revisionworx doc register-report PROJECT_ID --csv register.csv
 ```
 
 ## Development

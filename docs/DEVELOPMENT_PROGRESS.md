@@ -1,14 +1,19 @@
 # RevisionWorx — Development Progress
 
 **Updated:** 2026-11-01 (second session: Phase 1 review, PySide6 migration)
-**Branch:** `phase1-foundation` (not merged, not tagged, no release published — awaiting director approval).
-Phase 2 work is on `phase2-documents`, stacked on this branch.
+**Branches:**
+- `phase1-foundation`: Phase 1 + review + PySide6.
+- `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
+  is the most complete record.**
+
+Nothing is merged, tagged or released; that awaits director approval.
 **Status:** Phase 1 foundation implemented, reviewed and hardened, with automated tests on Linux.
 The GUI was migrated to PySide6, but the Qt widgets have not been executed. No release exists.
 
 ## How to resume
 1. `git checkout phase1-foundation` and read `CLAUDE.md`, `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md` (ADRs).
-2. `python -m pytest -q`: on this branch expect **118 passed, 1 skipped**. The skip is
+2. `python -m pytest -q`: on `phase1-foundation` expect **118 passed, 1 skipped**; on
+   `phase2-documents` expect **151 passed, 1 skipped**. The skip is
    `tests/test_qt_gui.py`, which needs PySide6. With PySide6 installed, run
    `QT_QPA_PLATFORM=offscreen python -m pytest` and record the Qt results; they have never been run.
 3. Continue with "Next concrete tasks" below. Record every session in the log at the bottom.
@@ -17,7 +22,7 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | Phase | Status |
 | --- | --- |
 | 1. Foundation, workspace configuration, registration, index | **Implemented, reviewed, tested on Linux. Qt GUI not executed; Windows untested** |
-| 2. Drawing/revisions/checkouts | **In progress on `phase2-documents`** (see that branch) |
+| 2. Drawing/revisions/checkouts | **Core implemented and tested on `phase2-documents` (single writer, local FS). Not production multi-user. Qt tab not executed** |
 | 3. Verified multi-user collaboration | Not started. Design gate in ARCHITECTURE.md; coordinated in issue #1 (Agent D) |
 | 4. Parts, dependencies, Where Used, Before You Revise | Not started |
 | 5. OpenSchematix and BOM integration | Not started (file format inspected; content recognition only) |
@@ -50,7 +55,50 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | GUI view-models | `gui/viewmodels.py` | Toolkit-free list/details/new-project form/adopt state machine — **tested headless** |
 | GUI view (PySide6) | `gui/qt/` | Main window, table models, dialogs. **Never executed**: PyPI is blocked in the dev sandbox. Stub-module smoke only (see log). |
 
+## Phase 2 — what exists on `phase2-documents` (verified by tests)
+| Area | Module | Notes |
+| --- | --- | --- |
+| Design | ARCHITECTURE ADR-010..013 | Committed before code (`677dbe1`) |
+| Document types | `documents.py` | Built-in drawing/cad-part/cad-assembly/schematic/pdf/manufacturing/general; custom types; extension-based suggestion |
+| Document registry | `documents.py` | Managed projects only; file never moved/renamed/edited (snapshot-tested); case-insensitive path uniqueness; document numbers unique; links refused |
+| Content store | `content.py` | SHA-256 objects; single-read copy+hash; fsync + exclusive publish; dedupe with re-verification; abort if the file changes mid-copy |
+| Revisions | `documents.py`, `revlabels.py` | Immutable fields guarded; labels alpha (ASME letters skipped)/numeric/numeric2/manual; history; export with verification; metadata compare; restore = new revision with `restored_from` |
+| Lifecycle | `lifecycle.py` | Configurable states/transitions; release re-verifies content and supersedes the previous release in the same entry; cannot release older than current; optional distinct approver |
+| Checkout/check-in | `documents.py`, `clientstate.py` | Exclusive non-expiring checkout (`expect_rev=0`); 6-process race → one winner; check-in validated vs authoritative state in one entry; cancel keep/discard; audited admin release; stale tokens rejected |
+| External edits | `documents.py` | missing / unchanged / modified / modified-externally / unrevisioned; touch-only detected as unchanged via hash |
+| Drawing register | `documents.py`, CLI | Rows + CSV |
+| Index | `index.py` (schema v2) | Documents (+FTS), revisions, checkouts; incremental == rebuild |
+| CLI | `cli.py` | `doc …`, `rev …`, `doctype …`, `lifecycle …` |
+| GUI | `gui/viewmodels.py`, `gui/qt/documents.py` | View-models tested headless; Qt Documents tab **not executed** |
+
 ## Session log
+
+### 2026-11-01 (session 2, part 2) — Phase 2 on `phase2-documents`
+- **Commits:**
+  - `677dbe1` design (ADR-010..013)
+  - `f99281e` core (registry, content store, revisions, lifecycle, checkout)
+  - `4b4cbe9` index/CLI/GUI
+  - this documentation commit
+- **Tests executed:** `python -m pytest -q` gives **151 passed, 1 skipped** (Qt, no PySide6). The
+  three multi-process race tests (exclusive publish, writer lock, document checkout) were re-run
+  3× each, all passing. A Python 3.11 CLI run registered a real OpenSchematix `.osch` as a schematic
+  document, then checked it out and in (rev A → B); `verify` reported 0 problems.
+- **Defects found by tests during development:**
+  - Case-variant paths reached "file missing" before the duplicate check.
+  - Registering a symbolic link silently registered its target.
+  Both are fixed, with regressions in `test_register_refusals`.
+- **Crash points covered:**
+  - Failure while copying (source changed): nothing written.
+  - Journal publish failure after the content object is stored: no revision, checkout kept, retry
+    succeeds and reuses the re-verified object.
+  - Failure after the commit point: `CommittedNotApplied`, queryable by `txid`, completed on reopen.
+- **Not done / open:**
+  - Garbage collection of orphan content objects.
+  - Optional read-only-between-checkouts policy.
+  - Assembly-aware multi-document checkout (needs the Phase 4 dependency graph).
+  - Engineering change records.
+  - Report export as PDF (CSV only).
+  - Revision comparison is metadata-only.
 
 ### 2026-11-01 (session 2) — Phase 1 review, store hardening, PySide6 migration
 - **Directive:** the project director's Phase 1 review / Phase 2 directive. GUI must use PySide6.
@@ -133,16 +181,29 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
   generous 1 s bound) is a sanity check, not evidence for the <50 ms / 10,000-project targets.
 - No packaging/installers exist.
 
+### Known limitations / risks (Phase 2)
+- **No multi-user production claim.** Checkout exclusivity rests on the single-writer journal,
+  verified only on local Linux filesystems. Agent D's findings and real SMB/NFS tests are required
+  first.
+- **Working files are edited in place.** RevisionWorx cannot prevent edits made without a checkout;
+  it detects them (`modified-externally`). Native CAD references are preserved because paths never
+  change.
+- **Checkout tokens live in local client state.** Losing that state requires an audited
+  administrative release.
+- **Orphan content objects** from interrupted check-ins accumulate until GC exists. They are
+  harmless but use space.
+- **Revision listing reads all revision records**, which is a scaling limit (see ARCHITECTURE).
+
 ## Next concrete tasks
 1. Install PySide6 (allow pypi.org for the session, or run locally) and run `tests/test_qt_gui.py`.
    Launch the window on Linux and Windows; fix whatever the stub smoke could not catch.
 2. Run the full suite on Windows (NTFS) to verify the `rename`-based exclusive publish and path rules.
 3. Add CI (GitHub Actions: Linux + Windows, Python 3.10 and 3.13) — needs director approval for workflow files.
-4. Phase 2 design (write into ARCHITECTURE.md before code): Document entity, content-addressed
-   immutable revision blobs with SHA-256, revision label schemes, drawing register fields, lifecycle
-   states and audited transitions.
-5. Phase 2: checkout/check-in protocol on top of the journal (single-writer first), unexpected-edit
-   detection against baselines/revisions, administrative checkout recovery.
+4. Phase 2 follow-ups: content-object GC with a safe mark-and-sweep (only objects older than any
+   in-flight check-in), per-document revision storage for scale, PDF report export, engineering
+   change record linkage, optional read-only policy.
+5. Integrate Agent C's OpenSchematix adapter (PR #2) once retargeted. Schematic documents can then
+   carry extracted component/part candidates as `unresolved` provenance until Phase 4 parts exist.
 6. Begin the Phase 3 investigation plan: an SMB/NFS test rig (Samba + NFSv4 containers or two VMs) to
    exercise exclusive publish, fsync and lease behaviour across clients.
 

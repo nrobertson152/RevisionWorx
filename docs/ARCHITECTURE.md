@@ -198,10 +198,27 @@ the Phase 5 adapter should use. OpenSchematix source is not modified.
 
 ## Phase 2 — documents, revisions, lifecycle, checkout (design, ADR-010 … ADR-013)
 
-Design written before implementation, as `CLAUDE.md` requires for shared-data protocols. Status
-markers below are updated as each part is built and tested.
+Designed before implementation, as `CLAUDE.md` requires for shared-data protocols
+(design commit precedes the code commits on `phase2-documents`). Status markers reflect what was
+built and tested.
 
-### ADR-010 Document registry — PROPOSED
+Implementation notes beyond the original design:
+- `RecordCheck` (workspace) asserts a record is still at a revision without writing it. Checkout uses
+  it on the document, so a checkout does not bump the document's `_rev` and does not make other
+  users' views stale.
+- Registration refuses symbolic links *before* resolving the path. Otherwise the link's target
+  would be registered instead of the path the user chose (found by test).
+- Duplicate detection runs before the existence check, so a case-variant path is refused even when
+  it exists as a distinct file on a case-sensitive filesystem (found by test).
+- Drawing register roles: **checker** = actor who approved the latest revision; **approver** =
+  actor who released it. Document owner is a free-text field.
+- Local index schema v2 adds `documents` (+FTS), `revisions` and `checkouts`. An older cache is
+  discarded and rebuilt; it holds no authoritative data.
+- Scaling note: `ws.list("revision")` reads every revision record. This is fine for thousands, not
+  for hundreds of thousands; queries should move to the index or per-document record directories
+  before the Phase 8 benchmarks.
+
+### ADR-010 Document registry — IMPLEMENTED (`documents.py`, tests `tests/test_documents.py`)
 - New record kinds `doctype`, `document`, `revision`, `checkout`, `lifecycle` (registered via
   `workspace.register_kind`, so Phase 1 code is untouched).
 - **Document type** `{id, name, extensions[], revision_scheme, category}`. Built-in defaults:
@@ -220,7 +237,7 @@ markers below are updated as each part is built and tested.
 - Registration may capture the file's current content as the first revision in the **same journal
   entry**. That is an explicit snapshot of present content, not invented history.
 
-### ADR-011 Immutable revisions and content store — PROPOSED
+### ADR-011 Immutable revisions and content store — IMPLEMENTED (`content.py`, `revlabels.py`; GC of orphan objects PROPOSED)
 - Content store: `.revisionworx/content/sha256/<aa>/<64-hex>`, holding the raw bytes and named by
   their SHA-256.
   - Written by streaming the source once into a temp file while hashing, fsynced, then
@@ -249,7 +266,7 @@ markers below are updated as each part is built and tested.
 - Comparison: `compare_revisions` reports metadata differences (content equality, size delta,
   labels, states, authors, dates, path changes). Content diffing of CAD formats is out of scope.
 
-### ADR-012 Lifecycle — PROPOSED
+### ADR-012 Lifecycle — IMPLEMENTED (`lifecycle.py`)
 - A configurable lifecycle record, with defaults:
   - **States:** `wip` (Work in Progress), `in_review`, `approved`, `released`, `superseded`,
     `obsolete`.
@@ -273,7 +290,7 @@ markers below are updated as each part is built and tested.
 - Released revisions stay immutable in content and metadata; only their state may later move to
   `superseded`/`obsolete`.
 
-### ADR-013 Checkout / check-in — PROPOSED (single-writer safe; network shares unverified)
+### ADR-013 Checkout / check-in — IMPLEMENTED for the single-writer model; network shares UNVERIFIED
 - Checkout record id = document id, so at most one checkout per document can exist.
   - Fields: `{document_id, token, owner {user, host}, acquired, base_rev_id, base_sha256, note}`.
   - Created with `expect_rev=0` together with a document put at its `expect_rev`. Two concurrent
@@ -337,7 +354,8 @@ the QA/concurrency agents in GitHub issue #1.
 | Template (folders, small text starter files) | IMPLEMENTED |
 | Baseline (immutable inventory blob) | IMPLEMENTED |
 | AuditEvent (lock break) | IMPLEMENTED (general audit trail PROPOSED) |
-| Document, Revision, Checkout, Part, Assembly, BOM, DependencyEdge, ChangeRequest | PROPOSED |
+| DocumentType, Document, Revision, Checkout, Lifecycle | IMPLEMENTED (Phase 2, single-writer) |
+| Part, Assembly, BOM, DependencyEdge, ChangeRequest | PROPOSED |
 
 Distinguish a part *identity* from a document file and from a specific revision. No path-based identity.
 
