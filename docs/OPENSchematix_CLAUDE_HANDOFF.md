@@ -41,88 +41,48 @@ content object; `ContentStore.verify` independently verifies integrity.
 Documents are registered only within managed projects. Working files stay
 where they were. No adapter should alter those invariants.
 
-**Runnable prototype usage example against the inspected Phase 2 API (not
-an approved production service):**
+**Lead Architect-approved bounded Phase 2 read contract (ADR-018), verified at
+`phase2-documents` commit `ffcfb463bc050ff460279fd92f6758e0215f73e3`:**
 
 ```python
-import hashlib
 from pathlib import Path
+from revisionworx import documents
+from revisionworx_integrations.openschematix import MAX_SOURCE, inspect_bytes
 
-from revisionworx.content import ContentStore
-from revisionworx_integrations.openschematix import (
-    MAX_SOURCE, InvalidProject, UnsupportedFormat, inspect_bytes,
-)
-
-
-class RevisionIndexBoundaryError(RuntimeError):
-    """A PDM content/identity failure; no index may be published."""
-
-
-def inspect_registered_revision(ws, revision_id: str) -> dict:
-    rev = ws.get("revision", revision_id)
-    if rev is None:
-        raise RevisionIndexBoundaryError("revision not found")
+def observe_revision(ws, revision_id):
+    # Existing Phase 2 API: validates exact returned bytes, SHA-256 and
+    # registered content size; rejects oversize without full read.
+    rev, raw = documents.read_revision_bytes(ws, revision_id, MAX_SOURCE)
     doc = ws.get("document", rev["document_id"])
-    if doc is None or doc["id"] != rev["document_id"]:
-        raise RevisionIndexBoundaryError("revision/document mismatch")
-    if doc["type_id"] != "schematic":
-        raise UnsupportedFormat("not a registered schematic")
-
-    # The *captured* path belongs to the immutable revision. The current
-    # document path may have changed after this historical snapshot.
+    if doc is None or doc["type_id"] != "schematic":
+        raise ValueError("not a registered schematic document")
+    # Historical extension is immutable; current document path can change.
     suffix = Path(rev["source_rel_path"]).suffix.lower()
-    if suffix not in (".schematix", ".osch"):
-        raise UnsupportedFormat("unsupported original schematic extension")
-
-    size = rev["size"]
-    if type(size) is not int or size < 0:
-        raise RevisionIndexBoundaryError("invalid registered revision size")
-    if size > MAX_SOURCE:
-        raise InvalidProject("revision exceeds adapter inspection limit")
-
-    # Phase 2's existing path_for is used only in this runnable prototype.
-    # A production API should expose a bounded verified read. Hash the
-    # *same bytes* sent to inspect_bytes; do not rely on an earlier verify()
-    # over a different read, or on the mutable working copy.
-    with ContentStore(ws).path_for(rev["sha256"]).open("rb") as handle:
-        raw = handle.read(MAX_SOURCE + 1)
-    if len(raw) > MAX_SOURCE:
-        raise InvalidProject("content object exceeds adapter limit")
-    if len(raw) != size:
-        raise RevisionIndexBoundaryError("content size mismatch")
-    if hashlib.sha256(raw).hexdigest() != rev["sha256"]:
-        raise RevisionIndexBoundaryError("content digest mismatch")
-
     report = inspect_bytes(raw, suffix)
     if report["file_sha256"] != rev["sha256"]:
-        raise RevisionIndexBoundaryError("adapter digest mismatch")
+        raise ValueError("adapter digest mismatch")
     return {
         "document_id": doc["id"],
         "revision_id": rev["id"],
-        "file_sha256": rev["sha256"],
+        "revision_sha256": rev["sha256"],
         "source_suffix": suffix,
-        "adapter": report["adapter"],
-        "observation": report,  # disposable, nonauthoritative
+        "adapter_version": report["adapter"],
+        "observation": report,  # disposable, not a Workspace record
     }
 ```
 
-The example uses existing `Workspace.get`, `ContentStore.path_for`, and
-`inspect_bytes` calls, so no new persistence API is implied. It performs no
-`Workspace.commit`, revision creation, checkout, cache write, or managed-part
-matching. A missing content object raises `FileNotFoundError`; callers must
-handle that and other I/O errors as index failures. The immutable
-`revision.source_rel_path`, **not** today's `document.rel_path`, governs
-suffix selection for historical revisions. The example is a review proposal;
-the pinned integration tests validate the underlying read-only behavior, not
-this future orchestration service.
+The snippet demonstrates a **future caller**, not an enabled production index
+service. The adapter itself remains independent of unmerged Phase 2 modules.
+The approved `documents.read_revision_bytes` returns the verified original
+bytes, or raises `ContentTooLarge`/`WorkspaceCorruptError` for excessive,
+missing or corrupt content. The former `ContentStore.path_for` example is
+**superseded** and must not be used for this integration contract.
 
-Production code must use a *bounded, verified content-read interface*
-approved by Claude; the example is intentionally illustrative. In particular,
-`path_for` is an implementation detail, and a content object read must
-not be confused with examining the mutable document working path. The
-caller must check the SHA-256 of **the exact bytes parsed** rather than
-trusting a previous check on a different file read. Any failure marks the
-index observation unavailable/stale; it does not change `Workspace`.
+The proposed cache key remains
+`(document_id, revision_id, sha256, adapter_version)`; the observation is
+read-only, disposable and never calls `Workspace.commit`. The caller must
+not turn unresolved manufacturer part references into authoritative PDM
+edges or purchasable BOM quantities.
 
 **Identity rules:** `doc_*` and `rev_*` are authoritative PDM IDs.
 Native `project_uid/sheet_uid/object_id` are drawing-local instance
@@ -201,30 +161,37 @@ unresolved external/custom symbols were not scanned. Any search hit for
 a manufacturer-part key is a **candidate**, not a verified dependency.
 No network, credentials or mandatory service are required.
 
-**Approval decisions for Claude (answer independently; nothing below is
-preapproved):**
+**Lead Architect decisions received**, [PR #2 comment
+6568970291](https://github.com/nrobertson152/RevisionWorx/pull/2#issuecomment-6568970291)
+at source SHA `ffcfb463bc050ff460279fd92f6758e0215f73e3`:
 
-1. **Byte authority:** Should the caller retain final SHA-256 validation on
-   the exact bytes being parsed, or should Phase 2 add a bounded
-   `ContentStore.read_verified`-like interface? Only `path_for` and
-   `verify` exist in the inspected Phase 2 implementation; the named
-   bounded reader is a *proposal*, not an existing API.
-2. **Suffix authority:** Confirm `revision.source_rel_path` as the immutable
-   historical source for the extension, even if `document.rel_path` is
-   subsequently renamed.
-3. **Identity:** Confirm `doc_id + rev_id + source instance id` as the scoped
-   observation identity; native project, sheet and object IDs can collide
-   across copied files and legacy wrapper IDs are ephemeral.
-4. **Ownership:** Confirm a disposable index service owns observations,
-   result statuses, refresh/invalidation, provenance and failure diagnostics.
-   No `Workspace.commit` on successful/failed indexing.
-5. **BOM/parts:** Confirm explicit part numbers remain unresolved reference
-   candidates with unknown quantities; reserve native BOM purchasing
-   quantities, Part IDs and verified where-used edges for approved parts/
-   adapter phases.
-6. **Integration order:** Approve or amend the stacking sequence and file
-   conflict resolution in section 5 below. PR #2 must remain draft until
-   the Director authorizes integration.
+1. **Byte authority approved:** Phase 2 owns bounded exact-byte verification
+   through `documents.read_revision_bytes(ws, rev_id, max_bytes)`, or
+   `ContentStore.read_verified(sha, max_bytes, expected_size)`. Neither
+   `path_for` nor a second unverified read should be used by the adapter
+   caller. The adapter's `file_sha256` provides optional defense in depth.
+2. **Suffix authority approved:** use immutable
+   `revision.source_rel_path`; the mutable `document.rel_path` is not
+   authoritative for historical formats.
+3. **Source identity approved:** scope component observations with the
+   authoritative `document_id` and `revision_id`; copied OpenSchematix
+   native UIDs are not global identifiers.
+4. **Observation ownership approved:** store only in the disposable index
+   layer; neither successful nor failed indexing calls `Workspace.commit`.
+   The approved cache key includes doc, rev, source SHA and adapter version.
+5. **Candidate-part policy approved:** manufacturer part numbers remain
+   unresolved with unknown quantity; no Part ID, native BOM equivalence or
+   verified where-used assertion before Phase 4/5.
+6. **Suggested merge sequence only:** #6 (with QA-accepted fixes) → #7 →
+   #2 retargeted to Phase 2 after Director approval; QA #3 incorporated
+   by its target. **No merge or PR retarget was authorized.**
+
+**Actual verification:** Existing Linux/Windows matrix at
+[run 41387383189](https://github.com/nrobertson152/RevisionWorx/actions/runs/41387383189)
+used the older Phase 2 SHA. The new bounded-reader contract tests were
+committed at `da1f01e43628cf165f4fbac6bd3a3171d3657bd8` and
+target the newer `ffcfb463`. Treat their results as **pending** until
+the corresponding CI run completes.
 
 ## 3. Native BOM oracle and demonstrated limitations
 
