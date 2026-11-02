@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nrobertson152/RevisionWorx
-          ref: 47d81658764cd6bde60e391ac9aac24e722317e8
+          ref: 325b7a801de15c082616781fe086bbd95cb350b6
           path: external/revisionworx-phase2
           persist-credentials: false
       - name: Verify immutable revision adapter boundary against Phase 2

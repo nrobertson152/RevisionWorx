@@ -38,27 +38,80 @@ content object; `ContentStore.verify` independently verifies integrity.
 Documents are registered only within managed projects. Working files stay
 where they were. No adapter should alter those invariants.
 
-**Proposed read-only future caller (not production code):**
+**Runnable prototype usage example against the inspected Phase 2 API (not
+an approved production service):**
 
 ```python
-# Pseudocode for Claude to place in a separately reviewed indexing service.
-rev = workspace.get("revision", requested_revision_id)
-doc = workspace.get("document", rev["document_id"])
-assert doc and rev["document_id"] == doc["id"]
-assert doc["type_id"] == "schematic"
+import hashlib
+from pathlib import Path
 
-raw = ContentStore(workspace).path_for(rev["sha256"]).read_bytes()
-if hashlib.sha256(raw).hexdigest() != rev["sha256"]:
-    raise ContentIntegrityError("immutable revision hash mismatch")
+from revisionworx.content import ContentStore
+from revisionworx_integrations.openschematix import (
+    MAX_SOURCE, InvalidProject, UnsupportedFormat, inspect_bytes,
+)
 
-report = inspect_bytes(raw, Path(doc["rel_path"]).suffix.lower())
-if report["file_sha256"] != rev["sha256"]:
-    raise ContentIntegrityError("adapter observed a different revision")
 
-# Store a disposable, nonauthoritative index observation referencing
-# (doc["id"], rev["id"], rev["sha256"], report["adapter"]).
-# No part identity inference, no new revisions, no authoritative edge puts.
+class RevisionIndexBoundaryError(RuntimeError):
+    """A PDM content/identity failure; no index may be published."""
+
+
+def inspect_registered_revision(ws, revision_id: str) -> dict:
+    rev = ws.get("revision", revision_id)
+    if rev is None:
+        raise RevisionIndexBoundaryError("revision not found")
+    doc = ws.get("document", rev["document_id"])
+    if doc is None or doc["id"] != rev["document_id"]:
+        raise RevisionIndexBoundaryError("revision/document mismatch")
+    if doc["type_id"] != "schematic":
+        raise UnsupportedFormat("not a registered schematic")
+
+    # The *captured* path belongs to the immutable revision. The current
+    # document path may have changed after this historical snapshot.
+    suffix = Path(rev["source_rel_path"]).suffix.lower()
+    if suffix not in (".schematix", ".osch"):
+        raise UnsupportedFormat("unsupported original schematic extension")
+
+    size = rev["size"]
+    if type(size) is not int or size < 0:
+        raise RevisionIndexBoundaryError("invalid registered revision size")
+    if size > MAX_SOURCE:
+        raise InvalidProject("revision exceeds adapter inspection limit")
+
+    # Phase 2's existing path_for is used only in this runnable prototype.
+    # A production API should expose a bounded verified read. Hash the
+    # *same bytes* sent to inspect_bytes; do not rely on an earlier verify()
+    # over a different read, or on the mutable working copy.
+    with ContentStore(ws).path_for(rev["sha256"]).open("rb") as handle:
+        raw = handle.read(MAX_SOURCE + 1)
+    if len(raw) > MAX_SOURCE:
+        raise InvalidProject("content object exceeds adapter limit")
+    if len(raw) != size:
+        raise RevisionIndexBoundaryError("content size mismatch")
+    if hashlib.sha256(raw).hexdigest() != rev["sha256"]:
+        raise RevisionIndexBoundaryError("content digest mismatch")
+
+    report = inspect_bytes(raw, suffix)
+    if report["file_sha256"] != rev["sha256"]:
+        raise RevisionIndexBoundaryError("adapter digest mismatch")
+    return {
+        "document_id": doc["id"],
+        "revision_id": rev["id"],
+        "file_sha256": rev["sha256"],
+        "source_suffix": suffix,
+        "adapter": report["adapter"],
+        "observation": report,  # disposable, nonauthoritative
+    }
 ```
+
+The example uses existing `Workspace.get`, `ContentStore.path_for`, and
+`inspect_bytes` calls, so no new persistence API is implied. It performs no
+`Workspace.commit`, revision creation, checkout, cache write, or managed-part
+matching. A missing content object raises `FileNotFoundError`; callers must
+handle that and other I/O errors as index failures. The immutable
+`revision.source_rel_path`, **not** today's `document.rel_path`, governs
+suffix selection for historical revisions. The example is a review proposal;
+the pinned integration tests validate the underlying read-only behavior, not
+this future orchestration service.
 
 Production code must use a *bounded, verified content-read interface*
 approved by Claude; the example is intentionally illustrative. In particular,
@@ -75,6 +128,100 @@ persistent sheet UID: upstream `open_any` creates new wrapper UIDs on
 each open, whereas the adapter uses a content-hash fallback that changes
 on edit. Never use either as a global cross-document identity. A drawing
 title-block revision is not a RevisionWorx revision ID.
+
+## 2A. Explicit Lead Architect approval contract (PROPOSED, not implemented)
+
+**Request** from a future local indexing scheduler (authoritative records
+are looked up by the caller; the request cannot supply forged source hashes,
+suffixes or Part IDs):
+
+```json
+{"document_id": "doc_<authoritative-id>", "revision_id": "rev_<authoritative-id>"}
+```
+
+The application may also use only `revision_id` and derive `document_id`.
+Either way, it must verify the revision actually belongs to that document.
+`doc_*` and `rev_*` are *illustrative prefixes*, not exact IDs assigned
+by the adapter. Neither native `project_uid` nor a title-block revision
+can authorize this lookup.
+
+**Success response/observation envelope** from the proposed read-only
+service; this is a data-flow proposal, **not** a function currently exported:
+
+```json
+{
+  "status": "indexed",
+  "document_id": "doc_<authoritative-id>",
+  "revision_id": "rev_<authoritative-id>",
+  "revision_sha256": "<verified 64-character sha256>",
+  "source_suffix": ".schematix",
+  "adapter": "openschematix-readonly-v1",
+  "verification": "source_parsed_not_part_resolved",
+  "coverage": {
+    "indexed_sheets": 3,
+    "indexed_components": 26,
+    "external_projects": "not_scanned",
+    "symbol_libraries": "not_resolved"
+  },
+  "observation": "<the exact inspect_bytes() report, not authoritative metadata>"
+}
+```
+
+The two angle-bracket strings above are *illustrative placeholders*, not
+literal serializable production values. The component/sheet counts are from
+the pinned `demo_project.schematix` fixture, not a universal guarantee.
+`verification` in the proposed envelope refers to source integrity and
+parsing; each `manufacturer_part_candidate` inside the report retains its
+own `verification: "unresolved"` and `quantity: null`.
+
+**Error outcome taxonomy** for the scheduler (the adapter itself raises its
+existing exceptions, and has no such status protocol yet):
+
+| Outcome | Trigger | Required read-only behavior |
+| --- | --- | --- |
+| `revision_not_found` / `identity_mismatch` | Missing or inconsistent authoritative `doc_id/rev_id` | No observation; preserve revision state |
+| `unavailable_content` | Missing content blob or read I/O error | No new observation; previous revision snapshots remain intact |
+| `integrity_error` | Blob size or exact parsed-byte SHA differs from immutable `rev.size/sha256` | No new observation; flag for content integrity review |
+| `unsupported_format` | Wrong original extension, future container or sheet schema | No stale success reused; retain original bytes and revision |
+| `invalid_project` | Invalid JSON/ZIP, unsafe members, corrupted or inconsistent schematic | No partial observation or inferred edges |
+| `over_limit` | Exceeds adapter source/member caps | Explicit incomplete/unavailable state; not "empty BOM" |
+| `indexed` | Verified bytes parsed completely within known adapter limits | Disposable observation only; no PDM writes |
+
+**Proposed cache key:** `(document_id, revision_id, sha256, adapter_version)`.
+A new revision creates a different cache identity even when native project
+UIDs are copied. Historical immutable observations remain valid for their
+original content SHA; a "latest revision" *view* must be refreshed whenever
+`document.latest_rev_id` changes. An adapter version bump invalidates or
+rebuilds its derived observations; an I/O failure never reuses a previous
+revision's report. Catalog coverage must state unmanaged projects and
+unresolved external/custom symbols were not scanned. Any search hit for
+a manufacturer-part key is a **candidate**, not a verified dependency.
+No network, credentials or mandatory service are required.
+
+**Approval decisions for Claude (answer independently; nothing below is
+preapproved):**
+
+1. **Byte authority:** Should the caller retain final SHA-256 validation on
+   the exact bytes being parsed, or should Phase 2 add a bounded
+   `ContentStore.read_verified`-like interface? Only `path_for` and
+   `verify` exist in the inspected Phase 2 implementation; the named
+   bounded reader is a *proposal*, not an existing API.
+2. **Suffix authority:** Confirm `revision.source_rel_path` as the immutable
+   historical source for the extension, even if `document.rel_path` is
+   subsequently renamed.
+3. **Identity:** Confirm `doc_id + rev_id + source instance id` as the scoped
+   observation identity; native project, sheet and object IDs can collide
+   across copied files and legacy wrapper IDs are ephemeral.
+4. **Ownership:** Confirm a disposable index service owns observations,
+   result statuses, refresh/invalidation, provenance and failure diagnostics.
+   No `Workspace.commit` on successful/failed indexing.
+5. **BOM/parts:** Confirm explicit part numbers remain unresolved reference
+   candidates with unknown quantities; reserve native BOM purchasing
+   quantities, Part IDs and verified where-used edges for approved parts/
+   adapter phases.
+6. **Integration order:** Approve or amend the stacking sequence and file
+   conflict resolution in section 5 below. PR #2 must remain draft until
+   the Director authorizes integration.
 
 ## 3. Native BOM oracle and demonstrated limitations
 
@@ -147,3 +294,45 @@ claim is made.
 
 The OpenSchematix repository and Claude's core branches have not been
 modified by this work.
+
+## 5. Exact PR diff overlap and safe integration sequencing (2026-11-01)
+
+Verified live GitHub changed-file lists, relative to their actual PR bases:
+
+- PR #6, `phase1-foundation` → `main`, owns the initial core and
+  `docs/DEVELOPMENT_PROGRESS.md`; it also adds two upstream fixture blobs
+  and the source-provenance `tests/fixtures/openschematix/README.md`.
+- PR #7, `phase2-documents` → `phase1-foundation`, owns the incremental
+  Phase 2 API and also updates `docs/DEVELOPMENT_PROGRESS.md`. Its new
+  revision/content APIs are *not* in `main`.
+- PR #2, `integration/openschematix` → `main`, owns isolated adapter,
+  oracle tests, CI and design documents. The original PR #2 overlapped
+  PR #6 in four paths: `docs/DEVELOPMENT_PROGRESS.md`,
+  `tests/fixtures/openschematix/README.md`, `demo_project.schematix`
+  and `start_stop_latch.osch`. It overlaps PR #7 only at
+  `docs/DEVELOPMENT_PROGRESS.md`. Both existing upstream fixture
+  blobs have *identical* Git SHAs across PR #2 and #6; no fixture-byte
+  conflict exists.
+- PR #2's old root `docs/DEVELOPMENT_PROGRESS.md` delta was only a
+  historical **"tests not executed"** checkpoint appended to `main`.
+  It is now obsolete and the role-specific progress log is the
+  authoritative record of adapter activity. This branch restores that
+  root file to `main` unchanged, removing the collision. The fixture
+  README is restored byte-for-byte to Claude's Phase 1 version; extra
+  adapter-specific provenance lives in
+  `tests/fixtures/openschematix/INTEGRATION_PROVENANCE.md`. These changes
+  were made only on the integration branch, **not** on Claude's branches.
+
+**Proposed sequence, subject to Director/Claude approval:**
+(1) Resolve QA and production blockers #8/#9/#10 in Claude's Phase 2
+stack and get their own acceptance; (2) merge PR #6 to `main` when
+authorized; (3) retarget/rebase PR #7 from `phase1-foundation` to
+updated `main` after authorized #6 integration, preserving commits;
+(4) integrate PR #7 when authorized; (5) rebase/retarget PR #2 onto the
+approved core only *after* Claude confirms the byte/observation boundary,
+and rerun scoped cross-platform adapter plus Phase 2 integration CI.
+No agent may perform a merge, retarget or history rewrite solely from
+this proposal. If PR #2 is independently merged earlier, it is still
+isolated read-only research and does **not** imply production Phase 5
+enablement. Keep all source and artifact paths unchanged.
+
