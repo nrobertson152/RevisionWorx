@@ -58,3 +58,20 @@ Expected discovery count is **29 tests** (14 authority + 9 coordinator + 6 manif
 [GitHub Actions run 41380924556](https://github.com/nrobertson152/RevisionWorx/actions/runs/41380924556) **SUCCESS**: inspected logs show **31/31 tests passed** on each Ubuntu Python 3.11, Ubuntu Python 3.13, Windows Python 3.11 and Windows Python 3.13; actual Phase 1 regression job **2/2 passed**. The new manifest tests spawn independent workers that exit without normal cleanup immediately after staging or immediately after durable local SQLite commit. Recovery checks verify that staged-only content is not a committed revision and that the committed transaction remains idempotently discoverable.
 
 This is **process-crash simulation**, not actual power-loss durability or real SMB/network-host testing. `docs/COORDINATOR_RESTORE_FENCING_PROTOCOL.md` proposes a nonrollbackable external epoch/high-water and controlled restore process; no such mechanism is implemented. The prototype's known same-epoch rollback weakness remains.
+
+## Witnessed authority and real Phase 2 verification (2026-11-01 ET)
+
+The new `witnessed_coordinator.py` research model illustrates an authority database bound to a **separately preserved** hash-chained witness. Each SQLite `BEGIN IMMEDIATE` mutation verifies the existing witness and appends an attestation of prospective state **before** database COMMIT. A lost DB commit leaves a mismatching witness and blocks operations; restoring an old DB snapshot while the witness remains intact also blocks. `test_witnessed_coordinator.py` includes **11 tests** for model authentication/administrator role, successful and rejected audited override, stale checkout rejection, idempotent replay, process contention, crash points, and witness tampering/rollback.
+
+`TestIdentityProvider` only models authentication with signed in-memory test credentials. It is **not Windows integrated authentication** or a real user/account service. An ordinary file-based witness is **not nonrollbackable**. Restoring both the SQLite database and witness to a matching older snapshot could revive stale credentials. No production claim is justified.
+
+Verified [GitHub Actions run 41382608414](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382608414): **42/42 tests passed in each** Windows Python 3.11, Windows Python 3.13, Ubuntu Python 3.11 and Ubuntu Python 3.13. The two actual Phase 1 defect probes passed. The **two actual Phase 2 probes** also passed: one demonstrates ADR-015 fencing *after* an audit, while the other **reproduces an unsafe pre-audit lock-break window** (the old writer's change is effective). A test that successfully reproduces a defect must not be treated as a passing safety guarantee. The earlier [run 41382383710](https://github.com/nrobertson152/RevisionWorx/actions/runs/41382383710) failed because the new audit query ordered by an incorrect SQL column; fixed in commit `731401bd`, then independently reverified by the green run.
+
+Current commands:
+
+```sh
+python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator
+REVISIONWORX_PHASE2_CHECKOUT=/path/to/phase2-documents python -m unittest -v prototype.test_phase2_lock_break_order
+```
+
+See `docs/COORDINATOR_WITNESS_RESEARCH.md`, `docs/COORDINATOR_INTEGRATION_CONTRACT.md`, and `docs/DISTRIBUTED_SYSTEMS_HANDOFF.md`. No actual two-host Windows SMB testing or verified nonrollbackable storage has been performed.
