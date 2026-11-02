@@ -30,3 +30,7 @@ Maintain `docs/SHARED_FILESYSTEM_ARCHITECTURE.md`, `docs/CONCURRENCY_PROTOCOL.md
 
 ## Immediate response required
 After reading these orders, report your role, branch, PR, current completed work, verified tests, outstanding risks, and your next concrete engineering task. Then continue implementation autonomously.
+
+## Updated priorities following Phase 2 report (2026-11-01)
+
+Phase 2 distributed-systems priority: inspect Claude draft PR #6, stacked PR #7, issue #5, and docs/ADMINISTRATIVE_LOCK_FENCING_DIRECTIVE.md. Claude reports lock rechecks before writes but a remaining paused-writer TOCTOU race. Produce deterministic executable reproduction and test atomic fencing/generation at publication, admin lock-break audit and recovery. Preserve admin override. Prototype optional local-LAN coordinator with swappable save interface and crash/restart tests strictly as research; coordinator is NOT approved until director decides issue #5. Distinguish uncertified single-writer shared-share mode from coordinator-backed multi-user mode; do not claim Windows/SMB/NFS verified. Investigate revision-list scalability. Independently rerun Claude-reported 3 prototype tests; maintain draft PR #4 and progress log; no merge.
