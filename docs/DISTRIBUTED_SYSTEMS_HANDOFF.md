@@ -65,3 +65,52 @@ Review `docs/COORDINATOR_INTEGRATION_CONTRACT.md` (request/response/error union,
 **Production ownership remains unchanged:** Claude owns `Workspace`, `LocalIndex`, `documents.py`, production `CommitAuthority` and #8/#9/#10 fixes. QA owns independent acceptance. Distributed Systems owns isolated protocol proofs, source review and the two-host SMB certification rig. Standalone use remains offline/coordinator-free. **Do not merge this research PR or label supported multiuser mode production-ready.**
 
 **Remaining decisions for Claude and Director:** production per-record CAS/txid wire contract; checkout resource partitioning for assemblies; independently **nonrollbackable** epoch/high-water authority with restore reconciliation; Windows service identity and authenticated admin mapping; SMB content fsync/ACL and crash durability; and an ownership-safe lock-release protocol for #10. All physical two-host tests remain **NOT EXECUTED**.
+
+
+## Latest Director protocol review — ADR-019 crash custody and ADR-017 conformance (2026-11-01 ET)
+
+**This section supersedes the older #10 status above.** Phase 2 is now pinned to **d656884b39401134149273dd0121ef620b76eb8e** for this review. The revised ADR-019 handles abandoned private release files. No merge, release, network coordinator or physical SMB certification has occurred.
+
+### Independently verified test evidence
+
+[GitHub Actions run 41389551713](https://github.com/nrobertson152/RevisionWorx/actions/runs/41389551713) **SUCCESS**. Research overlay **d4415c0b34932febbd9a0a0d7bc097eef1043fcd** and actual Phase 2 **d656884b39401134149273dd0121ef620b76eb8e**. Inspected all eight job logs:
+
+| OS / environment | Exact result | Interpretation |
+| --- | --- | --- |
+| Ubuntu Python 3.11 | 63/63 passed | Local SQLite authority/manifest/witness/batch research |
+| Ubuntu Python 3.13 | 63/63 passed | Local research |
+| Windows Python 3.11 | 63/63 passed | Local Windows research, not SMB |
+| Windows Python 3.13 | 63/63 passed | Local Windows research, not SMB |
+| Actual Phase 2 Ubuntu Python 3.13 | 11 tests, 1 expected failure, 0 unexpected failures | ADR-019 safety + ADR-017 unresolved gap |
+| Actual Phase 2 Windows Python 3.13 | 11 tests, 1 expected failure, 0 unexpected failures | Local Windows file namespace, not SMB |
+| Exact upstream ADR-017 CommitAuthorityContract, Ubuntu Python 3.13 | 11/11 passed | Unmodified upstream contract inherited by research adapter, including three supplemental tests |
+| Actual older Phase 1 defect probes, Ubuntu Python 3.13 | 2/2 historical reproductions passed | Defect reproductions are not safety acceptance |
+
+Commands executed by the workflow:
+- python -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator prototype.test_record_batch_research
+- REVISIONWORX_PHASE2_CHECKOUT=/path/to/d656884 python -m unittest -v prototype.test_phase2_lock_break_order prototype.test_phase2_lock_release_race prototype.test_phase2_orphan_recovery prototype.test_phase2_txid_check_reuse
+- REVISIONWORX_PHASE2_CHECKOUT=/path/to/d656884 python -m pytest -v -q prototype/test_phase2_contract_adapter.py
+
+**ADR-019 local acceptance:** Independent positive safety tests prove that A does not delete B's lock when an administrator revokes A during release; a third writer C in the restore gap fences B and preserves evidence; late stale commits never become effective; a crashed releaser's orphaned private file is retained as evidence and its token revoked exactly once before a successor commits; malformed orphan evidence is retained; crash during orphan-fencing leaves the authority unavailable until audited administrator recovery. These are local OS tests, not physical machine power-off or SMB semantics. A fail-closed interruption can strand a lock, sacrificing availability rather than permitting two effective writers.
+
+### Risk-ranked protocol review
+
+| Priority | Finding | Verified evidence / required decision |
+| --- | --- | --- |
+| P0 | No independently **nonrollbackable** epoch/high-water witness; rolling back both DB and ordinary witness resurrects revoked credentials | The isolated double-rollback test demonstrates unsafe behavior. Select independent trusted storage and supervised history reconciliation before enabling writable recovery |
+| P0 | SQLite authoritative journal and SMB immutable content have different durability boundaries; real two-host SMB not tested | Physical power-cut, reconnect, ACL and hash validation remain **NOT EXECUTED** |
+| P0 | No real authenticated Windows administrator service or integrated production CommitAuthority | TestIdentityProvider is an in-memory signed fixture, not Windows authentication or approved LAN transport |
+| P1 | **ADR-017 request identity excludes RecordCheck preconditions** | The actual Phase 2 idempotent txid lookup compares only write-records and blob refs. Changing RecordCheck but keeping writes and txid returns the original sequence. Actual Ubuntu and Windows tests each record an explicit **expected failure**. Recommend hash of full input operation list, or an explicit narrower contract |
+| P1 | Upstream CommitAuthorityContract does not directly test altered RecordCheck identity, nonempty blob references, authenticated txid outcome scope or multi-lease commit | Exact upstream suite + three extra research adapter tests **11/11 passed**, but do not mistake this for full production conformance. Approve additional authoritative tests and wire mapping |
+| P1 | Research adapter adds resource-level CAS obtained by a pre-read before the final transaction, potentially conservatively rejecting a concurrent *unconditional* write | Explicit prototype limitation. Decide whether an additional resource version check is acceptable or require pure atomic per-record semantics |
+| P1 | No transport/status mapping for unavailable versus fenced versus unknown outcome; any authenticated fixture identity can query a txid | Define stable status and per-principal outcome authorization, reject offline authoritative operations without inventing not-found |
+| P2 | Malformed abandoned release cannot identify a token; crash during recovery can retain an orphaned active lock | Local evidence and interrupted-recovery tests. Preserve raw forensic evidence and require audited admin break; no silent auto-ownership |
+| P2 | Witness validation rehashes full authoritative state and all history per operation and is bounded at 4,096 entries/10,000 rows | Model proves bounded fail-closed behavior only. Production needs incremental commitments and trusted durable checkpoints |
+
+### Handoff: strict authority semantics and ownership
+
+All RecordPut, RecordDelete and RecordCheck validations, generation+epoch+owner checks and one sequenced durable commit marker must share the coordinator's **one** atomic authority transaction. A stable txid must identify a complete request including read preconditions if the ADR-017 phrase "identical content" is to be upheld. The file journal currently excludes non-journaled RecordCheck inputs from the txid replay identity; this is **a request identity ambiguity**, not evidence of duplicate published writes or loss of an acknowledged revision. The research adapter checks all submitted operations in its idempotency payload.
+
+The private-rename release protocol changes ownership of the file actually moved, avoiding the old pathname-unlink race. Its orphan discovery journal-fences an unknown-to-successor token before the fresh holder can write, if the orphan contents can be read. Windows NTFS simulated test success is not a claim about server-enforced SMB handle caches or remote disconnections. No direct shared-file writer should ever be enabled automatically if the coordinator is down.
+
+**Next decision owners:** Claude resolves full-command txid identity and core API semantics; QA independently accepts actual production fixes; the Director approves external trust root, Windows authentication, physical SMB certification and any merge/release. This research branch cannot independently certify them.
