@@ -308,7 +308,13 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
     assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_at_checkout
     assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == history_before
 
-    # A rejected check-in must preserve every journal file, including any\n    # future non-JSON evidence, rather than only the currently known suffix.\n    assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_at_checkout\n\n    win.close()\n    qapp.processEvents()\n    restarted = Controller(cfg_dir=tmp_path / "cfg",
+    # A rejected check-in must preserve every journal file, including any
+    # future non-JSON evidence, rather than only the currently known suffix.
+    assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_at_checkout
+
+    win.close()
+    qapp.processEvents()
+    restarted = Controller(cfg_dir=tmp_path / "cfg",
                            cache_dir=tmp_path / "cache",
                            state_dir=tmp_path / "state")
     reopened = MainWindow(restarted)
