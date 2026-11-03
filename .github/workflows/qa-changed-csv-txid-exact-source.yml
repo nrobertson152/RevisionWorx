@@ -1,5 +1,8 @@
 name: QA changed CSV txid replay exact-source matrix
 on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-changed-csv-txid-exact-source.yml', 'tests/qa/test_change_control_pr20_independent_review.py']
   workflow_dispatch:
     inputs:
       product_sha:
@@ -37,7 +40,7 @@ jobs:
       - name: Stage exact product and frozen QA test
         shell: bash
         env:
-          PRODUCT_SHA: ${{ inputs.product_sha }}
+          PRODUCT_SHA: ${{ inputs.product_sha || '3038c9b89e09f45b99bb3ae6a5d09a1d4066e823' }}
         run: |
           set -euo pipefail
           git fetch origin "$PRODUCT_SHA"
@@ -56,7 +59,7 @@ jobs:
       - name: Evaluate strict changed-payload replay requirements
         shell: bash
         env:
-          EXPECTED: ${{ inputs.expected }}
+          EXPECTED: ${{ inputs.expected || 'historical-negative' }}
         run: |
           cd "$RUNNER_TEMP/replay-product"
           set +e
