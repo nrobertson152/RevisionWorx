@@ -207,3 +207,25 @@ native signed installer/upgrade/rollback, physical power-loss,
 two-host SMB/NFS, actual hostile lock namespace, socket-attempt audit
 or disconnected clean Windows VM. Test-only `--alpha-acceptance`
 wrapper MUST NOT SHIP.
+
+## 8. Latest source check after integration run
+
+**Core owner has now completed exact `96f9c36` own Core CI
+[41579731163](https://github.com/nrobertson152/RevisionWorx/actions/runs/41579731163):
+four of four native Ubuntu/Windows × Python 3.11/3.13 jobs SUCCESS.**
+This corroborates the broad functional regression results; it **does
+not execute the two independently discovered strict P1 QA/Distributed
+safety oracles**. The core branch subsequently moved to
+`f01b37d345c5208ab0fa520588a2abe8c66c894a` via a
+**documentation-only** progress note (commit inspected). Production
+runtime source at that head therefore remains the `96f9c36` runtime
+tested in the real Git merge, but the exact source head SHA is not the
+tested one, so do not swap it silently.
+
+**Decision state is unchanged:** Core source's own 4-platform CI
+green and Integration's 2-platform merged-tree tests green; QA
+journal-health/schema and Distributed CAD source snapshot provenance
+**P1 REJECT/HOLD**. Owner must correct, independent reviewers retest
+normal positive oracles on exact new code, and Integration must run
+the combined true Git merge and frozen-binary matrix against those
+updated frozen commit SHAs. Only the Director decides any PR merge.
