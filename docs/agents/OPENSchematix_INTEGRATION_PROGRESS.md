@@ -985,3 +985,12 @@ new SHAs; independently require QA/DS *positive* test oracles for core
 health and CAD provenance; then extend actual frozen GUI/CLI installer
 qualification. No merge/rebase/retarget/release or edits to others'
 branches.
+
+
+## 2026-11-03 — Cross-platform backup filename collision guard
+
+- Issue #32 checkout: isolated case-insensitive path alias safety on `integration/openschematix`; no other owner's branches touched.
+- Code commit `a033996a890f30b247bed99e3347360d7ac825d9`: reject source-tree file paths whose Unicode `casefold()` aliases another path; reject crafted manifest file-table aliases before restore. This is a conservative Windows portability gate, not a full NTFS reserved-name/normalization audit.
+- Test commit `647652892c47269385cecd58cd1fc6e6e259210a`: two tests, one using case-distinct source names on supporting filesystems (skip where unavailable), one portable crafted-manifest negative case. Suite now 15 test methods.
+- **Tests at current SHA: NOT EXECUTED.** Local `git ls-remote` failed with `Could not resolve host: github.com`; GitHub connector supports file commits but not Python execution. Prior native 5/5 per OS at `aed62eb` cannot qualify current code. Linux/Windows Python 3.11 CI run/job IDs and exact 15-test pass/fail/skip counts remain required.
+- Next: inspect native CI at exact test commit; test closed authoritative core workspace restore/reopen with immutable revision export and journal verification; request QA #31. No live snapshot, release, installer, or cross-host claim.
