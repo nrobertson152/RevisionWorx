@@ -52,3 +52,62 @@ The Director-approved near-term product tier is **trusted single-user offline lo
 `.github/workflows/revisionworx-packaging-readiness.yml` remains unchanged and pins older source `d656884b39401134149273dd0121ef620b76eb8e` independently. The original Linux/Windows acceptance at [41571637265](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571637265) is a separate green CI and cannot be silently transferred to the corrected-core composite. The standalone frozen GUI also stays separately pinned to `17651af` in `.github/workflows/revisionworx-alpha-packaging.yml`.
 
 **Final engineering disposition: TEST-ONLY combined-source compatibility PASS for exact source pair. PR #2 remains draft. No merge/backport/release/authority repin.**
+
+## 2026-11-02 — hardened staging test suite and asynchronous GUI completion
+
+**New test-only stage safeguards:** commit `516db2dec53df3158dd01e40dc395509ac76199b`
+adds nine actual local Git fixture tests for the stage operation:
+successful exact-SHA two-source overlay and source/receipt hash,
+mismatched core SHA, mismatched GUI SHA, preexisting dirty core, dirty
+GUI, existing receipt, receipt inside source, identical source folders,
+and wrong GUI layout. The composite workflow now executes this suite
+on Ubuntu and Windows *before* source staging; workflow change at
+`d1daadf09cdc254035cbad8cb4c61b21b1240053`.
+
+**Observed intermittent Windows failure:** [run 41572552095](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572552095)
+at `d1daadf` had Ubuntu SUCCESS but Windows FAILURE. On Windows the
+GUI had already drawn two revision history rows, but the **immediate**
+post-checkin observable state did not yet show the expected enabled
+checkout controls. The old test returned when history row count became
+two, before waiting for the final asynchronous controller and visible
+action state. Log details: `AssertionError('GUI observable lost
+committed revisions or checkout controls')`. That result is recorded as
+a failure; it is **not** overwritten by the earlier green run. The
+observed failure does not independently establish whether the core
+commit and journal were incorrect; it exposed an unverified UI
+completion boundary in the probe.
+
+**Harness correction:** commit `c18f4ac3d49e4d54d7c77e834ffcdc3a5ee0e6f6`
+requires all of: history has two rows, `ctl.busy` false, enabled GUI
+checkout action, disabled GUI checkin action. It polls a bounded time
+while dispatching actual Qt events; failure now includes the full
+`MainWindow.observable_state()` diagnostic. It does **not** weaken
+or skip any expected final visible-state/integrity assertion.
+Workflow change `955a5423bbdab3b4dd8e0b4a880077886753acab`
+makes the independent corrected-core composite matrix rerun when the
+probe itself changes.
+
+**[Corrected final CI 41572811571](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572811571),
+source pair unchanged**: Ubuntu and Windows Python 3.11 **BOTH
+SUCCESS**. Each passed all nine stage-safety regression tests, exact
+checkout provenance receipt (core `fe8a179`, GUI `17651af`, 10
+overlaid source files), frozen GUI/CLI build, true offscreen Qt widget
+two revision lifecycle and visible post-checkin state, refresh/reopen,
+temporary missing working-file error/recovery, independently verified
+historical SHA-256 exports and unchanged authority snapshot.
+Ubuntu additionally passed a full Python/pip-free, network-none
+nonroot/read-only-root frozen GUI/CLI workflow plus normal GUI launch;
+Windows passed long/extended local paths, localhost UNC and sharing
+refusal. Frozen-source test-only wrapper remains **not shippable**.
+
+**Independent baseline unaffected:** older pinned production-source
+packaging matrix [41572788046](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572788046)
+and standalone GUI source alpha [41572788094](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572788094)
+also completed SUCCESS on Ubuntu and Windows at updated probe commit
+`c18f4ac`. No production core pin, actual core branch, GUI branch,
+PR target, merge, release, tag or backport changed.
+
+Acceptance remains only tested exact composite source functionality
+for disposable trusted local workspaces; not a signed installer,
+human-operated desktop GUI, real Windows disconnected Python-free VM,
+power-loss/cross-host SMB, or release permission.
