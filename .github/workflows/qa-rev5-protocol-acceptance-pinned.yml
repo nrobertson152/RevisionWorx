@@ -1,0 +1,58 @@
+name: QA ADR-019 rev4 independent positive acceptance (pinned)
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-rev5-protocol-acceptance-pinned.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: "${{ matrix.os }} / Python ${{ matrix.python-version }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout exact unaccepted core candidate
+        uses: actions/checkout@v4
+        with:
+          ref: fe8a179f0203ef08151dc8459c84609dc639c4fe
+          path: app
+      - name: Checkout frozen independent QA source
+        uses: actions/checkout@v4
+        with:
+          ref: ce75b91d568b2d49ea924041e5ff76c763ff3a0e
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install QA-owned tests without modifying production source
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dest = Path("app/tests/qa")
+          dest.mkdir(parents=True, exist_ok=True)
+          shutil.copy2("qa/tests/qa/test_rev4_protocol_only_p1.py", dest)
+      - name: Install exact candidate
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Identify immutable source, test and interpreter
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Independent P1 positive oracles (must PASS, not XFAIL)
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_rev4_protocol_only_p1.py
+      - name: Full candidate regression with QA oracle overlay
+        working-directory: app
+        run: python -m pytest -q -ra
