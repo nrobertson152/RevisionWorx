@@ -91,8 +91,13 @@ def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def load_manifest(root: Path) -> dict[str, tuple[int, str]]:
+    manifest_path = root / MANIFEST
+    # Do not follow a manifest symlink outside the disposable archive.
+    # Verification must not read arbitrary operator files through an alias.
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise BackupError("manifest missing or symlink refused")
     try:
-        data = json.loads((root / MANIFEST).read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
+        data = json.loads(manifest_path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
     except (OSError, ValueError) as exc:
         raise BackupError("manifest unreadable or malformed") from exc
     if not isinstance(data, dict) or set(data) != {"version", "files"} or data["version"] != VERSION:
