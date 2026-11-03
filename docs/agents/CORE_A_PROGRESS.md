@@ -94,3 +94,14 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Workflow commit:** `e39e5b5439e8e0392d9560e7c595933013781e82`; corrected-source workflow now checks out independent fixtures at immutable `ba51686f0f0db77373c771ab17121668a8648e3b` and asserts `git rev-parse HEAD` equals that SHA before overlay. Production remains fixed at `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`, separately asserted. No test assertion or production changes.
 - **Previously verified positive matrix:** Actions 41689355302, Ubuntu/Windows Python 3.11/3.13 each 22 passed, 0 failed/skipped/xfailed; this evidence predates the fixture-pin workflow update. **New workflow CI not yet verified**; no new pass count claimed.
 - **Next:** inspect new native CI logs for both immutable checkout identities and 22 passes/job. QA to review fail-closed precommit and external rename adversarial tests; Windows `.releasing-*` and cross-host acceptance remain open.
+
+
+## 2026-11-03 — Frozen fixture corrected-source native CI independently verified
+
+- **Workflow:** `.github/workflows/core-a-corrected-pinned-ci.yml`, commit `e39e5b5439e8e0392d9560e7c595933013781e82`, branch head before this documentation update `8a3bf41940f238829a17118ba4165da327514cea`.
+- **Actions run:** https://github.com/nrobertson152/RevisionWorx/actions/runs/41707814032, success. Independently read four native raw job logs, not merely summary status.
+- **Exact production checkout:** `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`; **exact independent fixture checkout:** `ba51686f0f0db77373c771ab17121668a8648e3b`. Both identities were printed and asserted in each job before overlaying six frozen suites.
+- **Command:** `python -m pytest -q -ra tests/test_core_independent_journal_shape.py tests/test_core_crash_integrity_readonly.py tests/test_core_adr017_ordered_checks_restart.py tests/test_core_readonly_derived_integrity.py tests/test_core_revision_chain_cad_refs.py tests/test_core_unicode_cad_provenance.py`.
+- **Native jobs:** Ubuntu Python 3.13 job `126167676731` 22 PASS; Ubuntu Python 3.11 job `126167677370` 22 PASS; Windows Python 3.11 job `126167677113` 22 PASS; Windows Python 3.13 job `126167677581` 22 PASS. **Total 88 PASS, 0 FAIL, 0 SKIP, 0 XFAIL**.
+- **Scope:** positive acceptance for these 22 assertions on the pinned corrected source with immutable fixture identity. This closes the prior QA fixture-identity evidence gap; it does **not** establish malformed-journal precommit abort, external concurrent CAD rename/source replacement, Windows live `.releasing-*` PermissionError recovery, disk/power-loss durability, or multi-host SMB/NFS safety. Historical old-source negative-control workflows may remain red by design.
+- **Next:** independent adversarial precommit abort fixture and source-replacement race fixture, coordinated with QA and Claude A; no merge/release authority.
