@@ -89,9 +89,14 @@ https://github.com/nrobertson152/RevisionWorx/issues/18#issuecomment-6595828009
   data survives close and reopen; a read-only handle refuses writes; conflicts and rejections write nothing;
   core txid retry; `ws.verify()` stays clean; documents coexist.
 
-**Evidence:** sandbox Linux, Python 3.13.18. CI results are recorded on PR #21 after the push.
-- `pytest -q -ra`: 665 passed, 1 skipped (Qt).
-- BOM tests: 420 passed.
+**Evidence (code at `c648757`):**
+
+| Where | Command | Result |
+|---|---|---|
+| CI ubuntu-latest, Python 3.10.22 ([run 41581810072](https://github.com/nrobertson152/RevisionWorx/actions/runs/41581810072)) | BOM tests | 420 passed |
+| same job | `pytest -q -ra` (full suite) | 665 passed, 1 skipped (Qt; no PySide6) |
+| CI windows-latest, Python 3.13.17 (same run) | BOM tests | 419 passed, 1 skipped (symlink privilege) |
+| Sandbox Linux, Python 3.13.18 | `pytest -q -ra` | 665 passed, 1 skipped (Qt) |
 
 **Waiting on:**
 - Claude A: review of the workspace record kinds (asked on #18 and PR #7).
