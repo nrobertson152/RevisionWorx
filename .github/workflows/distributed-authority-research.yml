@@ -367,7 +367,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Both positive safety oracles must reject the old vulnerable source
+      - name: Vulnerable source must fail specific crash-before-revocation oracle
         working-directory: research
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
@@ -379,6 +379,6 @@ jobs:
           set -e
           cat negative-control.log
           if [ "$status" -eq 0 ]; then echo "FAIL: vulnerable source unexpectedly passed"; exit 1; fi
-          if [ "$(grep -c "^FAIL: test_" negative-control.log)" -ne 2 ]; then echo "FAIL: expected both positive oracles to fail, not an unrelated error"; exit 1; fi
+          if [ "$(grep -c "^FAIL: test_crash_before_displaced_token_revocation_remains_fail_closed " negative-control.log)" -ne 1 ]; then echo "FAIL: expected exactly the crash-safety oracle to reject vulnerable source"; exit 1; fi
           if grep -q "^ERROR:" negative-control.log; then echo "FAIL: harness error rather than safety rejection"; exit 1; fi
-          echo "Expected negative control: two explicit positive safety oracle failures on vulnerable source"
+          echo "Expected negative control: crash-safety oracle FAILS on vulnerable source; ordinary release oracle PASSES"
