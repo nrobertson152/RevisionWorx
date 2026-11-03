@@ -768,3 +768,75 @@ authority pin change, no Phase 1 backport, merge, tag, signed installer,
 release or multihost SMB claim. Test-only wrapper MUST NOT SHIP.
 Actual interactive human GUI and untested physical offline failure
 conditions remain outstanding.
+
+
+## 2026-11-02 23:14 ET onward — Director P0 merge-readiness sprint, exact new core + GUI
+
+**Assignment/authorization:** [PR #2 Director comment](https://github.com/nrobertson152/RevisionWorx/pull/2#issuecomment-6595288686) instructs test-only source candidate and Windows/Linux smoke with exact SHA and a conflict/dependency-aware merge sequence. No permission to merge, rebase, retarget, release, tag or edit other agent branches.
+
+**Pinned source pair at sprint kickoff:** Phase 2 core
+`22a5273d4740b3a7af8e8cb5cc3565e4336b763b` from PR #7
+(native [Core CI 41574652418](https://github.com/nrobertson152/RevisionWorx/actions/runs/41574652418)
+SUCCESS), GUI PR #14 head
+`bd52cdf0c89fcd1dbc03d42951ba8e4a7de5da4f`
+(code through `d4e3623` and a docs-only final GUI commit; [native GUI CI 41575959230](https://github.com/nrobertson152/RevisionWorx/actions/runs/41575959230)
+SUCCESS). New Phase 2 `a03f1f0` appeared during this sprint, adding process-crash tests/workflow/docs but not production runtime files; it is **NOT** covered by the frozen pair's exact-SHA tests.
+
+**Implemented on Integration branch only:**
+- `99e83be0d3661fef8872f723fc0b81375e5d5fed`:
+  `tools/packaging/stage_merge_readiness_tests.py`, exact SHA-checked hash receipt for overlaying six current GUI tests into a disposable core test tree.
+- `b3f2ed8d28d4e96fd66083e62cfbfa05d13ea723`:
+  separate `.github/workflows/revisionworx-merge-readiness.yml` pinned to the exact two SHAs, native full suite and frozen GUI/CLI path matrix. **[CI 41577258567](https://github.com/nrobertson152/RevisionWorx/actions/runs/41577258567) BOTH Windows and Ubuntu SUCCESS; native 382 PASS / 2 SKIP on each**; test-only GUI/CLI and CLI export SHA-256 passed, Ubuntu Python/pip-free `--network none` full runtime passed. This source-file overlay is explicitly NOT a real Git merge.
+- `393a24660aaaab2fce3731a3d27fc57eb4594ea2`:
+  `tools/packaging/stage_exact_git_merge.py` for a **genuine temporary two-parent Git merge** in disposable checkouts with input SHA/clean-state checks, no auto-conflict resolution, fixed commit metadata, source-parent receipt, and unchanged Git blob IDs for core `atomicio.py`, `workspace.py`, `authority.py`, `documents.py`. It never pushes a ref or touches an authoritative project.
+- `d70db6553d373b43aeb8d9562a0909e401c48b69`:
+  separate `.github/workflows/revisionworx-literal-merge.yml` with exact source pins, a non-mutating `git merge-tree` audit of PR #6 vs main, and native full current GUI + core tests followed by frozen Qt/CLI smoke.
+
+**Definitive literal Git merger evidence:**
+[CI 41577732526](https://github.com/nrobertson152/RevisionWorx/actions/runs/41577732526)
+**COMPLETED SUCCESS BOTH Ubuntu and Windows Python 3.11**.
+Git produced local-only, never-pushed synthetic merge SHA
+`664e6887cf59b090a09e954554128a57be1ca22d`,
+parents exactly `22a5273...` + `bd52cdf...`,
+common ancestor `366d4355abcde7543122551fadaab01ac9832e01`.
+Core-only four authority source blob IDs matched the corrected Phase 2 source.
+Per OS: nine staging safety unittest PASS; **native combined suite 382 PASS /
+2 SKIP / 0 FAIL**; test-only frozen GUI/CLI created projects,
+imported outside file, checkout, edited and checked in, verified two immutable
+revision SHA-256 values via independent frozen CLI exports, GUI F5
+selection/observable contract, fresh-process restart, temporarily missing-file
+warning/recovery and untouched source hashes. Ubuntu also passed relocated
+nonroot/read-only-root, Python/pip-absent, `--network none`
+frozen widget workflow and normal GUI launch. Windows path smoke passed
+401-character local path, extended-length local path, localhost UNC loopback
+read, byte-range lock refusal and original SHA-256 preservation.
+
+**Concrete main merge blocker:** `main` at
+`3b2d75ad36790c9308f73d3b5e22c002a9d117fb`,
+Phase 1 `412e69ab90bb1d8b74c1a3cf5519f581e4420e63`.
+Native CI `git merge-tree --write-tree origin/main origin/phase1-foundation`
+returned 1 and printed **modify/delete conflict**:
+`docs/DEVELOPMENT_PROGRESS.md` deleted by main, modified by Phase 1.
+PR #6 GitHub also marked mergeable=false/dirty. Director must decide
+keep/reconcile progress file; core architect recommends retaining it,
+and updating `AGENTS.md` after application code reaches main.
+
+**Exact merge sequence proposed, none executed:** after QA/Distributed
+exact-SHA core approval, Director merges #7 into
+`phase1-foundation` FIRST, resolves PR6 main docs conflict and
+merges #6 (now containing corrected Phase 2) into `main`,
+then Claude B merges accepted latest core into GUI branch with a reviewable
+merge commit, repeat CI and Director merges #14 into `main`,
+then QA #3 test/workflow integration, optional Distributed research #4
+per Director decision, finally Integration #2 with fixture hash/provenance
+reconciliation. No standalone unsafe Phase 1 must reach main.
+Full acceptance checklist and rollout gates:
+[docs/MERGE_READINESS_SPRINT.md](https://github.com/nrobertson152/RevisionWorx/blob/integration/openschematix/docs/MERGE_READINESS_SPRINT.md),
+source plan committed `d6906c2`, verified Windows update `e328007`.
+
+**Not certified:** a real merged PR, later source changes,
+Qt human interaction on actual displays, native signed installer,
+clean Python-free disconnected Windows VM, hardware power-loss, real ACL/ENOSPC,
+socket-attempt audit, malicious external lock mutation or actual two-host SMB/NFS.
+Test-only `--alpha-acceptance` wrapper MUST NOT SHIP.
+PR #2 remains draft, no production packaging source repin or other branch edits.
