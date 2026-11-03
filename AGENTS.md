@@ -14,6 +14,10 @@ RevisionWorx is an offline, cross-platform, GPL-3.0 engineering PDM (product dat
 
 **Removed agents:** DeepSeek and Qwen are no longer participants in RevisionWorx. Historical issues #15 and #16 are superseded, not active ownership assignments. Do not ask either model for review, coordination, code, or an interface contract. Historical references may remain in old commits/comments for traceability but are not current instructions.
 
+## Mandatory assignment checkout/check-in
+
+**Before modifying code, pushing a branch, or changing an assignment issue/PR, every interactive and scheduled agent MUST acquire the exclusive GitHub ref lock defined in [docs/agents/ASSIGNMENT_CHECKOUT_PROTOCOL.md](docs/agents/ASSIGNMENT_CHECKOUT_PROTOCOL.md).** Never work on an assignment already checked out by another session. On completion or failure, push work, post a GitHub check-in with exact SHA and test evidence, conditionally release the lock, and verify its absence. If atomic acquisition or safe release is unavailable, fail closed and report the blocker; do not pretend that issue comments are locks. Do not automatically steal stale locks.
+
 ## How work flows
 
 1. The Director opens an issue.
