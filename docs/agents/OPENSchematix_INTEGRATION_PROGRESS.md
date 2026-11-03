@@ -902,3 +902,87 @@ updated `04a339c`.
 PR #2 stays draft. No core, GUI, QA, Distributed or upstream
 OpenSchematix branch edited; no retarget, rebase, force push, release
 or change to separate baseline production packaging source pin.
+
+
+## 2026-11-03 05:16Z+ — Issue #32 checked-out four-source assembly and package qualification
+
+**Checkout:** [Issue #32 comment 6596072245](https://github.com/nrobertson152/RevisionWorx/issues/32#issuecomment-6596072245), **Agent:** ChatGPT Integration A (interactive). Simple cooperative CHECKED OUT/CHECKED IN comment policy, as explicitly clarified by Director on PR #23 superseding atomic Git ref locks. Work only on own `integration/openschematix` / draft PR #2.
+
+**Exact immutable input tuple (historical; newer heads moved):**
+core `f01b37d345c5208ab0fa520588a2abe8c66c894a`,
+GUI `0773bde599f39aee88a8a536c28673bc4a1e13f5`,
+BOM `59c0f7b56c7e135c6d4179e18bea51b3232d8c9b`,
+change control `cb684336fbef2edf21bb4bda700146af70d58ee4`.
+
+**Work delivered to Integration branch, no other branch edits:**
+- `e4438acbea99b72b1a8304186416f493ec6607db`:
+  `tools/packaging/stage_product_stack.py`, actual Git local-only
+  core→GUI→BOM→ECO, verified SHA/clean checkouts, six core-only source
+  object identities, fail-closed conflict and preserved provenance receipt.
+- `7b9dc894d834ad432992a3b7d1fd0d3edbe7fe9f`:
+  Windows/Linux Python 3.11 pinned four-source full native matrix.
+- `6e7afa20f3818d3b7bf3577a696abd89aec06deb`:
+  11 local divergent-Git test oracles, actual conflicts/authority
+  unauthorized edits/receipt and input refusal, CI-tested on Ubuntu.
+- `e921cc32f8127b1bcd1bca9598136d77c953e3ef`:
+  actual native CAD document ↔ BOM catalog/assembly ↔ ECR
+  WhereUsed impact, explicit coverage and untouched file hash/mtime,
+  restart and read-only acceptance fixture.
+- `4d78235ea9ce2b350368f04e94823cfa2c38d577`:
+  test-only wheel module/entrypoints/metadata/mandatory-dependency/hash audit.
+- `7d95a1496ae5879cf12f60622ce9aadc4cc7992b`:
+  dedicated Windows/Linux domain + wheel matrix; corrected Windows
+  `bdist_wheel` build-tool absence by pinning CI-host
+  `wheel==0.45.1` at `650a597f2711bacdd0de968334d508fae9126cd0`.
+- Detailed [docs/FOUR_SOURCE_COMPATIBILITY.md](https://github.com/nrobertson152/RevisionWorx/blob/integration/openschematix/docs/FOUR_SOURCE_COMPATIBILITY.md), version
+  `87c047eb0288a9221590def8dd5bcedae42b2c9d`.
+
+**Verifiable four-source source merge and native CI:** [run
+41583331179](https://github.com/nrobertson152/RevisionWorx/actions/runs/41583331179)
+uses Python 3.11 on each runner. Ubuntu **SUCCESS** with 11 synthetic
+staging oracles PASS, core+GUI+BOM+ECR true Git merge SUCCESS,
+focused module/Qt tests PASS, full
+`python -m pytest -q -ra`: **1,141 PASS / 2 SKIP / 0 FAIL**,
+CLI help for all three modules PASS. Synthetic Git commit
+`6c9950baa65fa802c614d25289a7748ec7eec066`, three
+real two-parent merges, core-only blobs unchanged, 114 changed paths.
+**Windows full regression job was still executing at this progress
+checkpoint; no completion/success claimed.**
+First workflow [41583177025](https://github.com/nrobertson152/RevisionWorx/actions/runs/41583177025)
+failed because staging test file had not yet been committed; fixed by
+the next source/test commit before the above run.
+
+**Both-platform true domain+wheel targeted acceptance:** initial
+[41584058598](https://github.com/nrobertson152/RevisionWorx/actions/runs/41584058598)
+Ubuntu PASS / Windows FAIL due only to `bdist_wheel` absent with
+`--no-build-isolation`. Fixed using CI-only pinned wheel builder tool;
+[run 41584278631](https://github.com/nrobertson152/RevisionWorx/actions/runs/41584278631)
+**BOTH Ubuntu and Windows SUCCESS**: each single
+cross-domain CAD↔BOM↔ECR native path/restarter test **1 PASS / 0 FAIL**,
+and test-only wheel verified **65 paths**, BOM 20, changes 13, GUI 10,
+GPL-3.0-or-later, both user entrypoints, zero unconditional
+third-party dependencies, no native binaries.
+Wheel digests differ despite same source tuple:
+Ubuntu `9130cf80d853c00bed7dcd2aa408e688e2eb1f22a7ce97aafd2b151b5fc97009`,
+Windows `a0095f3f59628d655332dbd828bc82d90e090a811dde1c0c0507eb4a62d3a4c0`.
+No claim of byte-for-byte reproducible wheel builds, signed installers,
+AppImages, offline production install or actual release.
+
+**New upstream movement:** BOM PR #21 moved from tested `59c0f7b`
+via XLSX/purchasing to `8f67bfedcca2ea619035556fdeed52bf0c4ca30a`
+with **two P1 catalog corrections** and regression tests.
+ECR/ECO PR #20 moved from tested `cb68433` to
+`724993c74bd7aa6f2c00ed38f8b44c39a42bdd08` with meaningful
+approved-dependency and stale ECR lifecycle fixes. Both
+actual production sources changed. Therefore these new SHAs
+**ARE NOT** covered by old 1141/2 and domain/wheel acceptance.
+Core `96f9c36` unchanged in tested `f01b37d` head still has
+independently verified P1 malformed-journal/false-health and
+same-metadata CAD capture defects, so release / PR merge is HOLD.
+
+**Next ready package:** once core+feature owners declare supported API
+and corrected frozen source, repeat the 4-source exact Git matrix at
+new SHAs; independently require QA/DS *positive* test oracles for core
+health and CAD provenance; then extend actual frozen GUI/CLI installer
+qualification. No merge/rebase/retarget/release or edits to others'
+branches.
