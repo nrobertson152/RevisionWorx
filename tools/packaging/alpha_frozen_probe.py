@@ -139,14 +139,29 @@ def create(root: Path, app: QApplication) -> dict:
     QTimer.singleShot(75, submit_visible_checkin)
     tab.checkin_btn.click()
     require(bool(filled), "GUI check-in dialog was not submitted")
-    pump(app, ctl, lambda: tab.history_model.rowCount() == 2)
+    # A history-model refresh is not the whole asynchronous GUI completion.
+    # Wait for controller idleness AND the actual visible post-checkin control
+    # state. Do not weaken the oracle: a stuck/incorrect UI now times out.
+    try:
+        pump(app, ctl, lambda: (
+            tab.history_model.rowCount() == 2
+            and not ctl.busy
+            and tab.checkout_btn.isEnabled()
+            and not tab.checkin_btn.isEnabled()
+        ))
+    except AssertionError as exc:
+        raise AssertionError(
+            "frozen GUI check-in did not reach a coherent visible state; "
+            + repr(w.observable_state())
+        ) from exc
     require(not tab.checkin_btn.isEnabled(), "Checkout not cleared after check-in")
     require(fixture.read_bytes() == ORIGINAL, "Import modified external source file")
     after_checkin = w.observable_state()
     require(after_checkin["selected_document"] == doc_id
             and len(after_checkin["history"]) == 2
             and after_checkin["actions"]["checkout"] and not after_checkin["actions"]["checkin"],
-            "GUI observable lost committed revisions or checkout controls")
+            "GUI observable lost committed revisions or checkout controls: "
+            + repr(after_checkin))
     require(after_checkin["message_level"] != "error" and not after_checkin["read_only"],
             "successful checked-in content is incorrectly presented as a GUI error")
 
