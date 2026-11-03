@@ -88,5 +88,76 @@ class BackupRehearsalTests(unittest.TestCase):
                 mod.verify(backup)
 
 
+    def test_closed_workspace_tree_copy_preserves_original_bytes(self):
+        """Synthetic closed workspace fixture; does not claim core reopen acceptance."""
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive, restored = (root / n for n in ("workspace", "archive", "restored"))
+            files = {
+                "project.json": b'{"version":1,"documents":["parts/A.ipt"]}',
+                "journal/000001.jsonl": b'{"kind":"revision","sha256":"immutable"}\\n',
+                "objects/aa/object": b"\\x00\\xff immutable revision payload",
+                "parts/A.ipt": b"CAD source must not change",
+                "parts/sub/零件.step": b"STEP\\x00\\xff",
+            }
+            for name, data in files.items():
+                path = src / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            before = {name: hashlib.sha256((src / name).read_bytes()).hexdigest() for name in files}
+            self.assertEqual(mod.backup(src, archive), len(files))
+            self.assertEqual(mod.restore(archive, restored), len(files))
+            for name, original_sha in before.items():
+                self.assertEqual(hashlib.sha256((src / name).read_bytes()).hexdigest(), original_sha)
+                self.assertEqual(hashlib.sha256((restored / name).read_bytes()).hexdigest(), original_sha)
+            self.assertFalse((src / mod.MANIFEST).exists())
+            self.assertFalse((restored / mod.MANIFEST).exists())
+
+    def test_interrupted_backup_is_not_accepted_as_complete(self):
+        """Copy errors retain forensic output without publishing a valid manifest."""
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "source", root / "archive"
+            src.mkdir()
+            (src / "one").write_bytes(b"one")
+            (src / "two").write_bytes(b"two")
+            real_copy = mod.shutil.copyfile
+            calls = [0]
+
+            def interrupted(*args, **kwargs):
+                calls[0] += 1
+                if calls[0] == 2:
+                    raise OSError("simulated interrupted copy")
+                return real_copy(*args, **kwargs)
+
+            with patch.object(mod.shutil, "copyfile", side_effect=interrupted):
+                with self.assertRaises(OSError):
+                    mod.backup(src, archive)
+            self.assertTrue(archive.is_dir())
+            self.assertFalse((archive / mod.MANIFEST).exists())
+            with self.assertRaises(mod.BackupError):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+            self.assertEqual((src / "one").read_bytes(), b"one")
+            self.assertEqual((src / "two").read_bytes(), b"two")
+
+    def test_extra_file_after_backup_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "source", root / "archive"
+            src.mkdir()
+            (src / "original").write_bytes(b"untouched")
+            mod.backup(src, archive)
+            (archive / "unexpected").write_bytes(b"injected")
+            with self.assertRaises(mod.BackupError):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+
 if __name__ == "__main__":
     unittest.main()
