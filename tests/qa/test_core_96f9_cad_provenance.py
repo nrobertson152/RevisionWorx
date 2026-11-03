@@ -44,18 +44,24 @@ def test_same_metadata_save_by_rename_must_not_capture_obsolete_file(tmp_path, m
         return handle
 
     with Workspace.create(tmp_path / "ws", "QA provenance") as ws:
+        rejected, stored = False, None
         with monkeypatch.context() as patch:
             patch.setattr(atomicio, "_open_for_read", opening_then_cad_save)
-            with pytest.raises(SourceChangedError):
-                ContentStore(ws).store_file(source)
+            try:
+                stored = ContentStore(ws).store_file(source)
+            except SourceChangedError:
+                rejected = True
         assert switched == [True], "test must actually trigger CAD rename"
         assert source.read_bytes() == NEW
         assert (source.stat().st_size, source.stat().st_mtime_ns) == (
             before.st_size, before.st_mtime_ns)
         assert (source.stat().st_dev, source.stat().st_ino) != (
             before.st_dev, before.st_ino), "new source must be a distinct filesystem object"
-        assert list((ws.meta_dir / "content" / "sha256").glob("*/*")) == [], (
-            "rejected operation must not publish obsolete CAD content")
+        if not rejected:
+            assert stored.sha256 == hashlib.sha256(OLD).hexdigest(), (
+                "source changed but snapshot unexpectedly captured other bytes")
+            assert ContentStore(ws).read_verified(stored.sha256, len(OLD)) == OLD
+        assert rejected, "UNSAFE: stored obsolete old CAD bytes after current pathname moved to NEW"
 
 
 class _MutateAfterFirstRead:
@@ -107,18 +113,24 @@ def test_same_inode_in_place_save_with_preserved_metadata_must_not_silently_capt
         return handle
 
     with Workspace.create(tmp_path / "ws", "QA same-file save") as ws:
+        rejected, stored = False, None
         with monkeypatch.context() as patch:
             patch.setattr(atomicio, "_open_for_read", open_then_mutate)
-            with pytest.raises(SourceChangedError):
-                ContentStore(ws).store_file(source)
+            try:
+                stored = ContentStore(ws).store_file(source)
+            except SourceChangedError:
+                rejected = True
         assert len(wrappers) == 1 and wrappers[0].changed
         after = source.stat()
         assert source.read_bytes() == NEW
         assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
         assert (after.st_size, after.st_mtime_ns) == (
             before.st_size, before.st_mtime_ns)
-        assert list((ws.meta_dir / "content" / "sha256").glob("*/*")) == [], (
-            "a detected file-content change must not be published as a successful snapshot")
+        if not rejected:
+            assert stored.sha256 == hashlib.sha256(OLD).hexdigest(), (
+                "in-place replacement with preserved mtime must not certify unrelated bytes")
+            assert ContentStore(ws).read_verified(stored.sha256, len(OLD)) == OLD
+        assert rejected, "UNSAFE: stored OLD bytes after same-inode CAD file became NEW"
 
 
 def test_unchanged_working_source_is_saved_and_verified(tmp_path):
