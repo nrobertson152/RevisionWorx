@@ -454,7 +454,7 @@ def _run_admin_break_snapshot_race(tmp_path, monkeypatch):
             a.close()
     assert witnessed and not errors, errors
     observed = effective(root, state["b_token"], state["c_token"])
-    observed["B_error"] = state.get("b_exception")
+    observed["B_error"] = state.get("b_error")
     return observed
 
 
