@@ -63,6 +63,12 @@ def parts_from_csv(source: bytes | str | Path, *, encoding: str = "utf-8-sig", f
     if not rows.has("number"):
         rows.problem(rows.header_line, "", "required column: number")
         rows.fail_if_problems()
+    known = set(BASE) | {"id"}
+    for col in rows.index:
+        if col not in known and not _GROUP.fullmatch(col) and not col.startswith("attr:"):
+            rows.problem(rows.header_line, col, "unknown column (use attr:<Name> for custom attributes); "
+                         "nothing was imported")
+    rows.fail_if_problems()
     out = []
     numbers: dict[str, int] = {}
     for line, rec in rows.rows:

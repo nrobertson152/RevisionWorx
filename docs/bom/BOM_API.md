@@ -302,6 +302,7 @@ here is a claim about SMB, NFS or multiple hosts.
 |---|---|---|
 | Edit would add a validation error | `EditRejected`; no commit is attempted | `test_bom_catalog.py`, `test_bom_catalog_workspace.py` |
 | Stale read (`expect_rev`), duplicate number, raced cycle | Core `ConflictError` becomes `StoreConflict`; nothing written | same |
+| Another action commits between validation and commit (interleaved UI actions or services) | Every edit pins the structure version it read *before* reading the structure, plus the revisions of the parts it checked. The commit is refused with `StoreConflict` instead of accepting a state that was never validated (Codex P1, PR #21) | `test_bom_review_findings.py`, memory and real workspace |
 | Second writer while the catalog writer holds the workspace | `WorkspaceLockedError`; readers are not blocked | `test_bom_catalog_persistence.py` |
 | Writer revoked by an administrator between check and publish | `LockLostError`; `transaction_outcome(txid)` is `not-found`; the number was never claimed | same (ADR-015/019 fencing, unchanged core) |
 | Writer process killed right after `commit` returned | Change durable and visible on reopen; `verify()` clean; the dead writer's lock is not silently taken | same, real subprocess |

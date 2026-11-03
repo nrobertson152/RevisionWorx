@@ -145,3 +145,16 @@ skips when openpyxl is absent.
 - `pytest -q -ra`: 696 passed, 1 skipped (Qt).
 - BOM tests: 452 passed.
 - CI results are on #18 in the check-in.
+
+## Checkpoint 5: 2026-11-03, Codex review of PR #21 at `59c0f7b`
+
+All five findings were valid. Each one was first reproduced by a failing test in
+`tests/test_bom_review_findings.py` (8 tests, all failing on `7775f4f`) and then fixed:
+
+| Finding | Fix |
+|---|---|
+| P1 | Commits re-read revisions after validation, so an interleaved B→A could pass and create a cycle. Now `_state()` reads the structure version first, and each edit pins that version and the part revisions it validated. This covers add, update and replace of lines, part delete, unit change and both imports. |
+| P1 | A parts import with two rows sharing one new `part_id` overwrote the first row and left an inconsistent number claim. Repeated ids are now refused before any write. |
+| P2 | Imported units were not validated. They are now checked and put in canonical form (`MM` becomes `mm`, `pcs` becomes `EA`); an unknown unit refuses the import. |
+| P2 | Upper-case parts CSV headers were silently ignored. Parts columns and numbered groups are now matched case-insensitively, and unknown parts columns are refused rather than dropped. |
+| P2 | `import_structure` could add new usages of obsolete parts. It now refuses them; existing usages may stay. |

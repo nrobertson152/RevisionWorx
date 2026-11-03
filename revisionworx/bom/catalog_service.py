@@ -159,9 +159,23 @@ class PartsCatalogService:
         out["modified"], out["modified_by"] = when, who
         return out
 
-    def _struct_bump(self) -> Put:
-        rev = self.structure_version()
+    def _struct_bump(self, version: int | None = None) -> Put:
+        """Bump the structure version. Pass the version read *before* the structure that was validated, so a
+        structure change committed in between makes this commit fail instead of slipping through."""
+        rev = self.structure_version() if version is None else version
         return Put("bomstruct", STRUCT_ID, {"id": STRUCT_ID, "version": rev + 1}, expect_rev=rev)
+
+    def _state(self) -> tuple[int, Structure, dict[str, Part], dict[str, int]]:
+        """``(structure version, structure, parts by id, part revisions)`` for validating an edit.
+
+        The version is read first: if anything changes the structure afterwards, the commit that pins this
+        version is refused (a stale but safe conflict), never accepted against data it did not validate."""
+        version = self.structure_version()
+        recs = self._part_records()
+        parts = {pid: Part.from_record(r) for pid, r in recs.items()}
+        revs = {pid: r["_rev"] for pid, r in recs.items()}
+        lines = [line_from_record(r) for r in self.line_records().values()]
+        return version, Structure.build(lines, [p.info() for p in parts.values()]), parts, revs
 
     def _matches_rule(self, number: str) -> bool:
         return any(r.matches(number) for r in self.rules())
@@ -222,7 +236,10 @@ class PartsCatalogService:
 
     def update_part(self, part_id: str, expect_rev: int, *, txid: str | None = None, **changes: Any) -> Part:
         """Change part fields. Renumbering re-claims the number atomically; the id never changes."""
-        old, rev = self.require_part(part_id)
+        version, st, parts, revs = self._state()
+        if part_id not in parts:
+            raise CatalogError(f"no part with id {part_id}")
+        old, rev = parts[part_id], revs[part_id]
         if rev != expect_rev:
             raise StoreConflict("part", part_id, expect_rev, rev)
         if "unit" in changes:
@@ -251,13 +268,12 @@ class PartsCatalogService:
                                                                 "part_id": part_id},
                            expect_rev=claim["_rev"] if claim else 0))
         if new.unit != old.unit:
-            st = self.structure()
             if self.units.get(new.unit).dimension != self.units.get(old.unit).dimension and (
                     st.usages(part_id) or st.children(part_id)):
                 raise CatalogError(f"{old.number} is used in BOMs; its unit cannot change from {old.unit} "
                                    f"({self.units.get(old.unit).dimension}) to {new.unit} "
                                    f"({self.units.get(new.unit).dimension})")
-            ops.append(self._struct_bump())  # quantities elsewhere are interpreted in this unit
+            ops.append(self._struct_bump(version))  # quantities elsewhere are interpreted in this unit
         self.store.commit(Commit("bom.part.update", ops), txid)
         return new
 
@@ -265,8 +281,10 @@ class PartsCatalogService:
         return self.update_part(part_id, expect_rev, status=PartStatus(status).value, txid=txid)
 
     def delete_part(self, part_id: str, expect_rev: int, *, txid: str | None = None) -> None:
-        part, rev = self.require_part(part_id)
-        st = self.structure()
+        version, st, parts, _ = self._state()
+        if part_id not in parts:
+            raise CatalogError(f"no part with id {part_id}")
+        part = parts[part_id]
         users = st.usages(part_id)
         if users or st.children(part_id):
             where = ", ".join(sorted({st.info(ln.parent_id).display_number for ln in users})) or "its own BOM"
@@ -276,7 +294,7 @@ class PartsCatalogService:
         self.store.commit(Commit("bom.part.delete", [
             Delete("part", part_id, expect_rev), Delete("partnum", partnum_id(part.number),
                                                         claim["_rev"] if claim else None),
-            self._struct_bump()]), txid)
+            self._struct_bump(version)]), txid)
 
     # ================================================================== single-level BOM editing
     def _new_errors(self, before: Structure, after: Structure) -> list[Issue]:
@@ -285,32 +303,35 @@ class PartsCatalogService:
         return [i for i in validate(after, units=self.units, limits=self.limits).errors
                 if (i.code, i.parent_id, i.child_id, i.message) not in old]
 
-    def _prepare_line(self, parent_id: str, child_id: str, quantity: Any, unit: str | None, **kw: Any) -> BomLine:
-        parent, _ = self.require_part(parent_id)
-        child, _ = self.require_part(child_id)
+    def _prepare_line(self, parts: dict[str, Part], parent_id: str, child_id: str, quantity: Any, unit: str | None,
+                      **kw: Any) -> BomLine:
+        for pid in (parent_id, child_id):
+            if pid not in parts:
+                raise CatalogError(f"no part with id {pid}")
+        child = parts[child_id]
         if child.obsolete:
             raise CatalogError(f"{child.number} is obsolete and cannot be added to a BOM")
         q = to_quantity(quantity)
         return BomLine(parent_id, child_id, q, unit=self._check_unit(unit or child.unit), **kw)
 
     def _commit_lines(self, op: str, before: Structure, after: Structure, line_ops: list, part_ids: Iterable[str],
-                      txid: str | None) -> None:
+                      txid: str | None, version: int, revs: dict[str, int]) -> None:
         errors = self._new_errors(before, after)
         if errors:
             raise EditRejected(errors)
-        checks = [Check("part", pid, self.part_rev(pid)) for pid in sorted(set(part_ids))]
-        self.store.commit(Commit(op, line_ops + checks + [self._struct_bump()]), txid)
+        checks = [Check("part", pid, revs[pid]) for pid in sorted(set(part_ids))]
+        self.store.commit(Commit(op, line_ops + checks + [self._struct_bump(version)]), txid)
 
     def add_line(self, parent_id: str, child_id: str, quantity: Any, unit: str | None = None, *, find_number: str = "",
                  reference_designators: Any = (), child_revision: str = "", note: str = "", attributes: Any = (),
                  provenance: str = Provenance.DECLARED.value, txid: str | None = None) -> BomLine:
-        ln = self._prepare_line(parent_id, child_id, quantity, unit, find_number=find_number,
+        version, before, parts, revs = self._state()
+        ln = self._prepare_line(parts, parent_id, child_id, quantity, unit, find_number=find_number,
                                 reference_designators=reference_designators, child_revision=child_revision,
                                 note=note, attributes=attributes, provenance=provenance, line_id=new_line_id())
-        before = self.structure()
         after = before.with_lines(ln)
         self._commit_lines("bom.line.add", before, after, [Put("bomline", ln.line_id, line_to_record(ln), 0)],
-                           (parent_id, child_id), txid)
+                           (parent_id, child_id), txid, version, revs)
         return ln
 
     def update_line(self, line_id: str, expect_rev: int, *, txid: str | None = None, **changes: Any) -> BomLine:
@@ -325,11 +346,13 @@ class PartsCatalogService:
         if "unit" in changes:
             changes["unit"] = self._check_unit(changes["unit"])
         new = old.with_changes(**changes)
-        before = self.structure()
+        version, before, _, revs = self._state()
+        if old not in before.lines:
+            raise StoreConflict("bomline", line_id, expect_rev, self.line_rev(line_id))
         after = before.replacing_line(old, new)
         self._commit_lines("bom.line.update", before, after,
                            [Put("bomline", line_id, line_to_record(new), expect_rev)], (old.parent_id, old.child_id),
-                           txid)
+                           txid, version, revs)
         return new
 
     def remove_line(self, line_id: str, expect_rev: int, *, txid: str | None = None) -> None:
@@ -343,18 +366,21 @@ class PartsCatalogService:
                     txid: str | None = None) -> tuple[BomLine, ...]:
         """Replace the whole single-level BOM of ``parent_id`` (e.g. from a CAD export) in one commit.
         Lines without a ``bln_`` id get one. ``expect_version`` pins the structure version read by the caller."""
-        if expect_version is not None and expect_version != self.structure_version():
-            raise StoreConflict("bomstruct", STRUCT_ID, expect_version, self.structure_version())
-        self.require_part(parent_id)
+        version, before, parts, revs = self._state()
+        if expect_version is not None and expect_version != version:
+            raise StoreConflict("bomstruct", STRUCT_ID, expect_version, version)
+        if parent_id not in parts:
+            raise CatalogError(f"no part with id {parent_id}")
         new = []
         for ln in lines:
             if ln.parent_id != parent_id:
                 raise CatalogError(f"line for {ln.child_id} belongs to {ln.parent_id}, not {parent_id}")
-            child, _ = self.require_part(ln.child_id)
-            if child.obsolete and not any(o.child_id == ln.child_id for o in self.bom(parent_id)):
+            child = parts.get(ln.child_id)
+            if child is None:
+                raise CatalogError(f"no part with id {ln.child_id}")
+            if child.obsolete and not any(o.child_id == ln.child_id for o in before.children(parent_id)):
                 raise CatalogError(f"{child.number} is obsolete and cannot be added to a BOM")
             new.append(ln if ln.line_id.startswith("bln_") else ln.with_changes(line_id=new_line_id()))
-        before = self.structure()
         after = before.with_single_level(parent_id, new)
         old_recs = {r["id"]: r for r in self.line_records().values() if r["parent_id"] == parent_id}
         ops: list = [Delete("bomline", lid, r["_rev"]) for lid, r in sorted(old_recs.items()) if
@@ -362,7 +388,8 @@ class PartsCatalogService:
         for ln in new:
             ops.append(Put("bomline", ln.line_id, line_to_record(ln),
                            old_recs[ln.line_id]["_rev"] if ln.line_id in old_recs else 0))
-        self._commit_lines("bom.line.replace", before, after, ops, [parent_id] + [ln.child_id for ln in new], txid)
+        self._commit_lines("bom.line.replace", before, after, ops, [parent_id] + [ln.child_id for ln in new], txid,
+                           version, revs)
         return tuple(sorted(new, key=BomLine.sort_key))
 
     # ================================================================== import
@@ -370,14 +397,27 @@ class PartsCatalogService:
                          txid: str | None = None) -> dict[str, int]:
         """Create or update many parts in **one** commit (see :func:`revisionworx.bom.parts_csv.import_parts`).
         Rows are ``(row number, Part with id or None, fields)``. Returns counts."""
-        existing = {p.part_id: p for p in self.parts()}
+        version, st, existing, revs = self._state()
         by_number = {p.key: p for p in existing.values()}
-        st = self.structure()
         ops: list = []
         problems: list[str] = []
         created = updated = unchanged = 0
         claimed: set[str] = set()
+        ids_seen: dict[str, int] = {}
         for row, part, fields in rows:
+            if part is not None:
+                if part.part_id in ids_seen:
+                    problems.append(f"row {row}: part id {part.part_id} repeats row {ids_seen[part.part_id]}")
+                    continue
+                ids_seen[part.part_id] = row
+            fields = dict(fields)
+            try:
+                fields["unit"] = self._check_unit(fields.get("unit", "EA"))
+            except CatalogError as exc:
+                problems.append(f"row {row}: {exc}")
+                continue
+            if part is not None:
+                part = part.with_changes(unit=fields["unit"])
             target = existing.get(part.part_id) if part is not None else None
             if target is None and part is None:
                 target = by_number.get(number_key(fields["number"]))
@@ -404,17 +444,18 @@ class PartsCatalogService:
                 problems.append(f"row {row}: renumbering {target.number} to {new.number} is not done by import")
                 continue
             if new.unit != target.unit and (st.usages(target.part_id) or st.children(target.part_id)) and \
-                    self.units.get(self._check_unit(new.unit)).dimension != self.units.get(target.unit).dimension:
+                    self.units.known(target.unit) and \
+                    self.units.get(new.unit).dimension != self.units.get(target.unit).dimension:
                 problems.append(f"row {row}: {target.number} is used in BOMs; its unit dimension cannot change")
                 continue
             rec = self.store.get("part", target.part_id)
-            ops.append(Put("part", target.part_id, self._stamp(new.to_record(), created=rec), rec["_rev"]))
+            ops.append(Put("part", target.part_id, self._stamp(new.to_record(), created=rec), revs[target.part_id]))
             updated += 1
         if problems:
             raise CatalogError("parts import refused, nothing written: " + "; ".join(problems[:10]) +
                                (f" (and {len(problems) - 10} more)" if len(problems) > 10 else ""))
         if ops:
-            self.store.commit(Commit("bom.part.import", ops + [self._struct_bump()]), txid)
+            self.store.commit(Commit("bom.part.import", ops + [self._struct_bump(version)]), txid)
         return {"created": created, "updated": updated, "unchanged": unchanged}
 
     def import_structure(self, structure: Structure, *, replace_existing: bool = False, create_missing: bool = True,
@@ -423,7 +464,7 @@ class PartsCatalogService:
         catalog in **one** commit. Items are matched to catalog parts by id, then by number; missing parts
         are created (``create_missing``) as manual-number parts. Assemblies that already have a BOM in the
         catalog are refused unless ``replace_existing``. Returns the mapping import id -> catalog part id."""
-        existing = {p.part_id: p for p in self.parts()}
+        version, current, existing, revs = self._state()
         by_number = {p.key: p for p in existing.values()}
         mapping: dict[str, str] = {}
         new_parts: list[Part] = []
@@ -447,7 +488,6 @@ class PartsCatalogService:
                 mapping[pid] = part.part_id
             else:
                 raise CatalogError(f"{info.display_number} is not in the catalog")
-        current = self.structure()
         parents = sorted({mapping[ln.parent_id] for ln in structure.lines})
         clash = [existing[p].number for p in parents if p in existing and current.children(p)]
         if clash and not replace_existing:
@@ -455,6 +495,11 @@ class PartsCatalogService:
                                "use replace_existing to overwrite them")
         new_lines = [ln.with_changes(parent_id=mapping[ln.parent_id], child_id=mapping[ln.child_id],
                                      line_id=new_line_id()) for ln in structure.lines]
+        obsolete = sorted({existing[ln.child_id].number for ln in new_lines
+                           if ln.child_id in existing and existing[ln.child_id].obsolete
+                           and not any(o.child_id == ln.child_id for o in current.children(ln.parent_id))})
+        if obsolete:
+            raise CatalogError(f"obsolete parts cannot gain new BOM usages: {', '.join(obsolete)}")
         before = current.with_parts(*(p.info() for p in new_parts))
         after = before
         for parent in parents:
@@ -471,8 +516,8 @@ class PartsCatalogService:
             if r["parent_id"] in parents:
                 ops.append(Delete("bomline", r["id"], r["_rev"]))
         ops += [Put("bomline", ln.line_id, line_to_record(ln), 0) for ln in new_lines]
-        ops += [Check("part", pid, self.part_rev(pid)) for pid in sorted(set(mapping.values()) & set(existing))]
-        ops.append(self._struct_bump())
+        ops += [Check("part", pid, revs[pid]) for pid in sorted(set(mapping.values()) & set(existing))]
+        ops.append(self._struct_bump(version))
         self.store.commit(Commit("bom.import", ops), txid)
         return mapping
 

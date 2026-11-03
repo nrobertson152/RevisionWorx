@@ -88,10 +88,18 @@ def unguard(text: str) -> str:
     return text[1:] if _GUARD_RE.match(text) else text
 
 
+#: Parts-catalog columns (parts_csv), matched case-insensitively like every other column.
+PARTS_COLUMNS = ("part_id", "number", "description", "unit", "kind", "status", "revision", "manual_number")
+_PARTS_GROUP = re.compile(r"(manufacturer|mpn|vendor|sku|document_id|revision_id|role)_\d+")
+
+
 def _canon_header(raw: str) -> str:
     h = unicodedata.normalize("NFKC", raw).strip()
     if h.casefold().startswith(_ATTR_PREFIX):
-        return _ATTR_PREFIX + h[len(_ATTR_PREFIX):].strip()
+        return _ATTR_PREFIX + h[len(_ATTR_PREFIX):].strip()   # attribute names keep their spelling
+    low = h.casefold().replace(" ", "_")
+    if low in PARTS_COLUMNS[2:] or _PARTS_GROUP.fullmatch(low):
+        return low
     key = re.sub(r"[\s_.\-#/()]+", "", h.casefold())
     if h.casefold().replace(" ", "_") in STRUCTURE_COLUMNS:
         return h.casefold().replace(" ", "_")
