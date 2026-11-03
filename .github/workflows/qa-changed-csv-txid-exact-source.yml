@@ -43,6 +43,10 @@ jobs:
           PRODUCT_SHA: ${{ inputs.product_sha || '3038c9b89e09f45b99bb3ae6a5d09a1d4066e823' }}
         run: |
           set -euo pipefail
+          if [ "${{ inputs.expected || 'historical-negative' }}" = "corrected-positive" ] && [ "$PRODUCT_SHA" = "3038c9b89e09f45b99bb3ae6a5d09a1d4066e823" ]; then
+            echo "::error::Cannot label the known-defective historical SHA as corrected-positive"
+            exit 1
+          fi
           git fetch origin "$PRODUCT_SHA"
           test "$(git rev-parse FETCH_HEAD)" = "$PRODUCT_SHA"
           mkdir -p "$RUNNER_TEMP/replay-product"
@@ -67,6 +71,10 @@ jobs:
           result=$?
           set -e
           cat "$RUNNER_TEMP/strict-replay.log"
+          if [ "$EXPECTED" != "historical-negative" ] && [ "$EXPECTED" != "corrected-positive" ]; then
+            echo "::error::Unknown acceptance mode: $EXPECTED"
+            exit 1
+          fi
           if [ "$EXPECTED" = "historical-negative" ]; then
             if [ "$result" -eq 0 ]; then
               echo "::error::Historical negative control unexpectedly passed; check source pin and oracle sensitivity"
@@ -80,8 +88,8 @@ jobs:
               echo "::error::Expected strict assertion failures, not collection/setup errors"
               exit 1
             fi
-            if ! grep -q "test_changed_csv_payload_reusing_txid_must_not_be_reported_as_identical_retry" "$RUNNER_TEMP/strict-replay.log"; then
-              echo "::error::Required changed-payload oracle was not executed"
+            if ! grep -q "test_changed_csv_payload_reusing_txid_must_not_be_reported_as_identical_retry" "$RUNNER_TEMP/strict-replay.log" || ! grep -q "test_csv_txid_replay_rejects_changed_semantic_fields" "$RUNNER_TEMP/strict-replay.log" || ! grep -q "test_csv_txid_replay_rejects_changed_row_order" "$RUNNER_TEMP/strict-replay.log"; then
+              echo "::error::Required title/semantic-field/row-order replay oracles were not all observed"
               exit 1
             fi
             echo "HISTORICAL UNSAFE SOURCE CONFIRMED: strict replay assertions failed as expected; this is NOT product acceptance."
