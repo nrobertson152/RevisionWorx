@@ -251,3 +251,72 @@ def test_production_checkin_button_escape_keeps_checkout(qapp, desktop):
     assert tab.checkin_btn.isEnabled(), "Escape must retain the checkout"
     assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
     assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_before
+
+
+
+def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, desktop, tmp_path):
+    """A cancelled production modal must not create a revision across restart.
+
+    This covers a fresh controller and window, not merely a widget refresh.
+    It does not establish recovery after an actual process crash.
+    """
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import CheckinDialog
+
+    win, _ctl, home, doc = desktop
+    tab = win.documents_tab
+    source = tmp_path / "drawing.ipt"
+    source_before = source.read_bytes()
+    journal = home / ".revisionworx" / "journal"
+    journal_before = {p.name: p.read_bytes() for p in journal.glob("*.json")}
+
+    win.show()
+    qapp.processEvents()
+    tab.checkout()
+    qapp.processEvents()
+    # Checkout itself may legitimately add journal evidence. Pin the state
+    # immediately before cancellation, not before checkout.
+    journal_at_checkout = {p.name: p.read_bytes() for p in journal.glob("*.json")}
+    history_before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
+    assert tab.checkin_btn.isEnabled()
+
+    seen = []
+
+    def escape_modal():
+        modal = qapp.activeModalWidget()
+        seen.append(isinstance(modal, CheckinDialog))
+        if isinstance(modal, CheckinDialog):
+            QTest.keyClick(modal.description, Qt.Key.Key_Escape)
+        else:
+            for widget in qapp.topLevelWidgets():
+                if isinstance(widget, QtWidgets.QDialog) and widget.isVisible():
+                    widget.reject()
+
+    QTimer.singleShot(0, escape_modal)
+    QTest.mouseClick(tab.checkin_btn, Qt.MouseButton.LeftButton)
+    qapp.processEvents()
+    assert seen == [True]
+    assert source.read_bytes() == source_before
+    assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_at_checkout
+    assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == history_before
+
+    win.close()
+    qapp.processEvents()
+    restarted = Controller(cfg_dir=tmp_path / "cfg",
+                           cache_dir=tmp_path / "cache",
+                           state_dir=tmp_path / "state")
+    reopened = MainWindow(restarted)
+    try:
+        assert reopened.open_location(home, quiet=True)
+        reopened.documents_tab.select_document(doc["id"])
+        qapp.processEvents()
+        state = reopened.observable_state()
+        assert tuple((r["id"], r["sha256"]) for r in state["history"]) == history_before
+        assert state["selected_document"] == doc["id"]
+        assert source.read_bytes() == source_before
+        assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_at_checkout
+        # The initial import must remain represented in the journal.
+        assert set(journal_before).issubset(set(journal_at_checkout))
+    finally:
+        reopened.close()
