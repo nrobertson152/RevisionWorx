@@ -35,14 +35,15 @@ def retry_sharing(op: Callable[[], _T]) -> _T:
     Another program that has a file open (a virus scanner, a backup tool, an editor preview) makes a rename
     or delete fail with WinError 32 until it lets go. Elsewhere this never applies, and any other error, or
     the last failure, is raised to the caller."""
-    for attempt in range(SHARING_RETRIES if IS_WINDOWS else 1):
+    attempts = SHARING_RETRIES if IS_WINDOWS else 1
+    for attempt in range(attempts):
         try:
             return op()
         except PermissionError:
-            if attempt == SHARING_RETRIES - 1:
+            if attempt == attempts - 1:
                 raise
             time.sleep(SHARING_DELAY)
-    return op()
+    raise AssertionError("unreachable")
 
 
 def _open_sharing_delete(path: Path) -> BinaryIO:
