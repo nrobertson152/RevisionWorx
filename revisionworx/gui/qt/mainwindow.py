@@ -15,6 +15,7 @@ from ... import __version__
 from ...workspace import CommittedNotApplied
 from ..controller import Controller, Progress, SavedWithWarning, describe_error
 from ..viewmodels import AppStatus, ProjectDetailsModel, ProjectListModel
+from . import theme
 from .dialogs import AdoptDialog, NewProjectDialog
 from .documents import DocumentsTab
 from .models import EnterTable, ViewModelTable, elastic
@@ -67,8 +68,7 @@ class MainWindow(QMainWindow):
         self.resize(min(1200, avail.width()) if avail else 1200, min(760, avail.height() - 40) if avail else 760)
         self._restoring_selection = False
         self._write_actions: list[QAction] = []
-        # Errors hold paths and commands people need to copy; 3 = selectable by mouse and keyboard.
-        self.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 3; }")
+        theme.install()  # includes selectable text in error dialogs, which hold paths and commands to copy
         self._build_menu()
 
         shell = QWidget(self)
