@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget)
 
+from ...workspace import CommittedNotApplied
 from ..controller import Controller, describe_error
 from ..viewmodels import AdoptFlow, CheckinForm, ImportFlow, NewProjectForm
 
@@ -188,6 +189,8 @@ class NewProjectDialog(QDialog):
             return
         try:
             self.result_record = self.form.submit(self.ctl)
+        except CommittedNotApplied as exc:  # saved (CORE_API §4): never invite a second try
+            QMessageBox.warning(self, "Saved with a warning", describe_error(exc))
         except Exception as exc:
             QMessageBox.critical(self, "Could not create project", describe_error(exc))
             return

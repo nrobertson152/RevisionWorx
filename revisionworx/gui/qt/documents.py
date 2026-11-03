@@ -6,9 +6,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-                               QTableView, QVBoxLayout, QWidget)
+                               QStyle, QTableView, QVBoxLayout, QWidget)
 
 from ..controller import Controller, SavedWithWarning, describe_error
 from ..viewmodels import DocumentListModel, DocumentPanel
@@ -16,6 +16,14 @@ from .dialogs import CheckinDialog, ImportDialog
 from .models import ViewModelTable
 
 SEVERITY_STYLE = {"ok": "", "warning": "color: #8a5300", "error": "color: #b00020; font-weight: bold"}
+
+
+def show_at_least_rows(view: QTableView, rows: int) -> None:
+    """Keep a table big enough to show ``rows`` rows, whatever the font and platform style."""
+    frame = view.frameWidth() * 2
+    bar = view.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
+    view.setMinimumHeight(view.verticalHeader().defaultSectionSize() * rows
+                          + view.horizontalHeader().sizeHint().height() + frame + bar)
 
 
 class DocumentsTab(QWidget):
@@ -46,19 +54,25 @@ class DocumentsTab(QWidget):
         outer.addWidget(self.notice)
 
         split = QSplitter(Qt.Orientation.Vertical, self)
+        split.setChildrenCollapsible(False)
         self.table = QTableView(split)
         self.table.setAccessibleName("Documents")
         self.table_model = ViewModelTable(DocumentListModel.COLUMNS, lambda: len(self.list_vm.rows),
                                           self.list_vm.cell, self, severity=self.list_vm.row_severity)
         self.table.setModel(self.table_model)
         configure_table(self.table, DocumentListModel.COLUMNS)
+        show_at_least_rows(self.table, 3)
         self.table.selectionModel().selectionChanged.connect(lambda *_: self.selection_changed())
         self.table.doubleClicked.connect(lambda _: self.open_file())
 
         detail = QWidget(split)
         dl = QVBoxLayout(detail)
-        self.summary = QFormLayout()
-        dl.addLayout(self.summary)
+        dl.setContentsMargins(0, 4, 0, 0)
+        self.summary = QLabel(detail)
+        self.summary.setTextFormat(Qt.TextFormat.PlainText)  # file names are data, not markup
+        self.summary.setWordWrap(True)
+        self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        dl.addWidget(self.summary)
         self.ownership = QLabel(detail)
         self.ownership.setObjectName("ownershipLabel")
         self.ownership.setWordWrap(True)
@@ -80,10 +94,11 @@ class DocumentsTab(QWidget):
         self.transition_box.setAccessibleName("Next lifecycle state")
         self.transition_btn = QPushButton("Change &state", detail)
         self.export_btn = QPushButton("&Export revision…", detail)
-        for w in (self.checkout_btn, self.checkin_btn, self.cancel_btn, self.open_file_btn,
-                  self.open_dir_btn, self.transition_box, self.transition_btn, self.export_btn):
+        for w in (self.checkout_btn, self.checkin_btn, self.cancel_btn):
             actions.addWidget(w)
         actions.addStretch(1)
+        for w in (self.open_file_btn, self.open_dir_btn):
+            actions.addWidget(w)
         dl.addLayout(actions)
         self.checkout_btn.clicked.connect(lambda *_: self.checkout())
         self.checkin_btn.clicked.connect(lambda *_: self.checkin())
@@ -94,7 +109,8 @@ class DocumentsTab(QWidget):
         self.export_btn.clicked.connect(lambda *_: self.export())
 
         hist_actions = QHBoxLayout()
-        hist_actions.addWidget(QLabel("Revision history", detail))
+        for w in (self.transition_box, self.transition_btn, self.export_btn):
+            hist_actions.addWidget(w)
         hist_actions.addStretch(1)
         self.compare_btn = QPushButton("Compare with &previous", detail)
         self.compare_btn.setToolTip("Metadata comparison of the selected revision and the one before it")
@@ -107,12 +123,14 @@ class DocumentsTab(QWidget):
         self.compare_btn.clicked.connect(lambda *_: self.compare())
         self.restore_btn.clicked.connect(lambda *_: self.restore())
         hist_split = QSplitter(Qt.Orientation.Horizontal, detail)
+        hist_split.setChildrenCollapsible(False)
         self.history = QTableView(hist_split)
         self.history.setAccessibleName("Revision history")
         self.history_model = ViewModelTable(DocumentPanel.HISTORY_COLUMNS, lambda: len(self.panel.history),
                                             self.panel.history_cell, self)
         self.history.setModel(self.history_model)
         configure_table(self.history, DocumentPanel.HISTORY_COLUMNS)
+        show_at_least_rows(self.history, 3)
         self.history.selectionModel().selectionChanged.connect(lambda *_: self.revision_selected())
         self.revision_detail = QPlainTextEdit(hist_split)
         self.revision_detail.setReadOnly(True)
@@ -121,6 +139,8 @@ class DocumentsTab(QWidget):
         hist_split.setStretchFactor(0, 3)
         hist_split.setStretchFactor(1, 2)
         dl.addWidget(hist_split, 1)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
         outer.addWidget(split, 1)
         for name in ("filter", "import_btn", "register_btn", "notice", "table", "checkout_btn",
                      "checkin_btn", "cancel_btn", "open_file_btn", "open_dir_btn", "transition_box",
@@ -159,35 +179,34 @@ class DocumentsTab(QWidget):
         return self.list_vm.row_id(rows[0].row()) if rows and rows[0].row() < len(self.list_vm.rows) else None
 
     def selection_changed(self) -> None:
-        self.run(lambda: self.panel.load(self.selected_doc_id()), refresh=False)
+        self.panel.load_or_report(self.selected_doc_id())
 
     def select_document(self, doc_id: str) -> None:
         for i, r in enumerate(self.list_vm.rows):
             if r["id"] == doc_id:
                 if self.selected_doc_id() == doc_id:  # no selectionChanged will fire
                     if self.panel.doc_id != doc_id:
-                        self.run(lambda: self.panel.load(doc_id), refresh=False)
+                        self.panel.load_or_report(doc_id)
                 else:
                     self.table.selectRow(i)
                 return
 
     def render_list(self) -> None:
-        keep = self.panel.doc_id
+        keep = self.panel.doc_id or self.panel.failed_id
         self.table_model.reload()
         self.notice.setText(self.list_vm.notice)
+        self.notice.setVisible(bool(self.list_vm.notice))
         self.import_btn.setEnabled(self.list_vm.can_add)
         self.register_btn.setEnabled(self.list_vm.can_add)
         if keep:
-            self.select_document(keep)
+            if any(r["id"] == keep for r in self.list_vm.rows):
+                self.select_document(keep)
+            else:  # no longer listed: its actions must not stay available
+                self.panel.load_or_report(None)
 
     def render_panel(self) -> None:
         p = self.panel
-        while self.summary.rowCount():
-            self.summary.removeRow(0)
-        for label, value in p.summary_fields:
-            v = QLabel(value)
-            v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.summary.addRow(label, v)
+        self.summary.setText("  ·  ".join(f"{label}: {value}" for label, value in p.summary_fields))
         self.ownership.setText(p.ownership_text)
         self.status.setText(p.message + ("\n" if p.message else "") + p.status_text)
         self.status.setStyleSheet(SEVERITY_STYLE[p.severity])
@@ -199,7 +218,8 @@ class DocumentsTab(QWidget):
         self.transition_box.clear()
         for sid, name in p.transition_choices:
             self.transition_box.addItem(name, sid)
-        self.transition_btn.setEnabled(bool(p.transition_choices))
+        self.transition_box.setEnabled(p.can_transition)
+        self.transition_btn.setEnabled(p.can_transition)
         self.export_btn.setEnabled(bool(p.history))
         self.history_model.reload()
         self.revision_detail.setPlainText(p.revision_text(0) if p.history else "")
@@ -269,11 +289,22 @@ class DocumentsTab(QWidget):
         def done(res):
             self.list_vm.refresh()
             if not res.error:
-                self.select_document(res.value[0]["id"])
+                self._select_added(res, dlg.flow.destination_preview)
         dlg = ImportDialog(self.ctl, self.list_vm.project_id, name, self, on_done=done)
         self.dialogs.append(dlg)
         dlg.finished.connect(lambda _: self.dialogs.remove(dlg) if dlg in self.dialogs else None)
         dlg.show()
+
+    def _select_added(self, res, rel_path: str) -> None:
+        """Select a document just added. A saved-with-warning result carries no record, so it is
+        found by its path."""
+        if res.value:
+            self.select_document(res.value[0]["id"])
+            return
+        for row in self.list_vm.rows:
+            if row["rel_path"] == rel_path:
+                self.select_document(row["id"])
+                return
 
     def register_file(self) -> None:
         folder = (self.list_vm.project or {}).get("folder", "")
@@ -288,6 +319,15 @@ class DocumentsTab(QWidget):
             if res.error:
                 QMessageBox.critical(self, "Could not register", describe_error(res.error))
             self.list_vm.refresh()
+            if res.error:
+                return
+            if res.warning:
+                QMessageBox.warning(self, "Saved with a warning", res.warning)
+            try:
+                rel = Path(path).relative_to(folder).as_posix()
+            except ValueError:
+                rel = ""
+            self._select_added(res, rel)
         if not self.ctl.start_register(self.list_vm.project_id, Path(path), number=number.strip(), on_done=done):
             QMessageBox.information(self, "Busy", "Another task is still running; try again in a moment.")
 
@@ -322,15 +362,20 @@ class DocumentsTab(QWidget):
         keep = self.panel.doc_id
         self.list_vm.refresh()
         if keep and self.selected_doc_id() == keep:
-            self.run(self.panel.reload, refresh=False)
+            self.panel.load_or_report(keep)
 
     def open_file(self) -> None:
         if self.panel.can_open_file:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self.panel.working_path))
+            self._open_url(self.panel.working_path)
 
     def open_folder(self) -> None:
         if self.panel.detail:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.panel.working_path).parent)))
+            self._open_url(str(Path(self.panel.working_path).parent))
+
+    def _open_url(self, path: str) -> None:
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            self.panel.set_message(f"⚠ This computer could not open {path}. Is an application "
+                                   "installed for this file type?", "warning")
 
     def change_state(self) -> None:
         state = self.transition_box.currentData()

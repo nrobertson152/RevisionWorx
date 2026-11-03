@@ -319,6 +319,10 @@ class AdoptFlow(Observable):
             self.state = "error"
             self.progress_text = "Adoption failed; nothing was registered."
             self.report_text = describe_error(res.error)
+        elif res.warning:  # saved (CommittedNotApplied): success with a caveat, never "failed"
+            self.state, self.result = "adopted", None
+            self.progress_text = "Adopted (saved) with a warning."
+            self.report_text = f"Saved. {res.warning}"
         else:
             self.state, self.result = "adopted", res.value
             self.progress_text = f"Adopted “{res.value['name']}”."
@@ -440,6 +444,7 @@ class DocumentPanel(Observable):
         self.detail: dict | None = None
         self.message = ""
         self.message_level = "ok"  # ok | warning | error: colours the message, never implies success
+        self.failed_id: str | None = None  # selected, but its details could not be read
 
     def set_message(self, text: str, level: str = "ok") -> None:
         self.message, self.message_level = text, level
@@ -449,7 +454,20 @@ class DocumentPanel(Observable):
         if not self.detail or doc_id != self.doc_id:
             self.message, self.message_level = "", "ok"
         self.detail = self.ctl.document_detail(doc_id, verify_hash) if doc_id else None
+        self.failed_id = None
         self.changed()
+
+    def load_or_report(self, doc_id: str | None) -> bool:
+        """Load the selected document. On failure show the reason here and clear the panel, so the
+        previous document's actions can never run while another row is selected."""
+        try:
+            self.load(doc_id)
+            return True
+        except Exception as exc:
+            self.detail, self.failed_id = None, doc_id
+            self.message, self.message_level = f"⚠ Cannot read this document: {describe_error(exc)}", "error"
+            self.changed()
+            return False
 
     @property
     def working_path(self) -> str:
@@ -571,6 +589,10 @@ class DocumentPanel(Observable):
     can_cancel = can_checkin
 
     @property
+    def can_transition(self) -> bool:
+        return bool(self.transition_choices) and not self.ctl.busy and not self.ctl.read_only
+
+    @property
     def transition_choices(self) -> list[tuple[str, str]]:
         if not self.detail or not self.detail["latest"]:
             return []
@@ -659,7 +681,10 @@ class DocumentPanel(Observable):
                     self.message, self.message_level = res.warning, "warning"
                 else:
                     self.message, self.message_level = f"Checked in revision {res.value['label']}.", "ok"
-                self.reload()
+                try:  # saved either way: failing to re-read must not undo the message
+                    self.reload()
+                except Exception:
+                    self.changed()
             if on_done:
                 on_done(res)
         started = self.ctl.start_checkin(self.doc_id, message, label=label or None,

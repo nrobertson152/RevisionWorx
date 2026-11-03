@@ -5,14 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPushButton, QSplitter, QStackedWidget, QTableView, QTabWidget,
                                QVBoxLayout, QWidget)
 
 from ... import __version__
-from ..controller import Controller, Progress, describe_error
+from ...workspace import CommittedNotApplied
+from ..controller import Controller, Progress, SavedWithWarning, describe_error
 from ..viewmodels import AppStatus, ProjectDetailsModel, ProjectListModel
 from .dialogs import AdoptDialog, NewProjectDialog
 from .documents import DocumentsTab
@@ -58,8 +59,12 @@ class MainWindow(QMainWindow):
         self.detail_vm = ProjectDetailsModel(ctl)
         self.status_vm = AppStatus(ctl)
         self.setWindowTitle(f"RevisionWorx {__version__} (Alpha)")
-        self.resize(1200, 760)
-        self.setMinimumSize(800, 520)
+        # No fixed minimum: the layout's own minimum keeps every action and table usable.
+        screen = QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        self.resize(min(1200, avail.width()) if avail else 1200, min(760, avail.height()) if avail else 760)
+        self._restoring_selection = False
+        self._write_actions: list[QAction] = []
         self._build_menu()
 
         shell = QWidget(self)
@@ -109,32 +114,48 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.projects_notice)
 
         split = QSplitter(central)
-        self.table = QTableView(split)
+        split.setChildrenCollapsible(False)
+        left = QWidget(split)
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        self.table = QTableView(left)
+        ll.addWidget(self.table, 1)
         self.table_model = ViewModelTable(ProjectListModel.COLUMNS, lambda: len(self.list_vm.rows),
                                           self.list_vm.cell, self)
         self.table.setModel(self.table_model)
         configure_table(self.table, ProjectListModel.COLUMNS)
+        keys = [c.key for c in ProjectListModel.COLUMNS]
+        for key in ("customer", "mode", "rel_path"):  # all shown in Project details; keep the list narrow
+            self.table.setColumnHidden(keys.index(key), True)
+        self.table.setColumnWidth(keys.index("number"), 80)
+        self.table.setColumnWidth(keys.index("status"), 65)
+        self.table.setMinimumWidth(220)
         self.table.selectionModel().selectionChanged.connect(self.selection_changed)
         self.table.doubleClicked.connect(lambda _: self.open_folder())
 
         detail = QWidget(split)
         dl = QVBoxLayout(detail)
-        self.detail_form = QFormLayout()
-        dl.addLayout(self.detail_form)
-        self.warning_label = QLabel(detail)
-        self.warning_label.setWordWrap(True)
-        self.warning_label.setStyleSheet("color: #8a5300")
-        dl.addWidget(self.warning_label)
+        dl.setContentsMargins(0, 0, 0, 0)
         buttons = QHBoxLayout()
+        self.project_heading = QLabel(detail)
+        self.project_heading.setObjectName("projectHeading")
+        self.project_heading.setTextFormat(Qt.TextFormat.PlainText)
+        self.project_heading.setStyleSheet("font-weight: bold")
+        self.project_heading.setWordWrap(True)
         self.open_btn = QPushButton("Open folder", detail)
         self.open_btn.clicked.connect(lambda *_: self.open_folder())
         self.archive_btn = QPushButton("Archive", detail)
         self.archive_btn.clicked.connect(lambda *_: self.toggle_archive())
+        buttons.addWidget(self.project_heading, 1)
         buttons.addWidget(self.open_btn)
         buttons.addWidget(self.archive_btn)
-        buttons.addStretch(1)
         dl.addLayout(buttons)
+        self.warning_label = QLabel(detail)  # above the tabs: problems must not hide on another tab
+        self.warning_label.setWordWrap(True)
+        self.warning_label.setStyleSheet("color: #8a5300")
+        dl.addWidget(self.warning_label)
         tabs = QTabWidget(detail)
+        self.tabs = tabs
         self.documents_tab = DocumentsTab(ctl, configure_table, tabs)
         tabs.addTab(self.documents_tab, "Documents")
         files_page = QWidget(tabs)
@@ -150,9 +171,13 @@ class MainWindow(QMainWindow):
         configure_table(self.files, ProjectDetailsModel.FILE_COLUMNS)
         fl.addWidget(self.files, 1)
         tabs.addTab(files_page, "Baseline files")
+        details_page = QWidget(tabs)
+        self.detail_form = QFormLayout(details_page)
+        tabs.addTab(details_page, "Project details")
         dl.addWidget(tabs, 1)
-        split.setStretchFactor(0, 3)
-        split.setStretchFactor(1, 2)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 3)
+        split.setSizes([300, 900])
         outer.addWidget(split, 1)
 
         nav = QHBoxLayout()
@@ -163,7 +188,7 @@ class MainWindow(QMainWindow):
         nav.addWidget(self.prev_btn)
         nav.addWidget(self.next_btn)
         nav.addStretch(1)
-        outer.addLayout(nav)
+        ll.addLayout(nav)
         self.workspace_page = central
         self.stack.addWidget(central)
         self.setCentralWidget(shell)
@@ -199,6 +224,8 @@ class MainWindow(QMainWindow):
                 act.setShortcut(QKeySequence(shortcut))
             act.triggered.connect(lambda *_, s=slot: s())
             ws.addAction(act)
+            if text == "Add engineering root…":
+                self._write_actions.append(act)
         self.recent_menu = ws.addMenu("Recent")
         ws.addSeparator()
         quit_act = QAction("Quit", self)
@@ -210,9 +237,11 @@ class MainWindow(QMainWindow):
         new_act.setShortcut(QKeySequence(QKeySequence.StandardKey.New))
         new_act.triggered.connect(lambda *_: self.new_project())
         prj.addAction(new_act)
+        self._write_actions.append(new_act)
         adopt_act = QAction("Adopt existing project…", self)
         adopt_act.triggered.connect(lambda *_: self.adopt())
         prj.addAction(adopt_act)
+        self._write_actions.append(adopt_act)
         help_menu = self.menuBar().addMenu("&Help")
         keys_act = QAction("Keyboard shortcuts", self)
         keys_act.triggered.connect(lambda *_: QMessageBox.information(self, "Keyboard shortcuts", SHORTCUTS_TEXT))
@@ -245,19 +274,35 @@ class MainWindow(QMainWindow):
             self.health_banner.show()
         else:
             self.health_banner.hide()
-        writable = not self.ctl.read_only and self.ctl.location is not None
-        for w in (self.new_btn, self.adopt_btn, self.archive_btn):
-            w.setEnabled(writable and (w is not self.archive_btn or self.detail_vm.project is not None))
+        self.update_write_actions()
         self.documents_tab.render_list()
         self.documents_tab.render_panel()
 
+    def update_write_actions(self) -> None:
+        """Project-level changes: off while recovery-blocked or while a job holds the workspace."""
+        writable = self.ctl.location is not None and not self.ctl.read_only and not self.ctl.busy
+        self.new_btn.setEnabled(writable)
+        self.adopt_btn.setEnabled(writable)
+        self.archive_btn.setEnabled(writable and self.detail_vm.project is not None)
+        for act in self._write_actions:
+            act.setEnabled(writable or (self.ctl.location is None and act.text() != "Add engineering root…"))
+
     def render_list(self) -> None:
+        keep = self.detail_vm.project["id"] if self.detail_vm.project else None
         self.table_model.reload()
         self.projects_notice.setText(self.list_vm.notice)
         self.projects_notice.setVisible(bool(self.list_vm.notice))
         self.prev_btn.setEnabled(self.list_vm.can_prev)
         self.next_btn.setEnabled(self.list_vm.can_next)
         self.statusBar().showMessage(self.list_vm.status_text)
+        if keep:  # a model reset drops the selection without a signal
+            row = self.list_vm.index_of(keep)
+            if row is None:  # no longer listed: its details and actions must not stay available
+                self.selection_changed()
+            else:
+                self._restoring_selection = True
+                self.table.selectRow(row)
+                self._restoring_selection = False
 
     def render_details(self) -> None:
         while self.detail_form.rowCount():
@@ -267,18 +312,45 @@ class MainWindow(QMainWindow):
             v.setWordWrap(True)
             v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.detail_form.addRow(label, v)
+        p = self.detail_vm.project
+        self.project_heading.setText(
+            " ".join(x for x in (p.get("number"), p.get("name")) if x)
+            + f"  ({p.get('mode')}, {p.get('status')})" if p else "")
         self.warning_label.setText("\n".join(f"⚠ {w}" for w in self.detail_vm.warnings))
+        self.warning_label.setVisible(bool(self.detail_vm.warnings))
         self.open_btn.setEnabled(self.detail_vm.can_open_folder)
-        self.archive_btn.setEnabled(self.detail_vm.project is not None and not self.ctl.read_only)
+        self.update_write_actions()
         self.archive_btn.setText(self.detail_vm.archive_label)
         self.files_model.reload()
 
     # ------------------------------------------------------------------ actions
     def error(self, title: str, exc: Exception) -> None:
-        QMessageBox.critical(self, title, describe_error(exc))
+        if isinstance(exc, (CommittedNotApplied, SavedWithWarning)):  # saved: never shown as a failure
+            QMessageBox.warning(self, "Saved with a warning", describe_error(exc))
+        else:
+            QMessageBox.critical(self, title, describe_error(exc))
+
+    def refuse_while_busy(self, quiet: bool = False) -> bool:
+        """True if a background job is still running, so the workspace must not be closed or
+        switched under it. The short wait covers a job that is just finishing."""
+        if self.ctl.wait_idle(0.25):
+            return False
+        if not quiet:
+            QMessageBox.information(self, "Still working", "A background task is still running. Wait "
+                                    "for it to finish (or cancel the scan), then try again.")
+        return True
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        """Do not quit under a running job: its worker thread would die with the process."""
+        if self.refuse_while_busy():
+            event.ignore()
+        else:
+            event.accept()
 
     def open_location(self, location: Path, quiet: bool = False, select_project: str | None = None) -> bool:
         """Open a workspace; on failure stay on (or return to) the start page with the reason."""
+        if self.refuse_while_busy(quiet):
+            return False
         try:
             info = self.ctl.open_workspace(location)
         except Exception as exc:
@@ -327,6 +399,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.start_page)
 
     def close_ws(self) -> None:
+        if self.refuse_while_busy():
+            return
         self.ctl.close_workspace()
         self.setWindowTitle(f"RevisionWorx {__version__} (Alpha)")
         self.list_vm.refresh()
@@ -341,8 +415,8 @@ class MainWindow(QMainWindow):
             self.open_location(Path(d))
 
     def create_ws(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Where should the shared .revisionworx folder live?")
-        if not d:
+        d = QFileDialog.getExistingDirectory(self, "Folder on this computer for the new workspace")
+        if not d or self.refuse_while_busy():
             return
         name, ok = QInputDialog.getText(self, "Workspace name", "Name for this workspace:")
         if not ok or not name.strip():
@@ -375,6 +449,8 @@ class MainWindow(QMainWindow):
         self.list_vm.set_query(self.search.text(), self.archived.isChecked())
 
     def selection_changed(self, *_):
+        if self._restoring_selection:
+            return
         pid = self.selected_project_id()
         try:
             self.detail_vm.load(pid)
@@ -421,11 +497,12 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def poll(self) -> None:
-        """Deliver background results on the GUI thread (never block on network I/O)."""
+        """Deliver background results on the GUI thread (never block on slow disk I/O)."""
         busy = self.ctl.busy
         if busy != self._was_busy:  # enable/disable actions that would collide with the job
             self._was_busy = busy
             self.busy_label.setText("Working… (copying and hashing)" if busy else "")
+            self.update_write_actions()
             self.documents_tab.render_list()
             self.documents_tab.render_panel()
         for ev in self.ctl.drain():
@@ -461,7 +538,9 @@ class MainWindow(QMainWindow):
             "ownership": p.ownership_text,
             "history": [{"id": r["id"], "label": r["label"], "sha256": r["sha256"],
                          "description": r.get("description")} for r in p.history],
-            "actions": {"new_project": self.new_btn.isEnabled(), "import": tab.import_btn.isEnabled(),
+            "actions": {"new_project": self.new_btn.isEnabled(), "adopt": self.adopt_btn.isEnabled(),
+                        "archive": self.archive_btn.isEnabled(), "register": tab.register_btn.isEnabled(),
+                        "change_state": tab.transition_btn.isEnabled(), "import": tab.import_btn.isEnabled(),
                         "checkout": tab.checkout_btn.isEnabled(), "checkin": tab.checkin_btn.isEnabled(),
                         "cancel_checkout": tab.cancel_btn.isEnabled(), "open_file": tab.open_file_btn.isEnabled(),
                         "restore": tab.restore_btn.isEnabled(), "compare": tab.compare_btn.isEnabled()},

@@ -7,9 +7,11 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
+                               QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
+                               QWidget)
 
 from ..controller import Controller, describe_error
+from ...workspace import CommittedNotApplied
 from ..viewmodels import QuickStartForm
 
 
@@ -123,6 +125,9 @@ class StartPage(QWidget):
             return False
         try:
             self.last_created_id = self.form.submit(self.ctl)["id"]
+        except CommittedNotApplied as exc:  # saved (CORE_API §4): open it, never invite a second try
+            self.last_created_id = None
+            QMessageBox.warning(self, "Saved with a warning", describe_error(exc))
         except Exception as exc:
             self.show_error(describe_error(exc))
             return False

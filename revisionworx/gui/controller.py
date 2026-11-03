@@ -3,10 +3,10 @@
 
 Holds no toolkit imports so it is fully testable headless. Slow work (scans, index sync) runs on a
 background thread; results come back through a queue that the GUI drains on its own thread, so the
-UI never blocks on network I/O.
+UI never blocks on slow disk I/O.
 
 The writer lock is held only for the duration of each write operation, not while the window is
-open, so other users can make changes between actions (Phase 1 single-writer model).
+open (Phase 1 single-writer model). The 0.1.0 Alpha is single user and local disk only.
 """
 from __future__ import annotations
 
@@ -71,6 +71,11 @@ class SavedWithWarning(Exception):
 
 class RecoveryBlocked(Exception):
     """The workspace is recovery-blocked; the GUI is read-only until health is re-checked."""
+
+
+class OutcomeUnknown(Exception):
+    """An unexpected error followed a change and the journal could not be read to say whether the
+    change took effect. Neither success nor failure may be implied."""
 
 
 @dataclass
@@ -304,7 +309,13 @@ class Controller:
                     f"The checkout was saved, but this session did not receive its ownership token "
                     f"({exc}). You cannot check in from here; ask an administrator to release the "
                     "checkout (audited) and check out again.") from exc
-            self.tokens.put(ws.id, doc_id, co["token"])
+            try:
+                self.tokens.put(ws.id, doc_id, co["token"])
+            except OSError as exc:
+                raise SavedWithWarning(
+                    f"The checkout was saved, but this computer could not store its ownership token "
+                    f"({exc}). You cannot check in from here; ask an administrator to release the "
+                    "checkout (audited) and check out again.") from exc
             return {k: v for k, v in co.items() if k != "token"}
 
     def cancel_checkout(self, doc_id: str, revert: bool = False) -> None:
@@ -313,9 +324,21 @@ class Controller:
             try:
                 documents.cancel_checkout(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", revert=revert)
             except CommittedNotApplied as exc:
-                self.tokens.forget(ws.id, doc_id)
+                self._forget_token(ws.id, doc_id)
                 raise SavedWithWarning(f"The checkout was released. {exc}") from exc
-            self.tokens.forget(ws.id, doc_id)
+            problem = self._forget_token(ws.id, doc_id)
+        if problem:
+            raise SavedWithWarning(f"The checkout was released. {problem}")
+
+    def _forget_token(self, workspace_id: str | None, doc_id: str) -> str | None:
+        """Drop a finished checkout's local token. The change is already committed by now, so a
+        failure here is only a caveat (the stale token matches nothing); never report it as if the
+        change had failed. Returns the caveat, if any."""
+        try:
+            self.tokens.forget(workspace_id, doc_id)
+        except OSError as exc:
+            return f"The local checkout list could not be updated ({exc}); this is harmless."
+        return None
 
     def transition(self, rev_id: str, state: str, comment: str, expected_rev: int | None) -> dict:
         with self._write() as ws:
@@ -471,7 +494,7 @@ class Controller:
                 rev = documents.checkin(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", message,
                                         label=label, allow_unchanged=allow_unchanged, txid=txid)
         except CommittedNotApplied as exc:
-            self.tokens.forget(ws_id or self.workspace_id, doc_id)
+            self._forget_token(ws_id or self.workspace_id, doc_id)
             raise SavedWithWarning(f"Checked in. {exc}") from exc
         except (documents.DocumentError, RecoveryBlocked):
             raise  # validation refusals: nothing was written
@@ -481,12 +504,16 @@ class Controller:
                 raise
             outcome = self.transaction_outcome(txid)
             if outcome.get("state") == "committed":
-                self.tokens.forget(ws_id, doc_id)
+                self._forget_token(ws_id, doc_id)
                 raise SavedWithWarning(
                     f"Checked in (confirmed from the journal, entry {outcome.get('seq')}), but an error "
                     f"followed: {describe_error(exc)}") from exc
+            if outcome.get("state") == "unknown":
+                raise OutcomeUnknown(f"{describe_error(exc)} ({outcome.get('error')})") from exc
             raise
-        self.tokens.forget(ws_id, doc_id)
+        problem = self._forget_token(ws_id, doc_id)
+        if problem:
+            raise SavedWithWarning(f"Checked in revision {rev['label']}. {problem}", rev)
         return rev
 
     def transaction_outcome(self, txid: str) -> dict:
@@ -501,6 +528,13 @@ class Controller:
     def busy(self) -> bool:
         """A background write/scan is running (only one at a time)."""
         return self._busy.locked()
+
+    def wait_idle(self, timeout: float) -> bool:
+        """Wait briefly for a background job to finish. True when nothing is running."""
+        if not self._busy.acquire(timeout=timeout):
+            return False
+        self._busy.release()
+        return True
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -572,6 +606,10 @@ def describe_error(exc: BaseException) -> str:
                              WorkspaceLockedError)
     if isinstance(exc, SavedWithWarning):
         return exc.warning
+    if isinstance(exc, OutcomeUnknown):
+        return (f"RevisionWorx could not confirm whether this check-in was saved: {exc}\n\nCheck the "
+                "disk, close and reopen the workspace, and look at the revision history before "
+                "trying again.")
     if isinstance(exc, RecoveryBlocked):
         return (f"The workspace is read-only because it is recovery-blocked:\n{exc}\n\nNothing was "
                 "written. An administrator must resolve this with the command-line tools; then use "
@@ -611,7 +649,7 @@ def describe_error(exc: BaseException) -> str:
     if isinstance(exc, documents.NoChanges):
         return str(exc)
     if isinstance(exc, ConflictError):
-        return f"{exc}\n\nSomeone else changed this item while you were viewing it. Reload and reapply your change."
+        return f"{exc}\n\nThis item changed while you were viewing it. Reload and reapply your change."
     if isinstance(exc, CommittedNotApplied):
         return f"Saved. Your change is recorded, but finishing it was delayed:\n{exc}"
     if isinstance(exc, WorkspaceLockedError):
@@ -619,9 +657,9 @@ def describe_error(exc: BaseException) -> str:
                 "If that session crashed, an administrator can release the lock with "
                 "'revisionworx lock show' / 'lock break'.")
     if isinstance(exc, PermissionError):
-        return f"Permission denied: {exc.filename or exc}\nCheck your access rights on the share."
+        return f"Permission denied: {exc.filename or exc}\nCheck your access rights on this file or folder."
     if isinstance(exc, OSError):
-        return f"File system or network error: {exc}\nThe share may be unavailable."
+        return f"File system error: {exc}\nCheck that the disk or folder is available."
     return str(exc) or exc.__class__.__name__
 
 
