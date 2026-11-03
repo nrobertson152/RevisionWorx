@@ -241,3 +241,27 @@ def test_change_detail_has_everything_for_a_pane(sample):
     assert d["gates"]["eco-release"] == {"approvals": 0, "rejections": 0}
     assert {a["title"] for a in d["open_actions"]} == {"Update bracket model and drawing", "Notify supplier"}
     assert d["impact"]["change"]["number"] == "ECO-0001"
+
+
+def test_write_export_works_without_hard_links(tmp_path, monkeypatch):
+    import os
+
+    def no_links(*a, **k):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(os, "link", no_links)
+    target = tmp_path / "usb.json"
+    exchange.write_export(target, "{}\n")
+    assert target.read_text() == "{}\n"
+    with pytest.raises(FileExistsError):
+        exchange.write_export(target, "second\n")
+    assert target.read_text() == "{}\n" and [p.name for p in tmp_path.iterdir()] == ["usb.json"]
+
+
+def test_actions_explain_an_unreadable_dependency_instead_of_failing(sample):
+    svc, _, _, ids = sample
+    svc.start_work(ids["order"])
+    eco = svc.store.records["eco"][ids["order"]]
+    ghost = "ecr_" + "6" * 32
+    eco["dependencies"] = [{"change_id": ghost, "type": "requires"}]
+    actions = {a["action"]: a for a in presentation.available_actions(svc, svc.get(ids["order"]))}
+    assert not actions["mark_implemented"]["enabled"] and ghost in actions["mark_implemented"]["reason"]

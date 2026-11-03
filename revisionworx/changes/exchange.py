@@ -119,7 +119,7 @@ def write_export(path: Path, text: str | bytes, overwrite: bool = False) -> Path
             os.replace(tmp, path)
         else:
             try:
-                os.link(tmp, path) if os.name != "nt" else os.rename(tmp, path)
+                _publish_new(tmp, path)
             except FileExistsError:
                 raise FileExistsError(f"{path} already exists; choose another name or allow overwrite") from None
     finally:
@@ -128,6 +128,25 @@ def write_export(path: Path, text: str | bytes, overwrite: bool = False) -> Path
         except FileNotFoundError:
             pass
     return path
+
+
+def _publish_new(tmp: Path, path: Path) -> None:
+    """Move a finished temp file to a name that must not exist yet. Hard link where possible (no window);
+    on filesystems without hard links (FAT/exFAT drives, some shares) reserve the name exclusively and
+    replace the empty placeholder, so the worst crash outcome is an empty file, never a partial one."""
+    if os.name == "nt":
+        os.rename(tmp, path)                     # refuses an existing destination
+        return
+    try:
+        os.link(tmp, path)
+        return
+    except FileExistsError:
+        raise
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    os.close(fd)
+    os.replace(tmp, path)
 
 
 def package_json(data: dict) -> str:

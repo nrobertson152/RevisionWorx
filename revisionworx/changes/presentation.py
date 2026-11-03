@@ -84,7 +84,10 @@ def available_actions(svc: ChangeService, change: Change, read_only: bool = Fals
             out.append(_act("add_action"))
         if st is ECOStatus.IN_PROGRESS:
             out.append(_act("record_implementation"))
-            blockers = svc.blockers(change)
+            try:
+                blockers = svc.blockers(change)
+            except ChangeError as exc:           # e.g. a dependency that can no longer be read
+                blockers = [str(exc)]
             out.append(_act("mark_implemented", not blockers, "; ".join(blockers)))
         if st is ECOStatus.IMPLEMENTED:
             g = svc.gate(change, SignoffStage.ECO_CLOSURE)
