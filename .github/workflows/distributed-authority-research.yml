@@ -432,3 +432,28 @@ jobs:
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m unittest -v prototype.test_core_22a5273_retry_composition
+
+
+  phase2-core-22a5273-real-windows-retry:
+    name: Core 22a5273 native Win32 retry stack (Python ${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: 22a5273d4740b3a7af8e8cb5cc3565e4336b763b
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Actual kernel denied CreateFileW confirms bounded-budget composition
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_core_22a5273_real_windows_retry_stack
