@@ -327,3 +327,28 @@ jobs:
           set -e
           if [ "$status" -eq 0 ]; then echo "Old vulnerable implementation unexpectedly passed"; exit 1; fi
           echo "Confirmed: vulnerable old source fails positive safety oracles"
+
+  phase2-rev4-release-displacement-acceptance:
+    name: ADR-019 rev4 independent release displacement (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: fe8a179f0203ef08151dc8459c84609dc639c4fe
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify journal-effective displaced release and crash protection
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_phase2_release_displacement_rev4
