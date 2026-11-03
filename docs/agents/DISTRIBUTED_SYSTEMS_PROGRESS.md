@@ -401,3 +401,17 @@ cover the added methods if the push workflow executes; results remain unverified
 until API access is restored. Next: inspect live comments/CI, report the
 pathname-object refinement to PR #7, update PR #4 with the pushed SHA, and test
 Claude's eventual correction. No merges/releases/force-pushes/retargeting.
+
+## GitHub connector verification checkpoint — research 23d8b941 (2026-11-02 ET)
+
+Independently inspected live branch refs and completed Actions run [41562781242](https://github.com/nrobertson152/RevisionWorx/actions/runs/41562781242), research head `23d8b94113be11bbdce83b9db06349b63dc29d68`. All **14/14 jobs SUCCESS**; exact job logs sampled and inspected for Phase 2, Phase 1 backport, authority model and ADR-017 contract. Pinned production Phase 2 remains `366d4355abcde7543122551fadaab01ac9832e01`; backport remains `36d1957fe8d7800659b488106ef6cec1fa0c6267`. No later corrective SHA existed at this check.
+
+- Isolated research model: **81/81 passed** on each of Ubuntu 3.11, Ubuntu 3.13, Windows 3.11, Windows 3.13; command defined in `.github/workflows/distributed-authority-research.yml`.
+- Deployed Phase 2 ADR-019/021 source tests: **18 tests each** on Ubuntu and Windows Python 3.13; **16 passed, 2 strict expected failures, 0 unexpected failures**. The two xfails are (a) archive digest must match authorization even under replacement between verification and move, and (b) overlapping admin clears must produce one terminal authorization. Separate passing tests deliberately demonstrate the *unsafe* outcomes. Passing unsafe reproduction != acceptance.
+- Research adapter against unchanged upstream ADR-017/021 contract: **20/20 passed** on Ubuntu Python 3.13.
+- Frozen Phase 1 backport: **2 tests each** on Ubuntu/Windows Python 3.13, **one strict expected safety failure plus one passing unsafe successor-lock deletion reproduction**.
+- Earlier Phase 2/Phase 1 legacy-probe jobs in the same run also succeeded; their success does not expand safety acceptance beyond pinned sources.
+
+The newly committed path-object replacement probe distinguishes POSIX open descriptor identity from pathname identity and does not claim equivalent Windows handle behavior. No physical two-host SMB, power-loss durability, adversarial remote-server, or Windows installed GUI certification has been performed. The current branch and CI already contain the additional test and protocol review files; this entry records independently verified *live* evidence and does not claim a newer correction.
+
+**Explicit recommendation:** REJECT Phase 2 administrative orphan-clear production acceptance until the audit/custody TOCTOU and duplicate-clear authorization issues are corrected and retested against an exact new SHA. REJECT the frozen Phase 1 backport. ACCEPT only the stated standalone/local positive ADR-021 interoperability and specific audit-first crash-order properties at the pinned source. Keep PR #4 draft, and do not merge, release, retarget, force-push or modify production code.
