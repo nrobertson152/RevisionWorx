@@ -190,7 +190,21 @@ def test_stale_effective_materialisation_cannot_override_new_journal_view(tmp_pa
             assert c.get("root", RID)["name"] == "C"
             # Simulate the preflighted writer's delayed cache-only _apply; journal B remains effective.
             # The update is NOT an externally fabricated file mutation.
-            b._apply(b.read_entry(b_seq))
+            # Crash B *after* its stale record write but *before* its checkpoint
+            # update. The checkpoint still claims C's newer journal entry was
+            # fully applied, even though B has overwritten C's cache file.
+            actual_atomic_write = atomicio.atomic_write_json
+
+            def interrupted_checkpoint(path, payload):
+                if Path(path).name == "state.json":
+                    raise OSError("stale writer died before checkpoint publication")
+                return actual_atomic_write(path, payload)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(atomicio, "atomic_write_json", interrupted_checkpoint)
+                with pytest.raises(OSError, match="before checkpoint publication"):
+                    b._apply(b.read_entry(b_seq))
+            assert c.applied_seq() == c_seq, "do not falsely force an ordinary journal replay"
             cached = atomicio.read_json(c.meta_dir / "records" / "root" / f"{RID}.json")
             assert cached["name"] == "B", "fault must genuinely overwrite the newer materialisation"
             assert c.get("root", RID) == {"name": "C", "_rev": c_seq}
