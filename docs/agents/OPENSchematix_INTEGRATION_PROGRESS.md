@@ -994,3 +994,9 @@ branches.
 - Test commit `647652892c47269385cecd58cd1fc6e6e259210a`: two tests, one using case-distinct source names on supporting filesystems (skip where unavailable), one portable crafted-manifest negative case. Suite now 15 test methods.
 - **Tests at current SHA: NOT EXECUTED.** Local `git ls-remote` failed with `Could not resolve host: github.com`; GitHub connector supports file commits but not Python execution. Prior native 5/5 per OS at `aed62eb` cannot qualify current code. Linux/Windows Python 3.11 CI run/job IDs and exact 15-test pass/fail/skip counts remain required.
 - Next: inspect native CI at exact test commit; test closed authoritative core workspace restore/reopen with immutable revision export and journal verification; request QA #31. No live snapshot, release, installer, or cross-host claim.
+
+## Integration A — 2026-11-03, manifest schema type safety
+- Exact integration branch code SHA: `76f217d97f3b88514ec3df936a2ee54bb24b3825`.
+- Corrected JSON manifest version validation: Python `True == 1` previously admitted `"version": true` as v1. Explicit `type(...) is int` now rejects boolean versions. Added a deterministic negative regression and updated native workflow discovery gate from 17 to 18 tests.
+- Verification: GitHub contents commits/readback only; **0 tests executed**, PASS/FAIL/SKIP/XFAIL unknown on Linux and Windows. Linux checkout attempt failed DNS resolution for github.com. GitHub connector's commit workflow lookup is PR-trigger-only; no push-triggered native logs verified. These changes are **not accepted** until both OS Python 3.11 jobs run against the exact SHA.
+- Remaining: obtain actual push-triggered Actions run/job logs and 18-test results; restore and reopen a closed authoritative workspace and compare immutable revision exports; QA/Director release gates remain HOLD. No merge or release.
