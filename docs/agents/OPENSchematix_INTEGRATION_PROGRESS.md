@@ -602,3 +602,62 @@ multiuser SMB. QA has demonstrated three genuinely protocol-only
 dual-effective-writer races on earlier Phase 2 d2b7a1c; Claude A owns a
 new correction and independent QA/Distributed safety decisions. No phase
 backport, core repin, merge, retarget or release. PR #2 remains draft.
+
+## 2026-11-02 — additional negative-state frozen GUI acceptance, exact SHA
+
+**New work on integration branch only:** `44f8074d746886e88c5dca639779e39a0aecba26`
+extended the TEST-ONLY frozen GUI probe. In the reopened disposable project, it
+temporarily renames the working file out of its expected location, presses the
+actual GUI F5 refresh, and asserts the documented observable-state contract:
+the selected document and two immutable history rows remain accessible,
+the listed document `file_state` becomes `missing`, and check-in stays
+disabled. A `finally` block restores the same original file and refreshes;
+the GUI must show `file_state=unchanged` with the same two revisions.
+No external source file or journal-backed authority is intentionally edited.
+Host-side frozen verifier commit `3f0a57149e15015c6d382031b16fe2614a4ddccd`
+requires positive `gui_missing_file_fail_closed` and
+`gui_missing_file_restored` evidence rather than accepting process exit
+alone.
+
+**Independent pinned CI [alpha run 41571637323](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571637323)
+at exact Integration SHA `3f0a57149e15015c6d382031b16fe2614a4ddccd`:
+Ubuntu AND Windows Python 3.11 SUCCESS.** Both frozen widget runs emitted
+`gui_missing_file_alert_and_restore=true`,
+`gui_f5_selection_preserved=true`, `gui_observable_contract_v1=true`,
+`cli_independent_exports_sha256=true`, two valid historical revisions,
+separate-process GUI reopen, original data unchanged, and provenance source
+`17651af68128572c7c83429513044a5948dd07bd` (Claude B desktop alpha).
+The test-only PyInstaller wrapper flag is true. Ubuntu additionally passes
+Python/pip-absent, nonroot/read-only-root Docker `--network none`, relocated
+frozen Qt UI workflow, new-process reopen, both CLI revision exports, and
+normal GUI startup. Windows passes 401-character local and extended-length
+path smoke, localhost UNC loopback read, byte-range lock denial and preserved
+original SHA-256 values. The negative scenario is reversible **only because
+it uses a disposable project**; no customer workspace is tested.
+
+**Original production-source packaging [CI run 41571637265](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571637265)
+at same Integration SHA: Ubuntu AND Windows SUCCESS.** Distinct workflow
+still pins `d656884b39401134149273dd0121ef620b76eb8e`, not corrected
+Phase 2 candidate; no production-core authority repin, no merge/backport or
+release.
+
+**Parallel core-safety development:** Independent QA scoped-ACCEPT of all
+three previously demonstrated local protocol writer-lock P1 corrections
+at Claude A source `fe8a179f0203ef08151dc8459c84609dc639c4fe` in
+[four-platform QA 41571153163](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571153163):
+ordinary positive safety 3 PASS, four actual separate-process crash/restart
+PASS, full Ubuntu 256 PASS / 3 SKIP and Windows 255 PASS / 4 SKIP on
+Python 3.11 and 3.13. Historical vulnerable negative control
+[41571222000](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571222000)
+demonstrates the original three unsafe writers, preserving test sensitivity.
+Distributed has confirmed focused admin-break and revoked-cleanup acceptance;
+full independent disposition of release/displaced archival and additional
+qualification is not treated as production signoff. Independent QA scope
+does NOT certify all schedules, hostile mutations, physical outage, network
+folder multiuser safety or a usable human-operated installed GUI. Director
+authorization still required for any production integration/backport/merge.
+
+**Maintained release hold:** PR #2 remains draft, production packaging pin
+unchanged. Test-only wrapper MUST NOT ship. Actual manual interaction, clean
+physically disconnected Windows runtime, signed native installer and
+two-host SMB/NFS remain unexecuted.
