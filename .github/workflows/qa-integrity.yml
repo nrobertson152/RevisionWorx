@@ -42,11 +42,11 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run independent QA tests
-        run: python -m pytest -q -ra tests/qa
+        run: python -m pytest -q -ra tests/qa --ignore=tests/qa/test_core_96f9_cad_provenance.py
       - name: Run full regression suite
-        run: python -m pytest -q -ra
+        run: python -m pytest -q -ra --ignore=tests/qa/test_core_96f9_cad_provenance.py
 
-# A green run validates actual Qt widgets offscreen but does not certify an
+# The Phase 1 PR job explicitly excludes a Phase 2-only CAD module whose\n# top-level imports otherwise fail collection before any Phase 1 assertions.\n# Phase 2 coverage remains in the separate pinned integrated job below.\n# A green run validates actual Qt widgets offscreen but does not certify an
 # installed native GUI, SMB/NFS semantics, or cross-host recovery.
 
   resolve-phase2-head:
