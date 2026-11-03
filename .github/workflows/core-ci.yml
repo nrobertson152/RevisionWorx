@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: core-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false  # every pushed SHA gets its full result: reports must cite exact-SHA evidence
 
 jobs:
   tests:

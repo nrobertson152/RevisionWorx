@@ -196,15 +196,17 @@ Done:
   clear-orphan and create. A new process recovers, then the state is checked against a journal replay.
   23 tests pass on Linux. It found no new defect beyond a test assumption (see the ADR-022 limitation).
 
+- `tests/test_process_handoff.py`: stale release, stale revoked cleanup and stale break across real processes, with
+  the real `lock break` CLI and a kill at every step of the mover; a check-in stopped past its checks; reader
+  stress; a soak with an administrator breaking every lock. Local, Linux, Python 3.13.18: 6 passed. Negative controls
+  with the same tests: `d2b7a1c` 4 failed, 2 passed. Soak over 12 runs each: `fe8a179` 2 failed (a real false
+  "created by another writer" and a real `verify` failure), this candidate 0 failed.
+
 Not done yet, in priority order:
-1. Deterministic real-process concurrent handoff: stale release, stale revoked cleanup and stale break with a
-   paused writer B, the real `lock break` CLI, and a kill at every step. The harness supports it: `pauses`,
-   `arm_after`, `Actor.wait_at/resume/kill`, `run_cli`, hooks `after_preflight` and `before_scan`.
-2. Reader-versus-writer and soak stress across real processes, run on real Windows.
-3. Systematic, preemption-bounded schedule exploration, with a negative control on `d2b7a1c`.
-4. `docs/CORE_INVARIANTS.md`: the state-machine and invariant map the assignment asks for.
-5. Sweep old `.<name>.rwx-*.tmp` leftovers next to a working file after a crash.
-6. Claude B's API requests A1-A7 (triage on PR #7).
+1. `docs/CORE_INVARIANTS.md`: the state-machine and invariant map the assignment asks for.
+2. Systematic, preemption-bounded schedule exploration, with a negative control on `d2b7a1c`.
+3. Sweep old `.<name>.rwx-*.tmp` leftovers next to a working file after a crash.
+4. Claude B's API requests A1-A7 (triage on PR #7).
 
 Known and watched:
 - One 21 s outlier among five Windows contention trials at `22a5273`; `--durations` is now on in CI to locate it.

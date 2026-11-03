@@ -211,6 +211,9 @@ class Script:
     def sleep_forever(self):
         self.fp.pause("forever")
 
+    NEEDS_HANDLE = {"close", "commit", "checkout", "checkin", "cancel", "restore", "register", "transition",
+                    "create_project", "adopt", "gc", "repair", "recover", "outcome"}
+
     def run(self, steps: list[dict]) -> list[dict]:
         from revisionworx.workspace import WorkspaceError
         out = []
@@ -221,6 +224,9 @@ class Script:
             save = args.pop("save", None)
             if arm:
                 self.fp.armed = True
+            if self.ws is None and action in self.NEEDS_HANDLE:
+                out.append({"do": action, "ok": False, "error": "skipped", "message": "no handle: open was refused"})
+                continue
             args = {k: self.saved.get(v[1:], v) if isinstance(v, str) and v.startswith("$") else v
                     for k, v in args.items()}
             try:

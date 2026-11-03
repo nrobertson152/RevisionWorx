@@ -88,3 +88,75 @@ def put_tokens(state_dir: str, who: int, barrier) -> None:
     barrier.wait()
     for j in range(20):
         tokens.put("ws", f"doc_{who}_{j}", f"token-{who}-{j}")
+
+
+def commit_loop(location: str, rid: str, rounds: int, results) -> None:
+    """A writer doing ordinary work: open, read, commit on what it read, close. Reports anything unexpected."""
+    from pathlib import Path
+    from revisionworx.workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordPut, Workspace,
+                                        WorkspaceError, WorkspaceLockedError)
+    tally = {"committed": 0, "locked": 0, "lock_lost": 0, "conflict": 0, "not_applied": 0, "errors": []}
+    for _ in range(rounds):
+        try:
+            ws = Workspace.open(Path(location), writable=True)
+        except WorkspaceLockedError:
+            tally["locked"] += 1
+            continue
+        except Exception as exc:  # noqa: BLE001 - reported, never hidden
+            tally["errors"].append(f"open: {type(exc).__name__}: {exc}")
+            continue
+        try:
+            current = ws.get("root", rid)
+            ws.commit("work", [RecordPut("root", rid, {"name": "x"}, expect_rev=current["_rev"] if current else 0)])
+            tally["committed"] += 1
+        except LockLostError:
+            tally["lock_lost"] += 1
+        except ConflictError:
+            tally["conflict"] += 1
+        except CommittedNotApplied:
+            tally["not_applied"] += 1
+        except Exception as exc:  # noqa: BLE001
+            tally["errors"].append(f"commit: {type(exc).__name__}: {exc}")
+        try:
+            ws.close()
+        except WorkspaceError as exc:
+            tally["errors"].append(f"close: {exc}")
+    results.put(tally)
+
+
+def read_loop(location: str, rid: str, stop_file: str, results) -> None:
+    """A reader doing ordinary work as fast as it can, until told to stop."""
+    from pathlib import Path
+    from revisionworx.workspace import Workspace
+    reads, errors = 0, []
+    while not Path(stop_file).exists():
+        try:
+            with Workspace.open(Path(location)) as ws:
+                ws.get("root", rid)
+                ws.list("root")
+                ws.applied_seq()
+                Workspace.read_writer_lock(Path(location))
+            reads += 1
+        except Exception as exc:  # noqa: BLE001 - reported, never hidden
+            errors.append(f"{type(exc).__name__}: {exc}")
+    results.put({"reads": reads, "errors": errors[:5]})
+
+
+def break_loop(location: str, stop_file: str, results) -> None:
+    """An impatient administrator: breaks whichever lock it sees, repeatedly."""
+    import time
+    from pathlib import Path
+    from revisionworx.workspace import Workspace, WorkspaceError
+    breaks, errors = 0, []
+    while not Path(stop_file).exists():
+        try:
+            holder = Workspace.read_writer_lock(Path(location))
+            if holder:
+                Workspace.break_writer_lock(Path(location), holder["token"], "soak test")
+                breaks += 1
+        except WorkspaceError:
+            pass                       # the lock changed since it was inspected, as it is told to report
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{type(exc).__name__}: {exc}")
+        time.sleep(0.03)
+    results.put({"breaks": breaks, "errors": errors[:5]})
