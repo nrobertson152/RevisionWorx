@@ -23,7 +23,7 @@ jobs:
           path: app
       - uses: actions/checkout@v4
         with:
-          ref: 11dba60c85e2d6d2aae7c5bd61ba5473ca6cf21f
+          ref: c7e90e5936059d515699ac006d0e7797aad10eb0
           path: qa
       - uses: actions/setup-python@v5
         with:
