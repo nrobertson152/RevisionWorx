@@ -29,6 +29,7 @@ ws.close()                                              # or: with Workspace.ope
 |---|---|---|
 | `WorkspaceLockedError(holder)` | Another session holds the writer lock. `holder` has `user`, `host`, `pid`, `acquired`. | Show "in use by user@host since …"; offer read-only. |
 | `WorkspaceCorruptError` | Writes refused for safety. Includes "orphaned lock-release file … `lock clear-orphan`" and journal gaps. | **Recovery-blocked state.** Show the message verbatim and offer read-only. Never retry in a loop. Resolution is an administrator action (CLI). **A journal gap also refuses read-only opens**, so there is no read-only to offer in that one case. |
+| `LockReleaseBusyError` (`.name`) | A writable open was refused because a lock-release file could not be read right now (another session releasing, or a program holding it). Nothing was written; not corruption. | Show the message; offer read-only and a manual **Retry**. Do not loop automatically. Not an administrator action unless it persists. |
 | `WorkspaceFormatError` | Not a workspace, or an unsupported format version. | "This folder is not a RevisionWorx workspace (or needs a newer version)." |
 | `OSError` (`PermissionError`, `FileNotFoundError`) | Filesystem refused. | Show the path and the OS message; do not retry automatically. |
 
@@ -131,6 +132,7 @@ now includes `baselines_unavailable`, the projects whose file list could not be 
 - 2026-11-02: `MissingFileError` and `CommittedNotApplied.result` are new (Claude B's A4 and A6). `verify` marks `fenced-entry` with
   `severity: info`, and the CLI no longer exits 1 for it alone. `doc verify` also audits the journal for changed revisions.
   `read_writer_lock` reports an unreadable lock as `{"token": "?", "unreadable": True}` instead of raising `ValueError`.
+- 2026-11-03 (ADR-019 rev. 5): `LockReleaseBusyError` is new. `Workspace.open(writable=True)` raises it, not `WorkspaceCorruptError`, when a `.releasing-*`/`.fencing-*` file stays access-denied (Windows delete-pending or a held file); if that file has gone, the open now succeeds. No signature changed.
 - 2026-11-02 (`feffbcf`): `checkin(txid=...)` retries now return the original revision, as this page always said.
   Before, a retry raised `NotCheckedOut` or `TxidReuseError`. `IndexBusyError` is new. `get`/`list` ignore record files
   the journal never wrote. No signature changed. `CheckoutTokens` now stores one file per checkout; its API is unchanged,

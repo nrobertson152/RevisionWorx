@@ -260,3 +260,86 @@ def test_process_contention_with_a_reader_polling_the_lock(tmp_path, n):
     with Workspace.open(root, writable=True) as ws:      # the next writer gets in
         assert ws.verify()["problems"] == []
         assert ws.get("checkout", doc_id) is not None
+
+
+# ---------------------------------------------------------------- a live release vs. a genuine orphan
+# Coordinator handoff on PR #7 (2026-11-03): CI 41678241178 on Windows saw a live peer's in-flight
+# locks/.releasing-* refuse reads between its os.replace and its unlink (delete pending). Being
+# unable to *read* a release file is not evidence that it is damaged: when it has gone, its releaser
+# finished; while it is still there, nobody may write yet, but the answer is "retry", not "corrupt,
+# call an administrator" (who could not read it either).
+
+def _orphan_of(root):
+    """A holds the lock; its release is caught mid-flight: writer.lock moved to .releasing-*."""
+    a = Workspace.open(root, writable=True)
+    locks = root / ".revisionworx" / "locks"
+    os.replace(locks / "writer.lock", locks / ".releasing-abc")
+    return a, locks, locks / ".releasing-abc"
+
+
+def test_release_that_finishes_after_the_retry_budget_is_not_called_corrupt(root, monkeypatch):
+    """Was: the file was busy for the whole retry budget and then vanished (its releaser unlinked it),
+    yet acquisition refused with 'unreadable ... run lock clear-orphan' for a file that no longer existed."""
+    a, locks, orphan = _orphan_of(root)
+    monkeypatch.setattr(atomicio, "RETRY_SHARING", True)
+    monkeypatch.setattr(atomicio, "SHARING_RETRIES", 3)
+    real, seen = atomicio._open_for_read, [0]
+
+    def opener(path):
+        if Path(path).name == orphan.name:
+            seen[0] += 1
+            if seen[0] == 3:
+                orphan.unlink()                       # the live releaser finishes on our last attempt
+            raise PermissionError(13, "injected: delete pending")
+        return real(path)
+    monkeypatch.setattr(atomicio, "_open_for_read", opener)
+    with Workspace.open(root, writable=True) as ws:
+        assert ws.writable
+    monkeypatch.undo()
+    assert seen[0] == 3
+    assert a._lock_token not in Workspace._revoked_tokens(root / ".revisionworx")  # nothing to fence
+    assert not [p for p in locks.iterdir() if p.name.startswith((".releasing-", ".fencing-"))]
+    a._lock_token = None
+    a.close()
+
+
+def test_unreadable_release_file_still_blocks_but_as_busy_not_corrupt(root, monkeypatch):
+    from revisionworx.workspace import LockReleaseBusyError, WorkspaceCorruptError
+    a, locks, orphan = _orphan_of(root)
+    before = orphan.read_bytes()
+    busy_reads(monkeypatch, orphan.name, 10_000)                    # only the peer's file is denied
+    with pytest.raises(LockReleaseBusyError) as exc:
+        Workspace.open(root, writable=True)
+    assert not isinstance(exc.value, WorkspaceCorruptError)
+    assert exc.value.name == orphan.name and "clear-orphan" not in str(exc.value)
+    monkeypatch.undo()
+    assert Workspace.read_writer_lock(root) is None                 # fail closed: lock given back
+    assert orphan.read_bytes() == before                             # untouched, still blocking
+    assert a._lock_token not in Workspace._revoked_tokens(root / ".revisionworx")
+    with Workspace.open(root, writable=True):                        # readable again: fenced as usual
+        pass
+    assert a._lock_token in Workspace._revoked_tokens(root / ".revisionworx")
+    a._lock_token = None
+    a.close()
+
+
+def test_unreadable_custody_file_is_put_back_as_busy_not_quarantined_as_corrupt(root, monkeypatch):
+    """The fencer moved the orphan into custody (.fencing-*) and then could not read it. It must stay a
+    blocking orphan with its bytes, and the error must not send an administrator to clear it."""
+    from revisionworx.workspace import LockReleaseBusyError, WorkspaceCorruptError
+    a, locks, orphan = _orphan_of(root)
+    before = orphan.read_bytes()
+    busy_reads(monkeypatch, ".fencing-", 10_000)
+    with pytest.raises(LockReleaseBusyError) as exc:
+        Workspace.open(root, writable=True)
+    assert not isinstance(exc.value, WorkspaceCorruptError)
+    monkeypatch.undo()
+    left = [p for p in locks.iterdir() if p.name.startswith((".releasing-", ".fencing-"))]
+    assert len(left) == 1 and left[0].read_bytes() == before
+    assert Workspace.read_writer_lock(root) is None
+    assert a._lock_token not in Workspace._revoked_tokens(root / ".revisionworx")
+    with Workspace.open(root, writable=True):
+        pass
+    assert a._lock_token in Workspace._revoked_tokens(root / ".revisionworx")
+    a._lock_token = None
+    a.close()

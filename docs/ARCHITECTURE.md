@@ -420,7 +420,7 @@ afterwards and is only evidence.
   remains an implementation detail.
 - The historical extension comes from `revision.source_rel_path`.
 
-### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED; rev. 4 awaiting independent review
+### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED; rev. 4 awaiting independent review; rev. 5 (Windows release race) awaiting CI/QA
 **Defect.** Reproduced by Distributed Systems (run 41387552435) and here
 (`tests/test_lock_release_race.py`, which failed on `d202b28`):
 1. Writer A verifies the token in `writer.lock`, then pauses before its pathname `unlink`.
@@ -641,6 +641,29 @@ exists. Adding more token re-checks only narrows the window.
   RevisionWorx's own readers never block a release. Outside programs can still hold a file open, so
   `atomic_write_bytes`, record deletes and the release wait up to about 5 s, and a release that still cannot
   finish keeps the lock and reports it. This uses `ctypes` from the standard library.
+
+- **Rev. 5: unreadable is not damaged (Windows `.releasing-*` race, Coordinator handoff on PR #7,
+  2026-11-03).** On Windows a live releaser's private `.releasing-*` file refuses opens with access denied
+  between its rename and the completion of its unlink (delete pending), and an outside program can hold
+  one open. The scan treated a read that stayed denied past the ~5 s retry budget as an unreadable
+  orphan: `WorkspaceCorruptError` and "run `lock clear-orphan`", even when the file vanished a moment later.
+  The original intermittent CI failure (run 41678241178) was an older core on the GUI branch that read
+  without any retry; PR #7's head already retried but kept this gap (`tests/test_windows_sharing.py`, three
+  tests, all failing on `3cc42e1`). Now a `PermissionError` (after retries) is handled apart from damage:
+  - the file is no longer listed in `locks/` (directory listing, not a stat or open, which a
+    delete-pending file also refuses): its releaser or a competing fencer took it, exactly as for
+    `FileNotFoundError`, so the scan continues;
+  - it is still listed: acquisition still **fails closed** (gives its lock back, nothing written) but
+    raises `LockReleaseBusyError` ("retry"), not `WorkspaceCorruptError`. The file is untouched and keeps
+    blocking until it can be read and fenced;
+  - the same applies after the fencer has taken custody: the `.fencing-*` file goes back to a fresh
+    `.releasing-*` name with its bytes unchanged.
+  Corrupt evidence is not bypassed: a file that *can* be read but has no token still fails closed as
+  corrupt and needs the audited administrative clear. **Not claimed:** that a file denied forever is
+  ever classified; it blocks writers, with a retry message, until it is readable or removed by an
+  administrator. **Known separate limit:** a releaser that cannot read its *own* moved file restores
+  it to `writer.lock` (fail closed, lock stays held), so a program holding that file for > 5 s leaves the
+  lock held until an administrator breaks it.
 
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.

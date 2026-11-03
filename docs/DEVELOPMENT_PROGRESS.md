@@ -73,6 +73,18 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-03 (session 14) — Windows `.releasing-*` race (Coordinator handoff on PR #7), ADR-019 rev. 5
+- **Origin:** CI 41678241178 (GUI PR #14, `0cb3b0b`), `test_checkout_race_between_processes_has_one_winner` on Windows:
+  `PermissionError` from `orphan.read_bytes()` in `_fence_orphaned_releases`. That line is in the older core the GUI
+  branch carries; PR #7's head reads with sharing retries but still called a release file that stayed access-denied
+  past the retry budget "unreadable, run clear-orphan", even after it vanished.
+- **Reproduced first:** three new tests in `tests/test_windows_sharing.py` fail on `3cc42e1` with `WorkspaceCorruptError`.
+- **Fix:** access denied is not damage. Gone from the listing: continue. Still listed: fail closed with
+  `LockReleaseBusyError` (retry), file untouched; custody files are put back as `.releasing-*`. Corrupt (readable,
+  no token) is unchanged. See ADR-019 rev. 5.
+- **Evidence:** see the PR #7 check-in for exact commands, commit and counts (local Linux and native CI).
+- **GUI note:** PR #14 must take the current core to get this and the issue #10 fixes; it is Claude B's branch.
+
 ### 2026-11-03 (session 13) — P0 journal structure (#29) and CAD source-capture integrity
 - **Journal:** `read_entry` validates every dereferenced field (`_entry_shape_problem`); `null`/`[]`/scalar entries, bool
   `seq`, wrong-typed optional fields, invalid kinds/ids, non-bool `delete`, non-object put `data`, bad blob refs and bad

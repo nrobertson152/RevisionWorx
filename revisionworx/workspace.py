@@ -129,6 +129,21 @@ class OrphanClearConflict(WorkspaceError):
             f"state: {outcome}); your request was not recorded")
 
 
+class LockReleaseBusyError(WorkspaceError):
+    """A lock-release file (``.releasing-*`` / ``.fencing-*``) exists but could not be read: access was
+    denied, as on Windows while another session is still releasing or deleting it, or while a virus
+    scanner or backup tool holds it. Its writer cannot be fenced yet, so nobody may write and this
+    open was refused (fail closed); unlike :class:`WorkspaceCorruptError` there is no evidence of
+    damage, so the remedy is to retry, not an administrative clear. Nothing was written."""
+
+    def __init__(self, name: str, cause: OSError):
+        self.name = name
+        super().__init__(
+            f"lock-release file {name} could not be read ({cause.strerror or cause}); another session may "
+            "be releasing the writer lock right now. Nothing was written: try again in a moment. If this "
+            "persists, check file permissions and any program (virus scanner, backup) holding that file")
+
+
 class LockLostError(WorkspaceError):
     """This handle's writer lock was broken or replaced; it must not write any more."""
 
@@ -561,6 +576,14 @@ class Workspace:
                     holder = atomicio.read_json(orphan)
                 except FileNotFoundError:
                     continue
+                except PermissionError as exc:
+                    # Access denied after the bounded sharing retries (ADR-016). A live releaser's
+                    # file is delete-pending on Windows until its unlink completes. Gone now: its
+                    # releaser (or a competing fencer, whose custody file is scanned again below)
+                    # took it. Still there: not damaged, but not fenceable yet either (ADR-019 rev. 5).
+                    if not Workspace._listed(orphan):
+                        continue
+                    raise LockReleaseBusyError(orphan.name, exc) from exc
                 except (OSError, ValueError):
                     holder = {}
                 if not holder.get("token"):
@@ -604,13 +627,21 @@ class Workspace:
                 atomicio.retry_sharing(lambda: os.replace(orphan, custody))
             except FileNotFoundError:
                 return                               # the releaser finished, or another fencer has it
+        busy: PermissionError | None = None
         try:
             holder = atomicio.read_json(custody)
         except FileNotFoundError:
             return                                   # a concurrent fencer finished it
+        except PermissionError as exc:
+            holder, busy = {}, exc                   # not readable now: no evidence of damage
         except (OSError, ValueError):
             holder = {}
         tok = holder.get("token")
+        if busy is not None:
+            # Put it back where every acquirer scans it, bytes unchanged; it keeps blocking.
+            quarantine = locks / f".releasing-{uuid.uuid4().hex}"
+            atomicio.retry_sharing(lambda: os.replace(custody, quarantine))
+            raise LockReleaseBusyError(quarantine.name, busy) from busy
         if not tok:
             # What we took custody of is not what we inspected: keep it as a blocking orphan.
             quarantine = locks / f".releasing-{uuid.uuid4().hex}"
@@ -626,6 +657,15 @@ class Workspace:
             atomicio.retry_sharing(lambda: os.replace(custody, locks / evidence))
         except (FileNotFoundError, PermissionError):
             pass                                     # finished by a competitor, or a later scan will
+
+    @staticmethod
+    def _listed(path: Path) -> bool:
+        """Whether ``path``'s name is still in its folder. Uses the directory listing, not a stat or
+        open of the file itself, which a delete-pending file on Windows also refuses."""
+        try:
+            return any(p.name == path.name for p in path.parent.iterdir())
+        except FileNotFoundError:
+            return False
 
     @staticmethod
     def _revoked_tokens(meta: Path) -> set[str]:

@@ -47,3 +47,11 @@ jobs:
             echo "trial $i"
             python -m pytest -q tests/test_windows_sharing.py -k process_contention --durations=3
           done
+      - name: Live release vs orphan scan, repeated (ADR-019 rev. 5; GUI CI 41678241178)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            echo "trial $i"
+            python -m pytest -q tests/test_documents.py -k test_checkout_race_between_processes_has_one_winner
+          done
