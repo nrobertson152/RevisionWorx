@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QInputDialog
 from ..controller import Controller, SavedWithWarning, describe_error
 from ..viewmodels import DocumentListModel, DocumentPanel
 from .dialogs import CheckinDialog, ImportDialog
-from .models import ViewModelTable, elastic
+from .models import EnterTable, ViewModelTable, elastic
 
 SEVERITY_STYLE = {"ok": "", "warning": "color: #8a5300", "error": "color: #b00020; font-weight: bold"}
 
@@ -54,7 +54,7 @@ class DocumentsTab(QWidget):
 
         split = QSplitter(Qt.Orientation.Vertical, self)
         split.setChildrenCollapsible(False)
-        self.table = QTableView(split)
+        self.table = EnterTable(split)
         self.table.setAccessibleName("Documents")
         self.table_model = ViewModelTable(DocumentListModel.COLUMNS, lambda: len(self.list_vm.rows),
                                           self.list_vm.cell, self, severity=self.list_vm.row_severity)
@@ -63,6 +63,7 @@ class DocumentsTab(QWidget):
         show_at_least_rows(self.table, 3)
         self.table.selectionModel().selectionChanged.connect(lambda *_: self.selection_changed())
         self.table.doubleClicked.connect(lambda _: self.open_file())
+        self.table.enter_pressed.connect(self.open_file)
 
         detail = QWidget(split)
         dl = QVBoxLayout(detail)
@@ -81,7 +82,7 @@ class DocumentsTab(QWidget):
         actions = QHBoxLayout()
         self.checkout_btn = QPushButton("Check &out", detail)
         self.checkout_btn.setToolTip("Reserve this document for editing (Ctrl+K)")
-        self.checkin_btn = QPushButton("Check &in…", detail)
+        self.checkin_btn = QPushButton("Chec&k in…", detail)
         self.checkin_btn.setToolTip("Record your edits as a new revision (Ctrl+Shift+K)")
         self.cancel_btn = QPushButton("&Cancel checkout…", detail)
         self.open_file_btn = QPushButton("Open &file", detail)
@@ -108,9 +109,9 @@ class DocumentsTab(QWidget):
         for w in (self.transition_box, self.transition_btn, self.export_btn):
             hist_actions.addWidget(w)
         hist_actions.addStretch(1)
-        self.compare_btn = QPushButton("Compare with &previous", detail)
+        self.compare_btn = QPushButton("Co&mpare with previous", detail)
         self.compare_btn.setToolTip("Metadata comparison of the selected revision and the one before it")
-        self.restore_btn = QPushButton("Restore to &working file…", detail)
+        self.restore_btn = QPushButton("Res&tore to working file…", detail)
         self.restore_btn.setToolTip("While checked out: replace the working file with the selected older "
                                     "revision. History is never rewritten.")
         hist_actions.addWidget(self.compare_btn)

@@ -17,7 +17,7 @@ from ..controller import Controller, Progress, SavedWithWarning, describe_error
 from ..viewmodels import AppStatus, ProjectDetailsModel, ProjectListModel
 from .dialogs import AdoptDialog, NewProjectDialog
 from .documents import DocumentsTab
-from .models import ViewModelTable, elastic
+from .models import EnterTable, ViewModelTable, elastic
 from .startpage import StartPage
 
 SHORTCUTS_TEXT = """Ctrl+N\tNew project (start page when no workspace is open)
@@ -95,12 +95,13 @@ class MainWindow(QMainWindow):
         bar = QHBoxLayout()
         self.search = QLineEdit(central)
         self.search.setPlaceholderText("Search projects by name, number, customer…  (Ctrl+F)")
+        self.search.setAccessibleName("Search projects")
         self.search.returnPressed.connect(lambda *_: self.apply_search())
         self.archived = QCheckBox("Include archived", central)
         self.archived.toggled.connect(lambda _: self.apply_search())
-        self.adopt_btn = QPushButton("Adopt existing…", central)
+        self.adopt_btn = QPushButton("&Adopt existing…", central)
         self.adopt_btn.clicked.connect(lambda *_: self.adopt())
-        self.new_btn = QPushButton("New project", central)
+        self.new_btn = QPushButton("&New project", central)
         self.new_btn.clicked.connect(lambda *_: self.new_project())
         bar.addWidget(self.search, 1)
         bar.addWidget(self.archived)
@@ -117,7 +118,8 @@ class MainWindow(QMainWindow):
         left = QWidget(split)
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        self.table = QTableView(left)
+        self.table = EnterTable(left)
+        self.table.setAccessibleName("Projects")
         ll.addWidget(self.table, 1)
         self.table_model = ViewModelTable(ProjectListModel.COLUMNS, lambda: len(self.list_vm.rows),
                                           self.list_vm.cell, self)
@@ -131,6 +133,7 @@ class MainWindow(QMainWindow):
         self.table.setMinimumWidth(220)
         self.table.selectionModel().selectionChanged.connect(self.selection_changed)
         self.table.doubleClicked.connect(lambda _: self.open_folder())
+        self.table.enter_pressed.connect(self.open_folder)
 
         detail = QWidget(split)
         dl = QVBoxLayout(detail)
@@ -152,6 +155,7 @@ class MainWindow(QMainWindow):
         self.warning_label.setStyleSheet("color: #8a5300")
         dl.addWidget(self.warning_label)
         tabs = QTabWidget(detail)
+        tabs.setAccessibleName("Project contents")
         self.tabs = tabs
         self.documents_tab = DocumentsTab(ctl, configure_table, tabs)
         tabs.addTab(self.documents_tab, "Documents")
@@ -159,9 +163,11 @@ class MainWindow(QMainWindow):
         fl = QVBoxLayout(files_page)
         self.file_filter = QLineEdit(files_page)
         self.file_filter.setPlaceholderText("Filter files…")
+        self.file_filter.setAccessibleName("Filter baseline files")
         self.file_filter.returnPressed.connect(lambda *_: self.filter_files())
         fl.addWidget(self.file_filter)
         self.files = QTableView(files_page)
+        self.files.setAccessibleName("Baseline files")
         self.files_model = ViewModelTable(ProjectDetailsModel.FILE_COLUMNS, lambda: len(self.detail_vm.files),
                                           self.detail_vm.file_cell, self)
         self.files.setModel(self.files_model)
@@ -186,6 +192,9 @@ class MainWindow(QMainWindow):
         nav.addWidget(self.next_btn)
         nav.addStretch(1)
         ll.addLayout(nav)
+        QWidget.setTabOrder(self.table, self.prev_btn)  # they sit under the list, so they follow it
+        QWidget.setTabOrder(self.prev_btn, self.next_btn)
+        QWidget.setTabOrder(self.next_btn, self.open_btn)
         self.workspace_page = central
         self.stack.addWidget(central)
         self.setCentralWidget(shell)

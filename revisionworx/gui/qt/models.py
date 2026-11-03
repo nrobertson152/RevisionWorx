@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QLabel, QSizePolicy
+from PySide6.QtWidgets import QLabel, QSizePolicy, QTableView
 
 from ..viewmodels import Column
 
@@ -17,6 +17,19 @@ def elastic(label: QLabel) -> QLabel:
     label.setWordWrap(True)
     label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     return label
+
+
+class EnterTable(QTableView):
+    """Enter on a row does what a double-click does. Qt's ``activated`` signal is not used because on some
+    desktops it also fires on a single click."""
+    enter_pressed = Signal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.currentIndex().isValid():
+            self.enter_pressed.emit()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
 
 class ViewModelTable(QAbstractTableModel):
