@@ -99,3 +99,55 @@ Do not transfer test acceptance to it automatically.
 See [`docs/INSTALLED_APPLICATION_ACCEPTANCE.md`](INSTALLED_APPLICATION_ACCEPTANCE.md) for specific actual-Windows and Linux GUI, permissions, installer/uninstaller, full content SHA integrity, old-workspace upgrade and rollback procedures. They are **not executed** by the current experimental onedir CI. Linux dependencies include the EGL/XCB runtime modules; Windows source CLI may use a legacy codepage when outputting Unicode paths. The packaging-only UTF-8 console entrypoint is a mitigation for frozen binaries; it does not alter source `revisionworx/cli.py`.
 
 No release, artifact publication or integration permission is granted by the green prototype tests.
+
+
+## 5. Pinned frozen desktop-alpha GUI matrix — 2026-11-02
+
+**Independent acceptance is strictly GUI smoke at a pinned draft source,
+not production core qualification.** Desktop Alpha PR #14 source
+f00aa31b6f66fbe0e78ff440aed7026e869138b3, packaging code
+7fbd7b31135663f498bb15cc50dc80ba4919db9e,
+[Actions 41566749753](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566749753):
+both Ubuntu and Windows Python 3.11 jobs **SUCCESS**. Each ran
+5 packaging safeguard tests, frozen build, copied-workspace read-only smoke,
+and the new offscreen Qt widget test against copied executable trees in
+paths with spaces/Unicode. The actual widget path performed project
+create/open, document import, checkout, check-in with description,
+two-revision history and a **fresh frozen GUI process** reopening the
+document. Separate frozen CLI commands exported both revisions and checked
+SHA-256 and document integrity, with the workspace file hash set unchanged
+by read-only reopen. Windows long-path, localhost UNC and sharing probes
+passed.
+
+Ubuntu added a nonroot container with no Python/pip and network=none,
+relocated both frozen apps into executable tmpfs, repeated Qt widget
+create/import/checkin/restart, verified both historical exports via frozen
+CLI, and started the normal GUI entrypoint. Its log includes the evidence
+marker OFFLINE_ALPHA_GUI_EVIDENCE with python=absent, network=none,
+copied_bundle=pass, qt_create_import_checkout_checkin=pass,
+qt_reopen=pass, cli_sha_exports=pass, normal_gui_start=pass.
+
+First [alpha run 41566452430](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566452430)
+failed on both platforms because the experimental harness attempted a
+second revision export into an already occupied destination. Commit
+7fbd7b3 changed the test to use fresh immutable export destinations,
+preserving the application's exclusive-output safety property.
+
+**Newer Claude B source is NOT covered.** PR #14 advanced to
+e5725df17218b5bb9fb975389a0580aed63f2205, whose native
+[CI 41566802123](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566802123)
+has 10 Qt failures / 10 passes per OS. Root common exception at
+revisionworx/gui/qt/documents.py:236 imports nonexistent module
+revisionworx.gui.workspace. Integration reported the issue to Claude B on
+PR #14; no GUI source edit or unverified repin was performed.
+
+Full acceptance architecture and release blockers:
+[docs/FROZEN_DESKTOP_ALPHA_ACCEPTANCE.md](FROZEN_DESKTOP_ALPHA_ACCEPTANCE.md).
+User-operated GUI, native installation, clean disconnected Windows VM,
+attempted socket audit, genuine upgrade/rollback, and newer core authority
+safety remain **NOT EXECUTED / NOT ACCEPTED**. Director-approved 0.1.0
+Alpha scope is trusted, single-user local disk only. Multiuser/shared-folder
+and hostile authority-file mutation remain outside alpha scope, while
+cooperative protocol races still require independent QA/Distributed
+acceptance. Older production packaging workflow pin d656884b is unchanged.
+No merge, release or backport is authorized.
