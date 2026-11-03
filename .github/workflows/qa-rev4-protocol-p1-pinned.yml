@@ -1,0 +1,53 @@
+name: QA ADR-019 protocol-only P1 reproductions (pinned)
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-rev4-protocol-p1-pinned.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  p1:
+    name: "${{ matrix.os }} Python ${{ matrix.python-version }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: d2b7a1cfead5b83acecce2252e70d0a155f146b7
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: ecd64b66dfc2fb2f049b13f74356baa5cd07f603
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned independent adversarial QA test
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dest = Path("app/tests/qa")
+          dest.mkdir(parents=True, exist_ok=True)
+          shutil.copy2("qa/tests/qa/test_rev4_protocol_only_p1.py", dest)
+      - name: Install exact tested Phase 2 implementation
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Identify immutable production, QA and runtime
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Run two unsafe protocol-only counterexamples and two strict safety xfails
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_rev4_protocol_only_p1.py
