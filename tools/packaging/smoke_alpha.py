@@ -116,6 +116,8 @@ def exercise(gui: Path, cli: Path) -> None:
             raise AssertionError("GUI import changed external source fixture")
         if made["history_rows"] != 2:
             raise AssertionError("GUI accepted fewer than two revisions")
+        if made.get("gui_observable_contract_v1") != "passed" or made.get("gui_f5_selection_preserved") != "passed":
+            raise AssertionError("GUI observable-state v1/F5 assertions not recorded")
 
         ids = verify_history(installed_cli, ws, root, env, made["document_id"], "initial")
         if ids != made["revision_ids"]:
@@ -126,6 +128,8 @@ def exercise(gui: Path, cli: Path) -> None:
             raise AssertionError("GUI reopened wrong document")
         if reopened["revision_ids"] != ids or reopened["history_rows"] != 2:
             raise AssertionError("GUI lost history after process restart")
+        if reopened.get("gui_observable_after_reopen") != "passed":
+            raise AssertionError("GUI observable-state v1 after restart not recorded")
         if snapshot(ws) != authoritative_before_restart:
             raise AssertionError("GUI reopen mutated authoritative revision data")
         if verify_history(installed_cli, ws, root, env, made["document_id"], "reopen") != ids:
@@ -137,6 +141,7 @@ def exercise(gui: Path, cli: Path) -> None:
             "qt_widget_create": True, "qt_widget_import": True,
             "qt_widget_checkout_checkin": True, "qt_widget_history": True,
             "separate_gui_process_reopen": True, "relocated_unicode_install": True,
+            "gui_observable_contract_v1": True, "gui_f5_selection_preserved": True,
             "cli_independent_exports_sha256": True, "revision_count": 2,
             "journal_workspace_unchanged_on_reopen": True,
             "source_file_unchanged": True,
