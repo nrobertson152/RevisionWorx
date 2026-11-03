@@ -28,7 +28,7 @@ jobs:
       - name: Checkout independent frozen QA source
         uses: actions/checkout@v4
         with:
-          ref: 4dd185f5f80963a9f674a55f5502f514cac643aa
+          ref: b8cd3d9639f4b5c5af63f8d7b7f1862eda64d950
           path: qa
       - uses: actions/setup-python@v5
         with:
@@ -78,7 +78,7 @@ jobs:
           path: app
       - uses: actions/checkout@v4
         with:
-          ref: 4dd185f5f80963a9f674a55f5502f514cac643aa
+          ref: b8cd3d9639f4b5c5af63f8d7b7f1862eda64d950
           path: qa
       - uses: actions/setup-python@v5
         with:
