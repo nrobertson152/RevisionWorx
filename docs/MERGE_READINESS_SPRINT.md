@@ -97,3 +97,113 @@ re-run this real-merge Windows/Linux full-suite and frozen matrix against
 that frozen core plus the chosen GUI SHA. The commit
 `664e6887cf59b090a09e954554128a57be1ca22d` exists ONLY in
 the CI temporary Git store, not in any GitHub branch or pull request.
+
+## 7. Current-head 96f9c36 + 0773bde exact real-merge compatibility and new independent P1 HOLD
+
+**Source pair:** Phase 2 `96f9c368a11fd43c0440d404c7258c7dfeacabf6`
+and Desktop GUI `0773bde599f39aee88a8a536c28673bc4a1e13f5`,
+both exact PR heads at staging. No GUI runtime changes after the earlier
+accepted UI; newest GUI commit changed docs/mockups only. Core adds
+new recovery, journal-shape validation, Windows working-file sharing,
+SQLite, checkout retry, health and GC logic, so prior QA acceptance
+cannot be inherited.
+
+**Reproducible test-only real Git merge:** The separate
+`.github/workflows/revisionworx-live-head-merge-readiness.yml`
+at Integration commit `7ac4f9a6b288055598b25ef9655070a2836c5193`
+does a complete-history source checkout, checks both commit SHAs and
+clean-tree state, invokes `tools/packaging/stage_exact_git_merge.py`,
+records the exact two-parent synthetic Git merge
+`d2e4842b48566741daff4ab7202a403a37478995`
+(never pushed), checks exact unchanged blob OIDs of
+`revisionworx/atomicio.py`, `authority.py`, `documents.py` and
+`workspace.py`, runs the **actual Git-merged tree's native full
+`python -m pytest -q -ra` suite** with Qt, builds test-only
+PyInstaller GUI and CLI and executes the full immutable revision
+lifecycle in relocated frozen directories.
+
+**[CI 41579981999](https://github.com/nrobertson152/RevisionWorx/actions/runs/41579981999):
+BOTH Windows and Ubuntu Python 3.11 jobs COMPLETE SUCCESS.**
+Ubuntu full merged suite **501 PASS, 2 SKIP, 0 FAIL**; Windows full merged
+suite **500 PASS, 3 SKIP, 0 FAIL**. Both jobs passed 9 synthetic source
+overlay safeguards, genuine two-parent Git merge, frozen GUI create,
+external import, checkout, edited-file checkin, two immutable historical
+revision SHA-256 exports via separate frozen CLI, F5 retained selection,
+separate GUI process restart, temporarily missing working-file detection
+and restoration, preserved original hashes, and copied Unicode/space
+paths. Ubuntu also passed Python/pip-absent nonroot/read-only-root
+Docker **`--network none`** and the normal GUI launch.
+Windows separately passed local 401-character path, extended-length
+path, localhost UNC-loopback read and byte-range locked-file read
+rejection. This is **automated offscreen widget acceptance**, not a
+physical Windows offline VM or human-operated GUI.
+
+**Independent Git-merger staging safeguard testing:** New
+`tools/packaging/test_stage_exact_git_merge.py` at `bdd166f`
+tests divergent repositories with successful true merge and exactly
+two source parents, mismatched source SHAs, dirty input, unresolvable
+conflict, refused unapproved core-authority changes, existing
+receipts, unsafe receipt location and source alias refusal.
+The first four-platform run
+[41580498901](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580498901)
+was RED on Windows due to Git's CRLF checkout conversion creating
+fabricated changes on cloned fixture files (Linux passes). A first
+fixture correction at `214cb42` used `-c core.autocrlf=false`
+during clone and added an `.gitattributes` LF rule, but accidentally
+encoded embedded literal backslash-n in a Python source line,
+giving an IndentationError across all platforms
+[41580643954](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580643954).
+This was corrected at exact test source
+`013c3a5eaa901db29ce6a4d691e9afcc7bdefc99`,
+with all earlier failed CI preserved.
+[**CI 41580746150**](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580746150)
+**4/4 native Windows/Ubuntu Python 3.11/3.13 SUCCESS**:
+each ran nine real Git fixture tests and nine source-overlay staging
+tests, all **18 PASS per job, zero fail**. These are safeguard
+tests for the test-only staging tool, **not production protocol approval**.
+
+**Independent safety disposition: `96f9c36` REJECT/HOLD, regardless of the
+green functional Integration CI.**
+- Independent QA
+[PR #3 malformed journal finding](https://github.com/nrobertson152/RevisionWorx/pull/3#issuecomment-6595764358)
+reproduced `Workspace.read_entry` unhandled `AttributeError` for
+valid JSON top-level non-mapping payloads, plus false-positive
+`health().ok=True` and raw `TypeError` on corrupt nested record
+types. Four-platform frozen negative controls
+[41580089612](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580089612)
+and [41580332225](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580332225)
+fail strict positive requirements. Some behavior predated
+`96f9c36`; the new advertised recovery/health contract remains
+unmet. Fix requires schema validation and positive QA acceptance,
+not a test expectation change or a blanket catch.
+- Independent Distributed Systems
+[PR #4 CAD snapshot finding](https://github.com/nrobertson152/RevisionWorx/pull/4#issuecomment-6595779332)
+used real OS two-stage CAD save-by-rename, preserving the source
+path's size/mtime but replacing the opened inode/file identity while
+`ContentStore.store_file()` reads. It can accept old bytes even though
+the final pathname points to the replacement. The content hash/journal
+are self-consistent, but source-to-revision provenance is wrong.
+[Four-platform 41580498940](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580498940)
+demonstrates the unsafe case with a strict expected positive failure
+on each job and validates `stat/fstat/stat` `(st_dev,st_ino)`
+identity check as minimum correction on actual Windows and Linux.
+Require `SourceChangedError` and **normal PASS** of the independently
+pinned corrected-source oracle before merge.
+
+**P0 Director gates remain unchanged:** Claude A must correct the P1s,
+freeze an exact new core SHA, green all four native core CI jobs
+and obtain explicit independent QA/Distributed **exact SHA** positive
+verdicts, then rerun this exact real-Git Windows/Linux integration
+matrix on the corrected paired source. PR #7 must enter the Phase 1
+branch before PR #6 can reach main; the `docs/DEVELOPMENT_PROGRESS.md`
+modify/delete conflict and Director-owned decision still block #6.
+GUI #14 follows, then independently validated QA #3,
+optional research #4, and adapter/packaging #2.
+No real merges, rebases, releases, retargets, production repins
+or changes to other agent branches occurred here.
+
+**Additional limits:** no installed interactive human GUI,
+native signed installer/upgrade/rollback, physical power-loss,
+two-host SMB/NFS, actual hostile lock namespace, socket-attempt audit
+or disconnected clean Windows VM. Test-only `--alpha-acceptance`
+wrapper MUST NOT SHIP.
