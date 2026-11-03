@@ -213,6 +213,40 @@ def reopen(root: Path, app: QApplication) -> dict:
             and reopened_state["actions"]["checkout"]
             and not reopened_state["actions"]["checkin"],
             "GUI observable state after restart inconsistent with persisted history")
+    # Failure-state acceptance on this DISPOSABLE workspace only. An ordinary
+    # working file may disappear outside the application. Its immutable history
+    # must still be visible, and the GUI must report the missing file instead
+    # of presenting it as a completed write. Restore before leaving this phase.
+    original_working_path = Path(tab.panel.working_path)
+    temporary_hidden_path = root / "temporarily missing source Ω.txt"
+    require(original_working_path.is_file(), "missing-file probe has no working file")
+    require(not temporary_hidden_path.exists(), "disposable missing-file probe destination exists")
+    original_working_path.rename(temporary_hidden_path)
+    try:
+        w.refresh_all()
+        app.processEvents()
+        missing_state = w.observable_state()
+        require(missing_state["selected_document"] == reopened_state["selected_document"]
+                and len(missing_state["history"]) == 2,
+                "external working-file loss obscured immutable revision history")
+        matching = [d for d in missing_state["documents"]
+                    if d["id"] == reopened_state["selected_document"]]
+        require(len(matching) == 1 and matching[0]["file_state"] == "missing",
+                "GUI did not report externally missing working file")
+        require(not missing_state["actions"]["checkin"],
+                "missing file unexpectedly enabled check-in")
+    finally:
+        temporary_hidden_path.rename(original_working_path)
+        w.refresh_all()
+        app.processEvents()
+    restored_state = w.observable_state()
+    matching_restored = [d for d in restored_state["documents"]
+                         if d["id"] == reopened_state["selected_document"]]
+    require(len(matching_restored) == 1
+            and matching_restored[0]["file_state"] == "unchanged"
+            and len(restored_state["history"]) == 2,
+            "GUI failed to recover document state after working file restored")
+
     result = {
         "phase": "reopen",
         "workspace": str(ws),
@@ -222,6 +256,8 @@ def reopen(root: Path, app: QApplication) -> dict:
         "history_rows": tab.history_model.rowCount(),
         "gui_reopen": "passed",
         "gui_observable_after_reopen": "passed",
+        "gui_missing_file_fail_closed": "passed",
+        "gui_missing_file_restored": "passed",
         "qt_mode": "offscreen automation; no human interactive test",
     }
     w.close()
