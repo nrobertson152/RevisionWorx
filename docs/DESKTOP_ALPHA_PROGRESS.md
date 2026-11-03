@@ -66,6 +66,54 @@ manual acceptance below.
 - Evidence for `7125d12`: CI run 41565168800 — ubuntu 3.11.17: Qt 12 passed, full 226 passed;
   windows 3.11.9: Qt 12 passed, full 224 passed, 2 skipped (same two as before).
 
+## Release-candidate work — `e5725df`, `beb1564`, `b4c6d72` (Claude B)
+CORE_API compliance, no false success, read-only when recovery-blocked, launch contract
+(`docs/GUI_LAUNCH_CONTRACT.md`), F5 keeps the selection.
+Evidence for `b4c6d72`: CI run 41567499552 — ubuntu 3.11.17: Qt 20 passed, full 242 passed;
+windows 3.11.9: Qt 20 passed, full 240 passed, 2 skipped. Integration accepted this exact commit in its
+frozen GUI/CLI matrix (run 41568957858); it has not accepted anything newer.
+
+## Checkpoint 3 — `062baa3`..`17651af` (2026-11-02, takeover from Claude B)
+First time the GUI was rendered and looked at (offscreen). Screenshots, Linux offscreen, not an
+interactive session: [default size](desktop-alpha/workspace-1200x760.png),
+[minimum size](desktop-alpha/workspace-minimum.png).
+
+| Defect on `b4c6d72` | Now |
+|---|---|
+| Default 1200x760: revision history showed no rows. Minimum 800x520: action buttons and history off screen | Project details moved to a tab; tables keep at least 3 rows; the layout sets its own minimum |
+| Selecting a document that failed to load left the previous document's actions enabled while another row was highlighted, so Check out acted on the wrong document | Panel clears, reason shown inline, F5 retries |
+| Import or adopt saved with a warning raised `TypeError` out of the GUI poll | Shown as saved with a warning |
+| Register saved with a warning showed nothing; project creation saved with a warning looked like a failure and invited a duplicate | Warning shown; the attempt ends |
+| Committed check-in, cancel or checkout reported as failed if the local token file could not be updated | Warning; the change is reported as saved |
+| Check-in outcome unreadable from the journal looked like an ordinary failure | Says it could not confirm, and to check the history before retrying |
+| Filtered-out document or project kept its actions; project list refresh dropped the selection | Cleared when hidden; selection kept otherwise |
+| Change state and three menu items enabled while recovery-blocked; project actions enabled during jobs | Disabled |
+| Quit, close or switch workspace during a job | Refused with a message |
+| Open file did nothing when no application could open the file | Reports it |
+| Errors mentioned shares and networks | Local wording (Director tier 1) |
+| A long Windows path in a label set the window's minimum width (introduced by `062baa3`, fixed in `06a9d4b`) | Clipped, with the full text in a tooltip |
+
+Regressions: `tests/test_qt_desktop_alpha_rc.py`. Against the `b4c6d72` GUI source, 25 of its first 26
+tests failed; the other is a size guard that already passed. The later long-path test failed on `062baa3`
+(1728 px).
+
+Windows CI was red on `062baa3`, `06a9d4b` and `0a07b91` (minimum width 1340 px). My first explanation,
+long paths, was wrong for that number. The width report showed the cause: the offscreen fallback font on
+Windows CI is about 1.9x wider than on Linux at the same size and DPI. The offscreen limit now scales with the
+text, and a Windows-only CI step measures on the native platform.
+
+| Where (commit `17651af`) | Command | Result |
+|---|---|---|
+| CI run 41570211687, ubuntu-latest, Python 3.11.17, PySide6/Qt 6.12.0 | `pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py` / `pytest -q -ra` | 20 passed / 269 passed |
+| same run, windows-latest, Python 3.11.9, PySide6/Qt 6.12.0 | same | 20 passed / 267 passed, 2 skipped (POSIX-permission test; case-insensitive FS test) |
+| same Windows job, `QT_QPA_PLATFORM=windows` | `pytest -q -ra -s -m qt tests/test_qt_desktop_alpha_rc.py -k "minimum_size_fits or long_paths"` | 2 passed; Segoe UI 9 pt, 96 DPI, minimum window 842x666 |
+| Local, Linux, Python 3.13, PySide6 6.12.0, as root | `QT_QPA_PLATFORM=offscreen pytest -q -ra` | 268 passed, 1 skipped (POSIX-permission test) |
+
+The first three rows count `17651af`. The local row ran on the same code before the commit.
+
+Known limits: the native step measures the window's size hints; it does not exercise dialogs or a person
+using the app. A long unbreakable path is clipped (tooltip and text selection still give the full text).
+
 ## Manual acceptance (installed GUI) — not yet performed
 1. `python -m pip install -e ".[gui]"` then `revisionworx-gui` (Windows: Start → run from venv).
 2. Start page: confirm the amber alpha banner. Create project "Test Bracket", number "T-1".
@@ -78,5 +126,7 @@ manual acceptance below.
 
 ## Next
 - Keyboard-only walkthrough and tab order (needs an interactive session; offscreen focus is unreliable).
-- Byte-level progress for very large files needs a core progress callback on `store_file` (would be A6).
+- Byte-level progress for very large files needs a core progress callback on `store_file` (A7).
+- A6 (requested in `controller.checkout`): return the checkout token with `CommittedNotApplied`, so a saved
+  checkout does not need an administrator to release it.
 - Packaging coordination with PR #2 (Windows/Linux offline bundles).

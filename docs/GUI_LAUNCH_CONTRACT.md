@@ -39,7 +39,9 @@ You can reach widgets in two ways:
 - `open_location(path, quiet=False, select_project=None) -> bool`.
 - `select_project(id)`, `selected_project_id()`, `refresh_all()` (F5), `close_ws()`.
 - `observable_state()`: see §3.
-- Object names: `main_search`, `main_new_btn`, `main_adopt_btn`, `main_table`, `main_archive_btn`, `main_open_btn`, `main_busy_label`, `projectsNotice`.
+- Object names: `main_search`, `main_new_btn`, `main_adopt_btn`, `main_table`, `main_archive_btn`, `main_open_btn`, `main_busy_label`, `projectsNotice`, `projectHeading`.
+- `tabs`: Documents (index 0, shown by default), Baseline files, Project details.
+- While a background job runs, `close()`, `close_ws()` and `open_location()` are refused (`open_location` returns `False`). Wait for `busy` to be false first.
 
 **`StartPage`**
 - `folder_edit`, `name_edit`, `number_edit`, `customer_edit`, `preview`, `error_label`, `create_btn`, `open_btn`, `recent`. Object names are `start_<attribute>`.
@@ -65,7 +67,7 @@ The method is read-only. It returns a JSON-serialisable dict and performs no I/O
 - **Projects:** `projects_notice`, `projects` (`id`, `name`, `number`), `selected_project`.
 - **Documents:** `documents_notice`, `documents` (`id`, `rel_path`, `rev`, `file_state`, `checked_out_by`).
 - **Selected document:** `selected_document`, `document_status`, `message_level` (`ok`, `warning` or `error`), `ownership`, `history` (newest first: `id`, `label`, `sha256`, `description`).
-- **Actions:** `actions` holds an enabled flag for each of `new_project`, `import`, `checkout`, `checkin`, `cancel_checkout`, `open_file`, `restore` and `compare`.
+- **Actions:** `actions` holds an enabled flag for each of `new_project`, `adopt`, `archive`, `import`, `register`, `checkout`, `checkin`, `cancel_checkout`, `change_state`, `open_file`, `restore` and `compare`. (`adopt`, `archive`, `register` and `change_state` were added at `062baa3`; existing keys are unchanged, so this is still contract 1.)
 
 `file_state` is one of `unchanged`, `modified`, `modified-externally`, `missing`, `unrevisioned` or `unavailable`.
 
@@ -74,8 +76,10 @@ The method is read-only. It returns a JSON-serialisable dict and performs no I/O
 - **Success:** `message_level == "ok"` and the history grows.
 - **Saved with a warning** (core `CommittedNotApplied`, or a txid confirmed `committed` after an unexpected error): `message_level == "warning"`, the history grows, and the status starts with "Checked in." or "Imported (saved)". It is never shown as a failure.
 - **Failure:** `message_level == "error"`. The history is unchanged, and the status never contains "Checked in".
-- **Recovery-blocked:** `read_only` is true, `health_banner` contains "RECOVERY BLOCKED" and "READ-ONLY", and every write action is disabled. Browsing, history and export still work. F5 clears this only after an administrator has repaired the workspace.
-- **Background jobs:** while `busy` is true, the import, check-out and check-in actions are disabled. Poll `ctl.drain()` together with `app.processEvents()` until `busy` is false.
+- **Unknown outcome** (an unexpected error, and the journal could not be read): `message_level == "error"` and the status says it could not confirm. Check the history; do not assume either outcome.
+- **Document unreadable:** `selected_document` is `None`, `message_level == "error"`, and the status starts with "⚠ Cannot read this document". No document actions are enabled. F5 retries.
+- **Recovery-blocked:** `read_only` is true, `health_banner` contains "RECOVERY BLOCKED" and "READ-ONLY", and every write action is disabled, including the menu items. Browsing, history and export still work. F5 clears this only after an administrator has repaired the workspace.
+- **Background jobs:** while `busy` is true, every write action is disabled. Poll `ctl.drain()` together with `app.processEvents()` until `busy` is false.
 
 ## 5. What automated runs do NOT show
 
