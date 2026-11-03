@@ -310,3 +310,91 @@ Live changed-file lists showed historical PR #2 versus #6 overlaps in four paths
 - **Unexecuted:** actual Windows internet isolation and no-Python clean VM, real historical-version migration, power interruption, hardware disk-full, true restricted ACL and remote concurrent SMB, installed GUI interaction, installer signing, authoritative production release. These remain release gates, and all relevant PRs remain draft pending Director/Claude/QA decisions. Do not retarget, merge, tag, release or modify core upstream without approval.
 
 **Engineering task handoff:** PR #2 update for Claude and QA with the exact evidence above, then hold additional packaging development until a specifically authorized newer Phase 2 pin or a reproducible acceptance defect warrants another test. Release status: not ready.
+
+## Principal integration/deployment continuation — 2026-11-02 (America/New_York)
+
+Code/procedure commit: `ab3ac4a` (full SHA in `git log`). Base integration HEAD:
+`6c5e37dc88fc1aeb729555f25c3ff26bdba9ca29`. No production authority or
+OpenSchematix source changed. New Linux offline lifecycle gate and concrete
+manual fault/recovery evidence requirements are in installed-application acceptance.
+
+### Inspection and external limitations
+
+- Working tree was clean before resuming existing `integration/openschematix`.
+- `docs/agents/README.md` and `*_ORDERS.md` are absent in both the integration
+  branch and fetched `main` (`f040da926aee9a1711257f47516d4234434d76d5`).
+  Read repository AGENTS.md, requirements, architecture, progress, integration,
+  packaging workflow and acceptance documents. The Director's chat directive
+  supplies the current assignment; no invented standing orders were used.
+- Read fetched PR #7 source/architecture/history at
+  `366d4355abcde7543122551fadaab01ac9832e01`, including ADR-021 request identity.
+  This is **not independent acceptance** of that candidate. Packaging pin stays
+  `d656884b39401134149273dd0121ef620b76eb8e`; no retarget/rebase/merge.
+- Native Git reads work. `gh pr view 2 --repo nrobertson152/RevisionWorx --comments`,
+  REST issue-comment reads, and `gh pr view 7 --json ...` all return `Forbidden`
+  from api.github.com. Latest PR comments/CI cannot be independently inspected
+  with this session's available API access. No new token requested or extracted.
+- Historical CI anchor from the existing log remains
+  https://github.com/nrobertson152/RevisionWorx/actions/runs/41392572210 ;
+  **not rerun or newly verified evidence for this commit**. Current workflow:
+  https://github.com/nrobertson152/RevisionWorx/actions/workflows/revisionworx-packaging-readiness.yml
+  (push triggers Windows/Linux jobs; outcome must be checked separately).
+
+### Executed locally (Debian 13, Python 3.12.14)
+
+From repository root, against pinned Phase 2 source extracted read-only from Git
+into `/workspace/setup/revisionworx-phase2`:
+
+```
+OPENSCHEMATIX_ORACLE_SOURCE=/workspace/OpenSchematix REVISIONWORX_PHASE2_SOURCE=/workspace/setup/revisionworx-phase2 python -m unittest discover -s tests -v
+python tools/packaging/test_builder.py
+REVISIONWORX_PHASE2_SOURCE=/workspace/setup/revisionworx-phase2 python -m unittest discover -s tools/packaging -p test_failure_recovery.py -v
+```
+
+Results respectively: **44 passed / 0 failed / 0 skipped / 0 xfail**;
+**5 passed / 0 failed / 0 skipped / 0 xfail**;
+**3 passed / 0 failed / 0 skipped / 0 xfail**. OpenSchematix oracle SHA:
+`61674fa4828075f899e3f1ea09e4f85dc9727828` (1.1.0). Integration tests confirm
+bounded reads, digest verification, nonmutation and native BOM limitations.
+
+Frozen **CLI-only** local build (not the qualified two-binary builder):
+
+```
+/workspace/venvs/openschematix/bin/python -m PyInstaller --noconfirm --onedir --name RevisionWorxCLI --distpath /workspace/setup/cli-build/dist --workpath /workspace/setup/cli-build/work --specpath /workspace/setup/cli-build --paths /workspace/setup/revisionworx-phase2 tools/packaging/cli_entry.py
+/bin/sh tools/packaging/offline_lifecycle.sh /workspace/setup/cli-build/dist/RevisionWorxCLI/RevisionWorxCLI
+```
+
+Builder Python 3.12.14, PyInstaller 6.22.3, hooks 2026.9; executable SHA-256
+`e92539fc5fce50dd9a83072b6165df6c7b88496f0c94a1d6f308f1ebf9e70fce`.
+This intentionally does **not** claim the existing Python 3.11 / PyInstaller
+6.13.0 CI builder matrix was executed locally.
+
+Built `tools/packaging/offline_container.Dockerfile` with Docker 28.4.0,
+Ubuntu 24.04 runtime image ID
+`sha256:fd0a31530ff1e25340111d6218e31cbf5d7e6d78d3c174ec0db111f475b90118`.
+Copied the shell harness into a readable temporary directory and made generated
+bundle directories readable by the non-root test UID (the local cloud checkout
+and generated directories initially had 0700 permissions). Then ran:
+
+```
+docker run --rm --network none --cap-drop ALL --read-only --tmpfs /tmp:rw,nosuid,size=128m --mount type=bind,src=/workspace/setup/cli-build/dist,dst=/bundles,readonly --mount type=bind,src=/workspace/setup/offline-harness,dst=/harness,readonly revisionworx-offline-qt /bin/sh -ec 'for tool in python python3 pip; do ! command -v "$tool"; done; test ! -e /workspace; /bin/sh /harness/offline_lifecycle.sh /bundles/RevisionWorxCLI/RevisionWorxCLI'
+```
+
+**PASS, exit 0**, non-root UID 10001, network disabled, no Python/pip command,
+no source checkout mounted, read-only binaries, writable disposable `/tmp` only.
+Project creation, document registration, two SHA-256 verified revisions,
+persisted checkout/check-in across fresh processes, reopen, original revision
+export and actual Unix directory write denial all passed. The denied project
+was absent from both disk and registry; existing revision verification passed.
+This is a command-level acceptance scenario, not additional unittest methods.
+
+### Remaining gates
+
+No Windows run or interactive GUI acceptance executed in this session; no full
+GUI bundle rebuilt locally. Shell CLI lifecycle does not demonstrate termination
+mid-write, recovery from an unexpected kill, physical ENOSPC, power loss, native
+installer upgrade/rollback, old schema migration, syscall network-attempt audit,
+or two-host SMB/NFS correctness. Existing injected recovery tests passed only
+against the old source pin. The new Phase 2 compatibility gate remains pending
+independent QA acceptance and accessible PR/CI evidence. Manual procedures use
+only disposable copies/VM snapshots and prohibit production engineering data.
