@@ -1,0 +1,8 @@
+parent_number,find_number,child_number,child_revision,quantity,unit,description,part_unit
+,,HPU-SKID,A,,,Skid-mounted HPU 7.5 kW,EA
+,,HPU-FRAME,A,,,Hydraulic power unit frame,EA
+,,MOTOR-7K5,,,,Electric motor 7.5 kW IE3,EA
+,,TANK-100L,B,,,Reservoir 100 L,EA
+HPU-SKID,1,HPU-FRAME,A,1,EA,,
+HPU-SKID,2,MOTOR-7K5,,1,EA,,
+HPU-SKID,3,TANK-100L,B,1,EA,,
