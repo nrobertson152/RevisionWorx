@@ -1,0 +1,83 @@
+name: QA changed CSV txid replay exact-source matrix
+on:
+  workflow_dispatch:
+    inputs:
+      product_sha:
+        description: 'Immutable change-control product SHA'
+        required: true
+        default: '3038c9b89e09f45b99bb3ae6a5d09a1d4066e823'
+      expected:
+        description: 'Historical negative (strict tests must fail) or corrected positive (must pass)'
+        required: true
+        type: choice
+        options:
+          - historical-negative
+          - corrected-positive
+        default: historical-negative
+jobs:
+  independent-replay:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout frozen independent QA
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install test runner
+        run: python -m pip install pytest
+      - name: Stage exact product and frozen QA test
+        shell: bash
+        env:
+          PRODUCT_SHA: ${{ inputs.product_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$PRODUCT_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$PRODUCT_SHA"
+          mkdir -p "$RUNNER_TEMP/replay-product"
+          git archive "$PRODUCT_SHA" | tar -x -C "$RUNNER_TEMP/replay-product"
+          cp tests/qa/test_change_control_pr20_independent_review.py "$RUNNER_TEMP/replay-product/tests/test_qa_changed_csv_txid_independent.py"
+          cd "$RUNNER_TEMP/replay-product"
+          python -c "import revisionworx.changes; print('change-control module present')"
+          git --version
+      - name: Verify unchanged CSV retry control
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/replay-product"
+          python -m pytest -q -ra tests/test_qa_changed_csv_txid_independent.py -k control_identical_csv_import_retry_is_idempotent
+      - name: Evaluate strict changed-payload replay requirements
+        shell: bash
+        env:
+          EXPECTED: ${{ inputs.expected }}
+        run: |
+          cd "$RUNNER_TEMP/replay-product"
+          set +e
+          python -m pytest -q -ra tests/test_qa_changed_csv_txid_independent.py -k "changed_csv_payload or csv_txid_replay" > "$RUNNER_TEMP/strict-replay.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/strict-replay.log"
+          if [ "$EXPECTED" = "historical-negative" ]; then
+            if [ "$result" -eq 0 ]; then
+              echo "::error::Historical negative control unexpectedly passed; check source pin and oracle sensitivity"
+              exit 1
+            fi
+            if ! grep -Eq '[1-9][0-9]* failed' "$RUNNER_TEMP/strict-replay.log"; then
+              echo "::error::Expected strict assertion failures, not collection/setup errors"
+              exit 1
+            fi
+            echo "HISTORICAL UNSAFE SOURCE CONFIRMED: strict replay assertions failed as expected; this is NOT product acceptance."
+          else
+            if [ "$result" -ne 0 ]; then
+              echo "::error::Corrected-source positive safety gate FAILED"
+              exit 1
+            fi
+            echo "Corrected-source strict replay assertions PASS (scoped to this matrix only)."
+          fi
