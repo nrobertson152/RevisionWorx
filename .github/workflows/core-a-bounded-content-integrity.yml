@@ -28,7 +28,7 @@ jobs:
       - name: Checkout immutable independent fixture source
         uses: actions/checkout@v4
         with:
-          ref: b93c012d
+          ref: b93c012d18783c24dde4da5273a53b98aa9cc4f7
           path: independent
           persist-credentials: false
       - name: Checkout immutable corrected production source
@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           test "$(git -C production rev-parse HEAD)" = "3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194"
           fixture_sha="$(git -C independent rev-parse HEAD)"
-          test "$(git -C independent rev-parse --short=8 HEAD)" = "b93c012d"
+          test "$(git -C independent rev-parse HEAD)" = "b93c012d18783c24dde4da5273a53b98aa9cc4f7"
           echo "PRODUCTION_SHA=$(git -C production rev-parse HEAD)"
           echo "TEST_SHA=$fixture_sha"
           test -f independent/tests/test_core_bounded_content_integrity.py
