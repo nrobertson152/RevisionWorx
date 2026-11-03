@@ -405,6 +405,11 @@ class Controller:
         return self._run("checkin", job, on_done)
 
     # ------------------------------------------------------------------ background jobs
+    @property
+    def busy(self) -> bool:
+        """A background write/scan is running (only one at a time)."""
+        return self._busy.locked()
+
     def cancel(self) -> None:
         self._cancel.set()
 

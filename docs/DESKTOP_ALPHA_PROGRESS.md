@@ -54,6 +54,18 @@ manual acceptance below.
 - **A5 Public accessors** for what the GUI reaches privately: `documents._require_doc`,
   `documents.lc_mod.allowed_targets`, and `LocalIndex.db` (project file listing).
 
+## Checkpoint 2 — `7125d12` + busy-state commit (2026-11-02)
+- **Working-file column** in the document list (OK / Edited / Changed, not checked out / Missing /
+  Unavailable) from core `document_status` (size+mtime, hash only when needed); red/amber rows and a
+  "need attention" notice. Problems are visible without opening each document.
+- **Restore to working file** (while checked out, older revisions only, confirmation first) via core
+  `restore_to_working`. History is never rewritten; the next check-in records `restored_from`.
+- **Compare with previous** via core `compare_revisions` (metadata only; CAD content is not diffed).
+- **Busy state**: while an import/check-in/scan runs, the status bar says so and check-out, check-in,
+  cancel and import are disabled; a second job is refused, not queued.
+- Evidence for `7125d12`: CI run 41565168800 — ubuntu 3.11.17: Qt 12 passed, full 226 passed;
+  windows 3.11.9: Qt 12 passed, full 224 passed, 2 skipped (same two as before).
+
 ## Manual acceptance (installed GUI) — not yet performed
 1. `python -m pip install -e ".[gui]"` then `revisionworx-gui` (Windows: Start → run from venv).
 2. Start page: confirm the amber alpha banner. Create project "Test Bracket", number "T-1".
@@ -65,8 +77,6 @@ manual acceptance below.
 7. Record OS, Python and Qt versions and any deviations on Issue #13.
 
 ## Next
-- Keyboard-only walkthrough and tab order; accessible names on remaining controls.
-- Document list status column (missing/modified-externally) without opening each document.
-- Restore-earlier-revision-to-working (core `restore_to_working` exists) and compare revisions.
-- Long operations: progress for large imports/check-ins; cancel where safe.
+- Keyboard-only walkthrough and tab order (needs an interactive session; offscreen focus is unreliable).
+- Byte-level progress for very large files needs a core progress callback on `store_file` (would be A6).
 - Packaging coordination with PR #2 (Windows/Linux offline bundles).

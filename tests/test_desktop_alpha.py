@@ -394,3 +394,20 @@ def test_compare_with_previous_revision(started):
     assert panel.can_compare(0) and not panel.can_compare(1)
     text = panel.compare_text(0)
     assert "different" in text and "Second revision" in text and "not diffed" in text
+
+
+def test_actions_disabled_while_background_job_runs(started):
+    c, home, project, src = started
+    doc, _ = c.import_document(project["id"], src, "")
+    panel = DocumentPanel(c)
+    panel.load(doc["id"])
+    vm = DocumentListModel(c)
+    vm.load(project["id"])
+    assert panel.can_checkout and vm.can_add and not c.busy
+    c._busy.acquire()  # simulate a long-running import/check-in holding the single job slot
+    try:
+        assert c.busy and not panel.can_checkout and not vm.can_add
+        assert not c.start_import(project["id"], src, "")  # refused, not queued behind
+    finally:
+        c._busy.release()
+    assert panel.can_checkout

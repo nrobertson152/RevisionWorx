@@ -157,6 +157,10 @@ class MainWindow(QMainWindow):
         self.status_vm.subscribe(self.render_health)
         self.render_list()
         self.render_details()
+        self.busy_label = QLabel(self)
+        self.busy_label.setAccessibleName("Background task status")
+        self.statusBar().addPermanentWidget(self.busy_label)
+        self._was_busy = False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(100)
@@ -355,6 +359,12 @@ class MainWindow(QMainWindow):
 
     def poll(self) -> None:
         """Deliver background results on the GUI thread (never block on network I/O)."""
+        busy = self.ctl.busy
+        if busy != self._was_busy:  # enable/disable actions that would collide with the job
+            self._was_busy = busy
+            self.busy_label.setText("Working… (copying and hashing)" if busy else "")
+            self.documents_tab.render_list()
+            self.documents_tab.render_panel()
         for ev in self.ctl.drain():
             if isinstance(ev, Progress):
                 for d in self.adopt_dialogs:

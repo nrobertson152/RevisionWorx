@@ -382,7 +382,8 @@ class DocumentListModel(Observable):
     @property
     def can_add(self) -> bool:
         p = self.project
-        return bool(p and p.get("mode") == "managed" and p.get("status") == "active" and p.get("folder"))
+        return bool(p and p.get("mode") == "managed" and p.get("status") == "active" and p.get("folder")
+                    and not self.ctl.busy)
 
     @property
     def notice(self) -> str:
@@ -524,11 +525,11 @@ class DocumentPanel(Observable):
     @property
     def can_checkout(self) -> bool:
         return bool(self.detail) and self.detail["checkout"] is None and \
-            self.detail["document"]["status"] == "active"
+            self.detail["document"]["status"] == "active" and not self.ctl.busy
 
     @property
     def can_checkin(self) -> bool:
-        return bool(self.detail) and self.detail["mine"]
+        return bool(self.detail) and self.detail["mine"] and not self.ctl.busy
 
     can_cancel = can_checkin
 
