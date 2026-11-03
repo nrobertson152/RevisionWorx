@@ -1,0 +1,40 @@
+name: RevisionWorx offline backup restore rehearsal
+on:
+  push:
+    branches: [integration/openschematix]
+    paths:
+      - '.github/workflows/revisionworx-backup-rehearsal.yml'
+      - 'tools/packaging/offline_backup_rehearsal.py'
+      - 'tests/test_offline_backup_rehearsal.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup-rehearsal:
+    name: backup-rehearsal-${{ matrix.os }}-py311
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Record source and runtime identity
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          python --version
+          python -c "import platform; print(platform.platform())"
+      - name: Execute isolated backup/restore regression suite
+        shell: bash
+        run: python -m unittest discover -s tests -p test_offline_backup_rehearsal.py -v
+      - name: Check command-line entrypoint without mutating a workspace
+        shell: bash
+        run: python tools/packaging/offline_backup_rehearsal.py --help
