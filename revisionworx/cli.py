@@ -180,7 +180,7 @@ def cmd_verify(args):
     if report["repaired"]:
         lines.append("Records were rebuilt from the journal; displaced files are in .revisionworx/quarantine/.")
     _emit(args, report, "\n".join(lines))
-    if report["problems"] and not report["repaired"]:
+    if any(p.get("severity") != "info" for p in report["problems"]) and not report["repaired"]:
         raise SystemExit(1)
 
 

@@ -209,10 +209,16 @@ Done:
   found one more defect, now fixed: a stopped check-in resumed after its own retry finished and reported `NotCheckedOut`
   for a saved change.
 
+- More fixes, each with a failing test first: `verify` no longer fails forever after a correct fencing, or calls unapplied
+  entries damage; an unreadable `writer.lock` has a way out (`lock break --token ?`, then `clear-orphan`); new folders are
+  synced before anything refers to them (order tested, power loss not); old `.rwx-*.tmp` files beside a working file are
+  swept; `doc verify` audits the journal for changed revisions; A4 and A6 from Claude B.
+- Core CI 41578257430 at `12e4c49`: all four jobs passed. Ubuntu 3.11 and 3.13: 349 passed, 3 skipped. Windows 3.11 and 3.13:
+  350 passed, 2 skipped, 5/5 contention trials each.
+
 Not done yet, in priority order:
 1. Exhaustive local run of the systematic explorer, plus its negative control on historical sources.
-2. Sweep old `.<name>.rwx-*.tmp` leftovers next to a working file after a crash.
-3. Claude B's API requests A1-A7 (triage on PR #7).
+2. Claude B's remaining API requests: A1, A2, A3, A5, A7 (A4 and A6 are done).
 
 Known and watched:
 - The 21 s outlier in Windows contention trial 3 is not the product: with `--durations` (run 41577700770) the tests took

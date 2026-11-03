@@ -125,6 +125,21 @@ def _write_temp(directory: Path, data: bytes, stem: str) -> Path:
     return tmp
 
 
+def make_dirs(path: Path) -> None:
+    """Create a folder and its missing parents, syncing each new entry into its parent. Otherwise a synced file inside
+    can vanish with its folder on power loss, after a journal entry has already been written that refers to it."""
+    missing, current = [], Path(path)
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for folder in reversed(missing):
+        try:
+            folder.mkdir()
+        except FileExistsError:
+            pass
+        _fsync_dir(folder.parent)
+
+
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     """Replace ``path`` atomically with ``data`` (create if missing)."""
     path = Path(path)

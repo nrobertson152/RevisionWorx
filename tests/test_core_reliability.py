@@ -729,3 +729,200 @@ def test_content_store_publishes_through_the_one_exclusive_primitive(world, monk
     path.write_bytes(b"new content")
     stored = store.store_file(path)
     assert moved == [stored.sha256] and store.verify(stored.sha256)
+
+
+# ------------------------------------------------------------------------ a way out of every refusal
+def test_a_correctly_fenced_entry_does_not_fail_verify_forever(share, capsys):
+    """Was: one correct fencing left `verify` exiting 1 for the life of the workspace, with nothing able to clear it."""
+    from revisionworx import cli
+    ws = Workspace.create(share, "t")
+    paused_past_checks(ws, lambda: Workspace.break_writer_lock(share, ws._lock_token, "unresponsive"))
+    with pytest.raises(LockLostError):
+        ws.commit("t", [RecordPut("root", RID, {"name": "x"}, expect_rev=0)])
+    ws._lock_token = None
+    ws.close()
+    with Workspace.open(share) as reader:
+        report = reader.verify()
+    assert [(p["problem"], p["severity"]) for p in report["problems"]] == [("fenced-entry", "info")]
+    assert cli.main(["-w", str(share), "verify"]) in (0, None)   # still listed, but nothing is wrong
+    assert "fenced-entry" in capsys.readouterr().out
+
+
+def test_verify_does_not_call_lag_damage(share, monkeypatch):
+    """Was: after a crash, a read-only verify reported a saved change as 'missing' until the next writer opened. The reads
+    were right all along. Only what should already be materialised can be wrong."""
+    from revisionworx.workspace import CommittedNotApplied
+    ws = Workspace.create(share, "t")
+
+    def fail(entry):
+        raise OSError("injected: crash while materialising")
+    monkeypatch.setattr(ws, "_apply", fail)
+    with pytest.raises(CommittedNotApplied):
+        ws.commit("t", [RecordPut("root", RID, {"name": "x"}, expect_rev=0)])
+    with Workspace.open(share) as reader:
+        report = reader.verify()
+        assert report["problems"] == [] and report["applied_seq"] < report["head_seq"]
+        assert reader.get("root", RID)["name"] == "x"
+    monkeypatch.undo()
+    ws.close()
+    atomicio.atomic_write_json(share / ".revisionworx" / "records" / "settings" / "workspace.json", {"tampered": True, REV_FIELD: 1})
+    with Workspace.open(share) as reader:
+        assert [p["problem"] for p in reader.verify()["problems"]] == ["mismatch"]     # damage is still damage
+
+
+def test_verify_still_fails_on_a_real_problem_beside_a_fenced_entry(share):
+    from revisionworx import cli
+    ws = Workspace.create(share, "t")
+    seq = ws.commit("t", [RecordPut("root", RID, {"name": "x"}, expect_rev=0)])
+    paused_past_checks(ws, lambda: Workspace.break_writer_lock(share, ws._lock_token, "unresponsive"))
+    with pytest.raises(LockLostError):
+        ws.commit("t", [RecordPut("root", OTHER, {"name": "y"}, expect_rev=0)])
+    ws._lock_token = None
+    ws.close()
+    atomicio.atomic_write_json(share / ".revisionworx" / "records" / "root" / f"{RID}.json", {"name": "bad", REV_FIELD: seq})
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-w", str(share), "verify"])
+    assert exc.value.code == 1
+
+
+def test_an_unreadable_writer_lock_has_a_way_out(share, capsys):
+    """Was a dead end: every writer was told '?@? holds it', `lock show` raised a raw ValueError and `lock break` could
+    not name the token. No RevisionWorx crash writes this file partially, but a disk fault could."""
+    from revisionworx import cli
+    with Workspace.create(share, "t"):
+        pass
+    lock = share / ".revisionworx" / "locks" / "writer.lock"
+    lock.write_bytes(b"\x00garbage")
+    assert Workspace.read_writer_lock(share)["unreadable"] is True
+    assert cli.main(["-w", str(share), "lock", "show"]) in (0, None)
+    with pytest.raises(WorkspaceError):
+        Workspace.open(share, writable=True)
+    with pytest.raises(WorkspaceCorruptError, match="clear-orphan") as exc:
+        Workspace.break_writer_lock(share, "?", "the file is damaged")
+    assert not lock.exists()
+    orphan = [p for p in lock.parent.glob(".releasing-*")]
+    assert len(orphan) == 1 and orphan[0].name in str(exc.value)    # the message names the file to clear
+    with pytest.raises(WorkspaceCorruptError):                     # still blocked: its writer is unknown
+        Workspace.open(share, writable=True)
+    assert Workspace.clear_orphaned_release(share, orphan[0].name, "writer stopped")["outcome"] == "completed"
+    with Workspace.open(share, writable=True) as ws:
+        assert ws.verify()["problems"] == []
+    capsys.readouterr()
+
+
+def test_breaking_needs_the_token_when_the_lock_is_readable(share):
+    with Workspace.create(share, "t"):
+        pass
+    holder = Workspace.open(share, writable=True)
+    with pytest.raises(WorkspaceError, match="changed since it was inspected"):
+        Workspace.break_writer_lock(share, "?", "guessing")
+    assert Workspace.read_writer_lock(share)["token"] == holder._lock_token
+    holder.close()
+
+
+# ------------------------------------------------------------------------ durability of new folders
+def test_new_folders_are_made_durable_before_anything_refers_to_them(world, monkeypatch):
+    """A synced file in a folder whose own entry was never synced can vanish with the folder on power loss, so a journal
+    entry could refer to content that is gone. Only the ordering can be tested here; power loss itself is not."""
+    if atomicio.IS_WINDOWS:
+        pytest.skip("Windows cannot fsync a directory; NTFS journals metadata")
+    _, ws, _, doc, path = world
+    synced, real = [], atomicio._fsync_dir
+
+    def spy(directory):
+        synced.append(Path(directory))
+        return real(directory)
+    monkeypatch.setattr(atomicio, "_fsync_dir", spy)
+    store = content.ContentStore(ws)
+    shutil.rmtree(ws.meta_dir / "content")
+    path.write_bytes(b"new content in a new folder")
+    stored = store.store_file(path)
+    final = store.path_for(stored.sha256)
+    assert final.parent.parent in synced, "the new aa/ folder's entry was never synced"
+    assert ws.meta_dir / "content" / "sha256" in synced and ws.meta_dir / "content" in synced and ws.meta_dir in synced
+    assert final.parent in synced
+    synced.clear()
+    ws.write_blob("baseline", {"a": 1})
+    assert ws.meta_dir / "blobs" in synced, "the new blob kind's folder entry was never synced"
+
+
+# ------------------------------------------------------------------------ leftovers next to working files
+def test_old_working_file_temp_files_are_swept_but_nothing_else(world):
+    """A crash during revert or restore can leave a temp file beside the working file, in the company's folder."""
+    _, ws, _, doc, path = world
+    co = D.checkout(ws, doc["id"])
+    old = [path.with_name(f".{path.name}.rwx-deadbeef.tmp"), path.with_name(f"..{path.name}.rwx-deadbeef.tmp.ab12.tmp")]
+    young = path.with_name(f".{path.name}.rwx-cafecafe.tmp")
+    theirs = [path.with_name(".other.ipt.rwx-deadbeef.tmp"), path.with_name(".~lock.bracket.ipt#"),
+              path.with_name(f".{path.name}.tmp")]
+    for p in [*old, young, *theirs]:
+        p.write_bytes(b"x")
+    for p in [*old, *theirs]:
+        os.utime(p, (1, 1))
+    D.cancel_checkout(ws, doc["id"], co["token"], revert=True)
+    assert not any(p.exists() for p in old)
+    assert young.exists() and all(p.exists() for p in theirs)
+
+
+# ------------------------------------------------------------------------ saved, with a lost answer
+def test_a_saved_checkout_hands_back_its_token_when_materialising_fails(world, monkeypatch):
+    """Claude B's A6. The change IS saved. Without its token only an administrator could have released the checkout."""
+    from revisionworx.workspace import CommittedNotApplied
+    _, ws, _, doc, path = world
+
+    def fail(entry):
+        raise OSError("injected: disk full while materialising")
+    monkeypatch.setattr(ws, "_apply", fail)
+    with pytest.raises(CommittedNotApplied) as exc:
+        D.checkout(ws, doc["id"])
+    token = exc.value.result["token"]
+    monkeypatch.undo()
+    assert ws.get("checkout", doc["id"])["token"] == token
+    D.cancel_checkout(ws, doc["id"], token)
+
+
+def test_a_missing_working_file_has_its_own_error(world):
+    """Claude B's A4. The GUI was matching the words 'does not exist'."""
+    _, ws, _, doc, path = world
+    co = D.checkout(ws, doc["id"])
+    path.unlink()
+    with pytest.raises(D.MissingFileError):
+        D.checkin(ws, doc["id"], co["token"], "edit")
+    assert issubclass(D.MissingFileError, D.DocumentError)
+
+
+# ------------------------------------------------------------------------ immutable history
+def test_history_audit_is_clean_on_normal_use(world):
+    _, ws, _, doc, path = world
+    co = D.checkout(ws, doc["id"])
+    path.write_bytes(b"v2")
+    rev = D.checkin(ws, doc["id"], co["token"], "second")
+    for state in ("in_review", "approved", "released"):
+        D.transition(ws, rev["id"], state)
+    assert D.audit_history(ws) == []
+
+
+@pytest.mark.parametrize("change, problem", [
+    ({"sha256": "0" * 64}, "immutable-field-changed"),
+    ({"description": "rewritten"}, "immutable-field-changed"),
+    ({"transitions": []}, "transitions-rewritten"),
+], ids=["content", "description", "transitions"])
+def test_history_audit_finds_a_revision_rewritten_through_the_journal(world, change, problem):
+    """commit() is generic, so a bug could rewrite a revision. Nothing reported that. A published revision must never change."""
+    _, ws, _, doc, path = world
+    rid = doc["latest_rev_id"]
+    D.transition(ws, rid, "in_review")
+    rev = ws.get("revision", rid)
+    forged = {k: v for k, v in rev.items() if k != REV_FIELD}
+    forged.update(change)
+    ws.commit("bug", [RecordPut("revision", rid, forged, expect_rev=rev[REV_FIELD])])
+    found = D.audit_history(ws)
+    assert [p["problem"] for p in found] == [problem] and found[0]["revision_id"] == rid
+
+
+def test_history_audit_finds_a_revision_deleted_through_the_journal(world):
+    from revisionworx.workspace import RecordDelete
+    _, ws, _, doc, path = world
+    rid = doc["latest_rev_id"]
+    ws.commit("bug", [RecordDelete("revision", rid, expect_rev=ws.get("revision", rid)[REV_FIELD])])
+    assert "revision-deleted" in [p["problem"] for p in D.audit_history(ws)]

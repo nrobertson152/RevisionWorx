@@ -80,7 +80,7 @@ class ContentStore:
         self.ws._require_writable()
         source = Path(source)
         before = os.stat(source)
-        self.root.mkdir(parents=True, exist_ok=True)
+        atomicio.make_dirs(self.root)
         tmp = self.root / f".incoming.{secrets.token_hex(8)}.tmp"
         h = hashlib.sha256()
         size = 0
@@ -100,7 +100,7 @@ class ContentStore:
                 raise SourceChangedError(f"{source} changed while it was being stored; save it, then try again")
             digest = h.hexdigest()
             final = self.path_for(digest)
-            final.parent.mkdir(exist_ok=True)
+            atomicio.make_dirs(final.parent)
             reused = False
             if final.exists():
                 if hash_file(final)[0] != digest:

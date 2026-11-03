@@ -45,7 +45,7 @@ which test would fail if it broke. Design reasoning is in `docs/ARCHITECTURE.md`
 | W2 | **A token-bearing lock file stops blocking only after the token read from that file is durably revoked.** The owner removing its own file is the only exception. | `_displace_writer_lock`, `_fence_token_orphan` |
 | W3 | A new holder writes nothing until it has scanned, so every token displaced before it took the name is revoked first. The rename out of `writer.lock` happens before the name can be free, so the scan cannot miss it. | `_acquire_writer_lock`, `_fence_orphaned_releases` |
 | W4 | An earlier read of the lock is only permission to look. Anything moved is inspected after the move. | `_unlink_own_lock`, `_displace_writer_lock` |
-| W5 | An unreadable blocking file stops all writers until an administrator's audited clear. | `fence_all`, `clear_orphaned_release` |
+| W5 | An unreadable blocking file stops all writers until an administrator's audited clear, and every refusal names a way out. | `fence_all`, `clear_orphaned_release`, `break_writer_lock --token ?` |
 | W6 | A healthy holder is never told it lost the lock because of a transient read failure. | `atomicio.read_json` bounded retry |
 
 **Interruption windows**
@@ -107,6 +107,7 @@ and reopens. That is lost availability, never lost data.
 | D3 | Stored content is never modified. A damaged object is detected, never reused. | Exclusive publish, re-hash on reuse |
 | D4 | A check-in never modifies the working file. Revert and restore replace it atomically from verified content, or not at all. | `_write_working_from_store` |
 | D5 | GC removes only unreferenced content older than its age limit, and records the intent first. | `gc_content` |
+| D8 | A published revision never changes: immutable fields stay, transitions only append, nothing is deleted. `commit` cannot enforce this, so an audit of the journal reports any breach. | `_guard_immutable`, `audit_history` (`doc verify`) |
 | D6 | **A read equals the journal.** A record file is used only if its `_rev` is exactly the journal's last effective write. A late write by a stale writer cannot change an answer or a decision. | `get`, `list`, ADR-022 |
 | D7 | A damaged journal keeps read access to a fully applied workspace and refuses writes. | `_effective_writes`, `commit` |
 
@@ -116,7 +117,6 @@ and reopens. That is lost availability, never lost data.
   which is worse. Left as is, deliberately.
 - GC running in a process that has lost its lock could delete an orphan a new writer has just started reusing. It would
   need an administrator to break the lock of a live GC during that same instant. Not closed; recorded here.
-- A crash can leave `.<name>.rwx-*.tmp` next to a working file. Harmless, but it is litter in a company folder.
 - A file altered by an outside program while keeping its `_rev` is served until `verify` reports it (ADR-022).
 
 **Tests:** `test_process_crash_matrix.py` (each operation), `test_materialisation_authority.py`, `test_documents.py`.

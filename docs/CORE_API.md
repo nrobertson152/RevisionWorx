@@ -96,10 +96,11 @@ d.cancel_checkout(ws, doc_id, token, revert=False) -> None
 | `NotCheckedOut`, `TokenMismatch` | No checkout, or someone else's. | Refresh the view; offer read-only. |
 | `StaleCheckout` | A newer revision exists; nothing was written. | Tell the user to save a copy, check out again and merge. |
 | `NoChanges` | File identical to the latest revision. | Offer cancel checkout. |
-| `DocumentError` | Other validation (missing file, link, archived document). | Show the message. |
+| `MissingFileError` (a `DocumentError`) | The working file is not there. | Tell the user to put it back. |
+| `DocumentError` | Other validation (link, archived document). | Show the message. |
 | `ConflictError` | Someone changed the record since you read it; nothing written. | Reload and let the user retry. |
 | `LockLostError` | This writable handle lost authority; nothing took effect. | Close the handle, reopen and retry the action. |
-| `CommittedNotApplied(seq, txid)` | **The change IS saved.** Only derived files lag. | Report success with a warning. **Do not retry as a failure.** |
+| `CommittedNotApplied(seq, txid)` | **The change IS saved.** Only derived files lag. `.result` holds what `checkout` or `checkin` would have returned, including the checkout token. | Report success with a warning. Keep the token. **Do not retry as a failure.** |
 | `TxidReuseError` / `IdentityUnverifiable` | The txid was used for a different request / a pre-ADR-021 entry. | Programming error / ask `ws.transaction_outcome(txid)`. |
 
 `ws.transaction_outcome(txid) -> {"state": "committed" | "fenced" | "not-found", "seq"?}` answers
@@ -121,6 +122,9 @@ RevisionWorx process is using it: nothing is wrong, so try again. A damaged cach
 now includes `baselines_unavailable`, the projects whose file list could not be read.
 
 ## Change log
+- 2026-11-02: `MissingFileError` and `CommittedNotApplied.result` are new (Claude B's A4 and A6). `verify` marks `fenced-entry` with
+  `severity: info`, and the CLI no longer exits 1 for it alone. `doc verify` also audits the journal for changed revisions.
+  `read_writer_lock` reports an unreadable lock as `{"token": "?", "unreadable": True}` instead of raising `ValueError`.
 - 2026-11-02 (`feffbcf`): `checkin(txid=...)` retries now return the original revision, as this page always said.
   Before, a retry raised `NotCheckedOut` or `TxidReuseError`. `IndexBusyError` is new. `get`/`list` ignore record files
   the journal never wrote. No signature changed. `CheckoutTokens` now stores one file per checkout; its API is unchanged,

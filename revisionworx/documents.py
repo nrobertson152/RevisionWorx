@@ -13,6 +13,7 @@ import io
 import os
 import secrets
 import stat
+import time
 import uuid
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from . import lifecycle as lc_mod
 from .content import ContentStore, hash_file
 from .filetypes import classify
 from .lifecycle import LifecycleError
-from .workspace import (ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
+from .workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
                         Workspace, WorkspaceError, current_actor, new_id, now_iso, register_kind, strip_rev)
 
 for _kind in ("doctype", "document", "revision", "checkout", "lifecycle"):
@@ -68,6 +69,10 @@ class TokenMismatch(DocumentError):
 
 class NoChanges(DocumentError):
     pass
+
+
+class MissingFileError(DocumentError):
+    """The file is not there. Worth telling apart from other refusals: the user can put it back."""
 
 
 class ImmutableRevisionError(DocumentError):
@@ -158,7 +163,7 @@ def _regular_file(path: Path) -> None:
     try:
         st = os.lstat(path)
     except FileNotFoundError:
-        raise DocumentError(f"{path} does not exist") from None
+        raise MissingFileError(f"{path} does not exist") from None
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
         raise DocumentError(f"{path} is not a regular file (links are not followed)")
 
@@ -309,6 +314,9 @@ def checkout(ws: Workspace, doc_id: str, note: str = "", expected_doc_rev: int |
         if exc.kind == "checkout":
             raise CheckoutConflict(ws.get("checkout", doc_id) or {}) from exc
         raise
+    except CommittedNotApplied as exc:
+        exc.result = {**co, "_rev": exc.seq}     # saved: without its token only an administrator could release it
+        raise
     return {**co, "_rev": seq}
 
 
@@ -384,14 +392,32 @@ def _checkin(ws: Workspace, doc_id: str, token: str, description: str, label: st
     rev = _new_revision(doc, number, chosen, stored, description.strip(), doc["latest_rev_id"],
                         get_lifecycle(ws)["initial"], co.get("restored_from"))
     new_doc = {**strip_rev(doc), "latest_rev_id": rev["id"], "rev_count": number, "modified": now_iso()}
-    seq = ws.commit("document.checkin", [
-        RecordPut("revision", rev["id"], rev, expect_rev=0),
-        RecordPut("document", doc_id, new_doc, expect_rev=doc["_rev"]),
-        RecordDelete("checkout", doc_id, expect_rev=co["_rev"])], txid=txid)
+    try:
+        seq = ws.commit("document.checkin", [
+            RecordPut("revision", rev["id"], rev, expect_rev=0),
+            RecordPut("document", doc_id, new_doc, expect_rev=doc["_rev"]),
+            RecordDelete("checkout", doc_id, expect_rev=co["_rev"])], txid=txid)
+    except CommittedNotApplied as exc:
+        exc.result = {**rev, "_rev": exc.seq}
+        raise
     return {**rev, "_rev": seq}
 
 
+def _sweep_working_temps(path: Path) -> None:
+    """Remove temp files a crash left beside this working file, and only those: it is the company's folder. A young
+    one may belong to a writer that is still at work."""
+    cutoff = time.time() - atomicio.ORPHAN_TEMP_MIN_AGE_SECONDS
+    for entry in path.parent.iterdir():
+        if entry.name.endswith(".tmp") and entry.name.startswith((f".{path.name}.rwx-", f"..{path.name}.rwx-")):
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    atomicio.remove_quietly(entry)
+            except OSError:
+                pass
+
+
 def _write_working_from_store(ws: Workspace, sha256: str, path: Path) -> None:
+    _sweep_working_temps(path)
     tmp = path.with_name(f".{path.name}.rwx-{uuid.uuid4().hex[:8]}.tmp")
     try:
         ContentStore(ws).export(sha256, tmp)
@@ -551,6 +577,36 @@ def verify_revisions(ws: Workspace, doc_id: str | None = None) -> list[dict]:
         if not store.verify(rev["sha256"]):
             problems.append({"revision_id": rev["id"], "document_id": rev["document_id"],
                              "label": rev["label"], "problem": "content missing or damaged"})
+    problems.extend(p for p in audit_history(ws) if not doc_id or p["document_id"] == doc_id)
+    return problems
+
+
+def audit_history(ws: Workspace) -> list[dict]:
+    """Check from the journal that no published revision ever changed. ``commit`` is generic, so only the code calling it
+    keeps revisions immutable; this is what would notice if it ever failed to. Reads every effective entry."""
+    seen: dict[str, dict] = {}
+    problems: list[dict] = []
+
+    def report(problem: str, rid: str, seq: int, **details) -> None:
+        problems.append({"problem": problem, "revision_id": rid, "seq": seq,
+                         "document_id": seen.get(rid, {}).get("document_id"), **details})
+    for entry in ws.entries_after(0):
+        for item in entry["records"]:
+            if item["kind"] != "revision":
+                continue
+            rid, seq = item["id"], entry["seq"]
+            if item.get("delete"):
+                report("revision-deleted", rid, seq)
+                continue
+            old, new = seen.get(rid), item["data"]
+            if old is not None:
+                changed = [f for f in IMMUTABLE_REVISION_FIELDS if old.get(f) != new.get(f)]
+                if changed:
+                    report("immutable-field-changed", rid, seq, fields=changed)
+                before, after = old.get("transitions", []), new.get("transitions", [])
+                if after[:len(before)] != before:
+                    report("transitions-rewritten", rid, seq)
+            seen[rid] = new
     return problems
 
 
@@ -622,7 +678,6 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
     requires the writer lock (no check-in can be storing concurrently); every revision record,
     including unapplied journal entries, is a reference; objects younger than ``min_age_seconds`` are
     kept; dry-run by default; removals are recorded in the journal as an audit record."""
-    import time
     ws._require_writable()
     store = ContentStore(ws)
     referenced = {r["sha256"] for r in ws.list("revision").values()}

@@ -139,6 +139,8 @@ class CommittedNotApplied(WorkspaceError):
     It will be completed automatically on the next writable open. Callers must not retry it as if
     it had failed."""
 
+    result: dict | None = None  # what the operation would have returned, if it has something worth keeping
+
     def __init__(self, seq: int, txid: str, cause: BaseException):
         self.seq, self.txid, self.cause = seq, txid, cause
         super().__init__(f"change {seq} (tx {txid}) is saved, but updating derived records failed: "
@@ -272,6 +274,8 @@ class Workspace:
                 raise exists from exc
         for sub in cls._SKELETON:
             (meta / sub).mkdir(exist_ok=True)
+        atomicio._fsync_dir(meta.parent)
+        atomicio._fsync_dir(meta)
         info = {"format": FORMAT_NAME, "format_version": FORMAT_VERSION,
                 "workspace_id": new_id("ws"), "name": name, "created": now_iso(),
                 "created_by": current_actor()}
@@ -545,10 +549,12 @@ class Workspace:
         tok = holder.get("token")
         if not tok:
             # What we took custody of is not what we inspected: keep it as a blocking orphan.
-            os.replace(custody, locks / f".releasing-{uuid.uuid4().hex}")
+            quarantine = locks / f".releasing-{uuid.uuid4().hex}"
+            os.replace(custody, quarantine)
             raise WorkspaceCorruptError(
-                f"orphaned lock-release file {orphan.name} changed while being fenced; nobody may write "
-                "until an administrator runs 'revisionworx lock clear-orphan'")
+                f"orphaned lock-release file {quarantine.name} is unreadable, so its writer cannot be revoked; nobody "
+                "may write until an administrator confirms that writer is stopped and runs "
+                f"'revisionworx lock clear-orphan {quarantine.name}'")
         evidence = (planned_evidence or {}).get(tok) or f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}"
         if tok not in Workspace._revoked_tokens(meta):
             Workspace._publish_revocation(meta, holder, reason=reason, evidence=evidence)
@@ -569,6 +575,8 @@ class Workspace:
             return atomicio.read_json(lock)
         except FileNotFoundError:
             return None
+        except ValueError:
+            return {"user": "?", "host": "?", "pid": "?", "acquired": "?", "token": "?", "unreadable": True}
 
     # ADR-019 rev. 3: one administrative clear per orphan instance, bound to the bytes it archives.
     ORPHAN_AUTH_OP = "workspace.orphan.clear"
@@ -859,6 +867,11 @@ class Workspace:
             raise WorkspaceError("there is no writer lock to break")
         if holder.get("token") != expected_token:
             raise WorkspaceError("the writer lock changed since it was inspected; inspect it again")
+        if holder.get("unreadable"):
+            # Its writer cannot be revoked by name, so this cannot unblock anyone by itself. It turns the file into an
+            # orphan, which needs the audited clear. The scan refuses all writers until then.
+            cls._displace_writer_lock(meta, {}, reason)
+            return holder
         broken = f"writer.lock.broken-{uuid.uuid4().hex[:8]}"
         cls._publish_revocation(meta, holder, reason=reason, evidence=broken)
         # Archiving is optional (acquisition also clears a revoked lock). This check only avoids
@@ -1135,6 +1148,8 @@ class Workspace:
             self._require_writable()
             self.recover()
         expected: dict[tuple[str, str], dict | None] = {}
+        pending: set[tuple[str, str]] = set()   # written by entries not materialised yet: lag, not damage
+        applied = self.applied_seq()
         problems: list[dict] = []
         auths, results = Workspace._orphan_clear_state(self.meta_dir, self)
         for a in auths:  # ADR-019 rev. 3: archived evidence must still be the audited bytes
@@ -1155,11 +1170,14 @@ class Workspace:
             if "digest" not in entry:
                 problems.append({"problem": "entry-without-digest", "seq": s})
             if self.is_fenced(entry):
-                problems.append({"problem": "fenced-entry", "seq": s, "op": entry.get("op")})
+                # Information, not damage: this is fencing having worked. Nothing can or needs to clear it.
+                problems.append({"problem": "fenced-entry", "severity": "info", "seq": s, "op": entry.get("op")})
                 continue
             for item in entry["records"]:
                 key = (item["kind"], item["id"])
                 expected[key] = None if item.get("delete") else {**item["data"], REV_FIELD: s}
+                if s > applied:
+                    pending.add(key)
             for ref in entry.get("blobs", []):
                 kind, blob_id = ref.split("/", 1)
                 if not (self.meta_dir / "blobs" / kind / f"{blob_id}.json").is_file():
@@ -1172,6 +1190,8 @@ class Workspace:
                     on_disk[(kind_dir.name, f.name[:-5])] = f
         for key, data in expected.items():
             path = on_disk.pop(key, None)
+            if key in pending:
+                continue
             if data is None:
                 if path is not None:
                     problems.append({"problem": "deleted-but-present", "kind": key[0], "id": key[1]})
@@ -1190,7 +1210,7 @@ class Workspace:
         for key in on_disk:
             if expected.get(key, "absent") == "absent":
                 problems.append({"problem": "not-in-journal", "kind": key[0], "id": key[1]})
-        report = {"head_seq": self.head_seq(), "problems": problems, "repaired": False}
+        report = {"head_seq": self.head_seq(), "applied_seq": applied, "problems": problems, "repaired": False}
         fixable = [p for p in problems if p["problem"] in
                    ("mismatch", "unreadable", "missing", "not-in-journal", "deleted-but-present")]
         if repair and fixable:
@@ -1216,7 +1236,7 @@ class Workspace:
         self._require_writable()
         blob_id = new_id("blb")
         d = self.meta_dir / "blobs" / kind
-        d.mkdir(parents=True, exist_ok=True)
+        atomicio.make_dirs(d)
         atomicio.publish_exclusive(d / f"{blob_id}.json", atomicio.dumps_json(data))
         return f"{kind}/{blob_id}"
 
