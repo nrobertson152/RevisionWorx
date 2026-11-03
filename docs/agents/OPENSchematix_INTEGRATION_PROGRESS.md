@@ -398,3 +398,16 @@ or two-host SMB/NFS correctness. Existing injected recovery tests passed only
 against the old source pin. The new Phase 2 compatibility gate remains pending
 independent QA acceptance and accessible PR/CI evidence. Manual procedures use
 only disposable copies/VM snapshots and prohibit production engineering data.
+
+## 2026-11-02 — relocation and persistent revision export acceptance
+
+**Assignment:** Principal Integration, Packaging and Deployment Engineer; branch `integration/openschematix`; draft PR #2. Read PR #2/#7 and inspected packaging sources and latest packaging Actions execution. The requested `docs/agents/README.md` and `OPENSchematix_INTEGRATION_ORDERS.md` are not present on current `main` or this branch; binding instructions are the Director's explicit task and the PR #2 coordination comments. No production core or upstream CAD files changed.
+
+**Prior independently verified checkpoint:** Actions [41563020653](https://github.com/nrobertson152/RevisionWorx/actions/runs/41563020653), packaging HEAD `31e041529e312d8fd0e6b617424680c5083160e7`, frozen Phase 2 `d656884b39401134149273dd0121ef620b76eb8e`: Ubuntu/Windows packaging jobs succeeded. Linux output contains `OFFLINE_LIFECYCLE_EVIDENCE` verifying project creation, registration, two revisions, checkout/check-in via separate processes, read/reopen/verify/export, denied directory write, with a networkless runtime lacking Python/pip. That result belongs **only to the previous checkpoint**, not the changes below.
+
+**New isolated implementation:**
+- `b07475a1acc0acd9cec4ac5804736b87bfb32dc6`: extend frozen Linux lifecycle to independently export and SHA-check **both** the immutable original and second revision after the permission-denied attempt. This adds a regression invariant for historical content after reopening.
+- `48a4e87c7c4af5b37d199cd7e89b9a06e456b8ad`: copy each frozen onedir tree into an isolated Unicode-and-spaces directory under the test container's `/tmp`; run the CLI lifecycle, CLI help, and Qt-offscreen GUI from **relocated copies**, with the build artifacts remaining read-only.
+- `acc3bdff94d1234242da2865d445099f9686b5d9`: expand CI disposable tmpfs to 768 MiB to accommodate the two relocation copies.
+
+**Verification:** new code awaits CI against exact new packaging commit. No fresh PASS count is claimed. Existing tests remain pinned to the older Phase 2 source; Claude/QA must first accept newer safety changes before packaging source pin is advanced. Container `--network none` demonstrates no *required* connectivity in tested paths but not absence of attempted sockets. No native installer, interactive real-display GUI, cross-host SMB certification, tested old-version migration, genuine disk exhaustion or interrupted power failure. Do not merge/release/retarget.
