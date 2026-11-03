@@ -481,3 +481,18 @@ Unexecuted: real interactive installed GUI, truly disconnected Python-free
 Windows VM, installer, upgrade rollback, power-loss, physical disk-full,
 actual Windows ACL denial, socket attempt tracing and concurrent SMB.
 See docs/FROZEN_DESKTOP_ALPHA_ACCEPTANCE.md and integration matrix.
+
+
+### Subsequent exact-head authority verdict
+
+After the alpha test was accepted, independent QA posted a definitive
+**REJECT/HOLD** on Claude A's d2b7a1c Phase 2 source:
+[QA exact-SHA four-platform CI 41567007815](https://github.com/nrobertson152/RevisionWorx/actions/runs/41567007815)
+reproduces TWO protocol-only dual-effective-writer cases even with a trusted
+local locks directory. Distributed independently confirmed one in
+[run 41567096076](https://github.com/nrobertson152/RevisionWorx/actions/runs/41567096076)
+on all four OS/Python variants. These do not require malicious external
+rename/replace and are therefore **inside** the Director's single-user
+trusted-local alpha safety scope. The existing frozen GUI acceptance only
+establishes the tested UI and CLI paths on disposable data; it cannot
+override this rejection. No repin, Phase 1 backport, merge or release.
