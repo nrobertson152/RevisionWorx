@@ -39,3 +39,19 @@ The same actual kernel test on Windows confirms `atomicio._open_for_read` allows
 ## Acceptance boundary
 
 The existing historically accepted ADR-019 writer-lock protocol is unaffected by the proof above. **Do not merge Phase 1 alone**: `phase1-foundation` still has the read-then-unlink P0 stale successor-lock flaw. No production branch/code, PR target or release was changed by Distributed Systems. Requalify any fix by exact SHA.
+
+
+## Four-platform complete results and verified remediation primitive
+
+**Revised source test:** `prototype/test_core_96f9_cad_atomic_save_identity.py` at research commit `b7cad63c9317d6930a0d971f856d9b7c1c61896d`. [Exact-source run 41580498940](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580498940) **all four jobs completed SUCCESS**, native logs inspected:
+
+| Native runner | Positive/control | Desired safety | Windows-specific | Verdict |
+|---|---|---|---|---|
+| Ubuntu Python 3.11 | 4 PASS | 1 expected safety XFAIL | 1 SKIP | negative source-identity finding confirmed |
+| Ubuntu Python 3.13 | 4 PASS | 1 expected safety XFAIL | 1 SKIP | confirmed |
+| Windows Python 3.11 | 5 PASS | 1 expected safety XFAIL | 0 SKIP | confirmed |
+| Windows Python 3.13 | 5 PASS | 1 expected safety XFAIL | 0 SKIP | confirmed |
+
+Controls include non-replaced identity consistency, same-metadata backup-then-rename file identity **detection by comparing stat+fstat**, changed-mtime rejection, old-content unsafe success, and (on Windows) genuine WinError 5 on one-step os.replace into an open target. The expected-failure source-provenance safety check means **new core is not accepted on this property**, despite green negative-control CI.
+
+Most importantly, the positive **file-identity probe** confirms that the portable tuple `(st_dev, st_ino)` from initial `Path.stat()`, `os.fstat(reader.fileno())`, and final `Path.stat()` is stable for an unchanged source and changes across the backup-and-rename swap on **both actual Windows CPython 3.11/3.13 and Ubuntu CPython 3.11/3.13**. This directly tests the minimum proposed correction on the same OS versions instead of relying on a platform assumption. It cannot by itself certify every possible filesystem or in-place modification; the stronger source snapshot contract should be documented.
