@@ -53,7 +53,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nrobertson152/RevisionWorx
-          ref: 59c0f7b56c7e135c6d4179e18bea51b3232d8c9b
+          ref: 8f67bfedcca2ea619035556fdeed52bf0c4ca30a
           path: inputs/bom
           persist-credentials: false
           fetch-depth: 0
@@ -61,7 +61,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nrobertson152/RevisionWorx
-          ref: cb684336fbef2edf21bb4bda700146af70d58ee4
+          ref: 724993c74bd7aa6f2c00ed38f8b44c39a42bdd08
           path: inputs/changes
           persist-credentials: false
           fetch-depth: 0
@@ -77,9 +77,9 @@ jobs:
           --gui inputs/gui
           --gui-sha 0773bde599f39aee88a8a536c28673bc4a1e13f5
           --bom inputs/bom
-          --bom-sha 59c0f7b56c7e135c6d4179e18bea51b3232d8c9b
+          --bom-sha 8f67bfedcca2ea619035556fdeed52bf0c4ca30a
           --changes inputs/changes
-          --changes-sha cb684336fbef2edf21bb4bda700146af70d58ee4
+          --changes-sha 724993c74bd7aa6f2c00ed38f8b44c39a42bdd08
           --receipt four-source-domain-receipt.json
       - name: Install combined source for testing
         working-directory: inputs/core
