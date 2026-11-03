@@ -1,0 +1,109 @@
+name: QA P0 merge readiness 22a5273 vs fe8a179 (pinned)
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-core-merge-readiness-22a5273-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  current-core:
+    name: "${{ matrix.os }} / Python ${{ matrix.python-version }} / full"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout exact current Phase 2 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 22a5273d4740b3a7af8e8cb5cc3565e4336b763b
+          path: app
+      - name: Checkout independent frozen QA source
+        uses: actions/checkout@v4
+        with:
+          ref: 4dd185f5f80963a9f674a55f5502f514cac643aa
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install native Linux PySide6 runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Overlay frozen QA tests only
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          out = Path("app/tests/qa")
+          out.mkdir(parents=True, exist_ok=True)
+          for name in ("test_core_22a5273_merge_readiness.py",
+                       "test_rev4_protocol_only_p1.py",
+                       "test_rev5_custody_crash_restart.py",
+                       "test_rev5_failclosed_faults.py"):
+              shutil.copy2(Path("qa/tests/qa") / name, out)
+      - name: Install candidate
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Print exact immutable inputs
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: P0 independent changed-contract, authority and crash/restart tests
+        working-directory: app
+        run: |
+          python -m pytest -q -ra tests/qa/test_core_22a5273_merge_readiness.py tests/qa/test_rev4_protocol_only_p1.py tests/qa/test_rev5_custody_crash_restart.py tests/qa/test_rev5_failclosed_faults.py
+      - name: Entire native candidate regression, including Qt
+        working-directory: app
+        run: python -m pytest -q -ra
+
+  baseline-negative-control:
+    name: "Ubuntu Python 3.13 / accepted baseline must FAIL ADR-022 regression"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fe8a179f0203ef08151dc8459c84609dc639c4fe
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: 4dd185f5f80963a9f674a55f5502f514cac643aa
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install independent test and historical baseline
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dest = Path("app/tests/qa")
+          dest.mkdir(parents=True, exist_ok=True)
+          shutil.copy2("qa/tests/qa/test_core_22a5273_merge_readiness.py", dest)
+      - name: Install exact old core
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Require historical stale-cache safety test to FAIL
+        working-directory: app
+        shell: python
+        run: |
+          import subprocess, sys
+          cmd = [sys.executable, "-m", "pytest", "-q", "-ra",
+                 "tests/qa/test_core_22a5273_merge_readiness.py::test_stale_effective_materialisation_cannot_override_new_journal_view"]
+          p = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          print(p.stdout)
+          assert p.returncode == 1, "old baseline unexpectedly passed or failed outside a test assertion"
+          assert "1 failed" in p.stdout and "test_stale_effective_materialisation" in p.stdout, (
+              "negative control must show specifically the old stale materialisation defect")
+          print("EXPECTED old-source failure verified; old baseline is NOT safe against this case")
