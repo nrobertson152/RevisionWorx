@@ -296,5 +296,40 @@ class BackupRehearsalTests(unittest.TestCase):
                 mod.restore(archive, root / "restored")
             self.assertFalse((root / "restored").exists())
 
+
+    def test_manifest_symlink_refused_without_reading_external_file(self):
+        """A crafted backup must not follow its manifest outside the archive."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "source", root / "archive"
+            src.mkdir()
+            (src / "part.step").write_bytes(b"part")
+            mod.backup(src, archive)
+            external = root / "external-manifest.json"
+            external.write_bytes((archive / mod.MANIFEST).read_bytes())
+            (archive / mod.MANIFEST).unlink()
+            try:
+                (archive / mod.MANIFEST).symlink_to(external)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink creation unavailable on this host")
+            with self.assertRaisesRegex(mod.BackupError, "symlink"):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+            self.assertTrue(external.is_file())
+
+    def test_missing_manifest_refused_before_restore_destination_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "archive"
+            archive.mkdir()
+            (archive / "part.step").write_bytes(b"untrusted")
+            with self.assertRaises(mod.BackupError):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+
 if __name__ == "__main__":
     unittest.main()
