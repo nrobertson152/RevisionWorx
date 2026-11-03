@@ -263,5 +263,38 @@ class BackupRehearsalTests(unittest.TestCase):
                 mod.restore(archive, root / "restored")
             self.assertFalse((root / "restored").exists())
 
+    def test_casefold_collision_in_source_refused(self):
+        """Case-sensitive Linux trees must not create lossy Windows restores."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "source"
+            src.mkdir()
+            (src / "Part.ipt").write_bytes(b"first")
+            (src / "part.ipt").write_bytes(b"second")
+            if (src / "Part.ipt").read_bytes() != b"first":
+                self.skipTest("filesystem does not support distinct case variants")
+            with self.assertRaisesRegex(mod.BackupError, "case-insensitive path collision"):
+                mod.backup(src, root / "backup")
+            self.assertFalse((root / "backup").exists())
+
+    def test_casefold_collision_in_manifest_refused(self):
+        """A crafted archive cannot specify aliases with different casing."""
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "source", root / "archive"
+            src.mkdir()
+            (src / "Part.ipt").write_bytes(b"original")
+            mod.backup(src, archive)
+            manifest = archive / mod.MANIFEST
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data["files"]["part.ipt"] = data["files"]["Part.ipt"].copy()
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(mod.BackupError, "case-insensitive manifest path collision"):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+
 if __name__ == "__main__":
     unittest.main()
