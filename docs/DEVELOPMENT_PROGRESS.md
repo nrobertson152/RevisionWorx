@@ -73,6 +73,16 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-03 (session 13) — P0 journal structure (#29) and CAD source-capture integrity
+- **Journal:** `read_entry` validates every dereferenced field (`_entry_shape_problem`); `null`/`[]`/scalar entries, bool
+  `seq`, wrong-typed optional fields, invalid kinds/ids, non-bool `delete`, non-object put `data`, bad blob refs and bad
+  revocation holders raise `WorkspaceCorruptError`. Legacy digestless entries still accepted. `health()` fails closed.
+- **Capture:** `store_file` pins the source by handle, re-checks path identity before/after, and verifies with a second
+  hash read. Detection, not atomicity; guarantee and limits in CORE_INVARIANTS §5a/§5b.
+- **Evidence (local Linux, CPython 3.13.18):** full suite 452 passed, 3 skipped. PR #34 independent shape gates 1/7 -> 7/7;
+  PR #34 crash/derived/ADR-017 files 9/11 -> 11/11. Native Windows/Linux CI: see PR #7 check-in.
+- **Next:** P1 transaction/recovery hardening; Windows verification of `st_ino` identity in capture.
+
 ### 2026-11-02 (session 9) — Codex P1 findings on `e5b38a6`: threat model corrected; P2 conflicts; API contract
 - **Codex `workspace.py:693` (custody disposal) and `:472` (fencing archival): both reproduced
   deterministically.** See `tests/test_lock_namespace_threat_model.py::test_boundary_codex_*`.
