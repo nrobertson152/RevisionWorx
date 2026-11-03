@@ -130,6 +130,8 @@ def exercise(gui: Path, cli: Path) -> None:
             raise AssertionError("GUI lost history after process restart")
         if reopened.get("gui_observable_after_reopen") != "passed":
             raise AssertionError("GUI observable-state v1 after restart not recorded")
+        if reopened.get("gui_missing_file_fail_closed") != "passed" or reopened.get("gui_missing_file_restored") != "passed":
+            raise AssertionError("GUI missing-working-file alert/recovery assertions not recorded")
         if snapshot(ws) != authoritative_before_restart:
             raise AssertionError("GUI reopen mutated authoritative revision data")
         if verify_history(installed_cli, ws, root, env, made["document_id"], "reopen") != ids:
@@ -142,6 +144,7 @@ def exercise(gui: Path, cli: Path) -> None:
             "qt_widget_checkout_checkin": True, "qt_widget_history": True,
             "separate_gui_process_reopen": True, "relocated_unicode_install": True,
             "gui_observable_contract_v1": True, "gui_f5_selection_preserved": True,
+            "gui_missing_file_alert_and_restore": True,
             "cli_independent_exports_sha256": True, "revision_count": 2,
             "journal_workspace_unchanged_on_reopen": True,
             "source_file_unchanged": True,
