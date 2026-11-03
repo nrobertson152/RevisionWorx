@@ -114,6 +114,43 @@ The first three rows count `17651af`. The local row ran on the same code before 
 Known limits: the native step measures the window's size hints; it does not exercise dialogs or a person
 using the app. A long unbreakable path is clipped (tooltip and text selection still give the full text).
 
+## Checkpoint 4 — `2a6a7bd`..`d4e3623` (2026-11-02)
+Tested against accepted core `fe8a179`, then on a real X display for the first time: the real GUI process on
+Xvfb, driven by real keystrokes (`tests/e2e_x11_walkthrough.py`). Outcomes are checked through the CLI and the
+files on disk. It is not a person using the app, and says nothing about Windows or native file dialogs.
+
+| Defect | Found by | Now |
+|---|---|---|
+| A write refused by a recovery block left the GUI fully writable, because the read-only check cannot see every cause | Probe on `fe8a179` | Same read-only state and banner as a block found by the health check; F5 re-checks |
+| A lock left by a crash: "try again in a moment", for ever | Probe on `fe8a179` | The error gives the token and the exact command, with the real folder, in selectable text. The walkthrough follows it and recovers |
+| A job's result could arrive while it still counted as busy, so the new revision showed with Check out disabled | Integration, run 41572552095 | The slot is freed immediately before `on_done`, so `busy` false means settled |
+| Help promised Enter opens the selected row; only a double-click did | Offscreen audit | Enter works in both lists |
+| Alt+W, Alt+P and Alt+I each meant two things; several controls had no screen-reader name; paging buttons came last in Tab order | Offscreen audit | Fixed. Check in is now Alt+K, Compare Alt+M, Restore Alt+T |
+| Typing a path in Import recorded a document titled with its first letter | Real display | Title follows the file name until you type your own |
+| Tab was trapped inside tables, moving between cells | Real display | Tab leaves the table; arrow keys move within it |
+| After a restart no document was selected, so Ctrl+K silently did nothing | Real display | Opening a project selects its first document |
+| Status bar cut off on a 768 px high screen | Real display | Default size allows for the title bar |
+| Successful export showed nothing; a replace confirmed in the save dialog then failed with a disk error; export ran on the GUI thread | Audit | Says where the file went; replace works; runs in the background |
+| Export could overwrite a managed working file or write into the workspace metadata | Audit | Refused |
+
+Regressions: `tests/test_qt_desktop_alpha_rc.py`, `tests/test_qt_desktop_alpha_keyboard.py`. The walkthrough fails on
+`e5fb7e1` at the wrong document title, so it can detect a real defect.
+
+| Where (commit `d4e3623`, CI run 41575959230) | Command | Result |
+|---|---|---|
+| ubuntu-latest, Python 3.11.17, PySide6/Qt 6.12.0 | Qt tests (`-m qt`, 3 files) / `pytest -q -ra` | 66 passed / 299 passed |
+| windows-latest, Python 3.11.9, PySide6/Qt 6.12.0 | same | 66 passed / 297 passed, 2 skipped (POSIX-permission test; case-insensitive FS test) |
+| same Windows job, `QT_QPA_PLATFORM=windows` | window-size checks | 2 passed; Segoe UI, minimum window 842x666 |
+| GUI merged with accepted core `fe8a179`, on the runner only: ubuntu-latest | `pytest -q -ra` | 353 passed |
+| same: windows-latest | `pytest -q -ra` | 351 passed, 2 skipped (same two) |
+| ubuntu-latest, Python 3.11, xcb on Xvfb, openbox | `xvfb-run ... python tests/e2e_x11_walkthrough.py` | all 9 steps passed; screenshots kept as a CI artifact |
+
+Also run locally, not accepted evidence: the same code merged with `phase2-documents` `22a5273` (newer than the accepted
+core): 381 passed, 3 skipped, and the walkthrough passed (Linux, Python 3.13, as root).
+
+Known limit: while a recovery block is known only from a refused write, F5 clears the banner until the next write finds it
+again and fails closed. A read-only `Workspace.health()` (request A1) would close this.
+
 ## Manual acceptance (installed GUI) — not yet performed
 1. `python -m pip install -e ".[gui]"` then `revisionworx-gui` (Windows: Start → run from venv).
 2. Start page: confirm the amber alpha banner. Create project "Test Bracket", number "T-1".
@@ -125,7 +162,10 @@ using the app. A long unbreakable path is clipped (tooltip and text selection st
 7. Record OS, Python and Qt versions and any deviations on Issue #13.
 
 ## Next
-- Keyboard-only walkthrough and tab order (needs an interactive session; offscreen focus is unreliable).
+- Screen-reader check and a keyboard walkthrough on Windows (needs an interactive session; the Linux one is automated).
+- A8: `verify` on a read-only handle reports unapplied journal entries as "missing", so a normal administrator clear
+  shows an inconsistency notice until the next write.
+- Visual redesign: mockup with the Director; no UI code changes until it is reviewed.
 - Byte-level progress for very large files needs a core progress callback on `store_file` (A7).
 - A6 (requested in `controller.checkout`): return the checkout token with `CommittedNotApplied`, so a saved
   checkout does not need an administrator to release it.

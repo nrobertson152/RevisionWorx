@@ -66,7 +66,7 @@ The method is read-only. It returns a JSON-serialisable dict and performs no I/O
 - **Window:** `contract`, `page` (`start` or `workspace`), `title`, `alpha_banner`, `health_banner` (`""` when hidden), `read_only`, `busy`, `workspace`, `start_error`.
 - **Projects:** `projects_notice`, `projects` (`id`, `name`, `number`), `selected_project`.
 - **Documents:** `documents_notice`, `documents` (`id`, `rel_path`, `rev`, `file_state`, `checked_out_by`).
-- **Selected document:** `selected_document`, `document_status`, `message_level` (`ok`, `warning` or `error`), `ownership`, `history` (newest first: `id`, `label`, `sha256`, `description`).
+- **Selected document:** opening a project selects its first document, if it has any. `selected_document`, `document_status`, `message_level` (`ok`, `warning` or `error`), `ownership`, `history` (newest first: `id`, `label`, `sha256`, `description`).
 - **Actions:** `actions` holds an enabled flag for each of `new_project`, `adopt`, `archive`, `import`, `register`, `checkout`, `checkin`, `cancel_checkout`, `change_state`, `open_file`, `restore` and `compare`. (`adopt`, `archive`, `register` and `change_state` were added at `062baa3`; existing keys are unchanged, so this is still contract 1.)
 
 `file_state` is one of `unchanged`, `modified`, `modified-externally`, `missing`, `unrevisioned` or `unavailable`.
@@ -77,6 +77,8 @@ The method is read-only. It returns a JSON-serialisable dict and performs no I/O
 - **Saved with a warning** (core `CommittedNotApplied`, or a txid confirmed `committed` after an unexpected error): `message_level == "warning"`, the history grows, and the status starts with "Checked in." or "Imported (saved)". It is never shown as a failure.
 - **Failure:** `message_level == "error"`. The history is unchanged, and the status never contains "Checked in".
 - **Unknown outcome** (an unexpected error, and the journal could not be read): `message_level == "error"` and the status says it could not confirm. Check the history; do not assume either outcome.
+- **Refused while writing:** a write refused for safety gives the same recovery-blocked state as below, after the next `MainWindow.poll()`. F5 re-checks.
+- **Export:** runs in the background. `document_status` says where the file went, or `message_level == "error"`. A registered working file and anything inside `.revisionworx` are refused, whatever the save dialog confirmed.
 - **Document unreadable:** `selected_document` is `None`, `message_level == "error"`, and the status starts with "⚠ Cannot read this document". No document actions are enabled. F5 retries.
 - **Recovery-blocked:** `read_only` is true, `health_banner` contains "RECOVERY BLOCKED" and "READ-ONLY", and every write action is disabled, including the menu items. Browsing, history and export still work. F5 clears this only after an administrator has repaired the workspace.
 - **Background jobs:** while `busy` is true, every write action is disabled. Poll `ctl.drain()` together with `app.processEvents()` until `busy` is false. **Changed after `2a6a7bd`: `busy` stays true until the result is delivered**, and `drain()` is what ends it, so a loop that waits on `busy` without draining (or without a running `MainWindow`) never finishes. When `busy` turns false, history, messages and actions have already settled; no further wait is needed.
