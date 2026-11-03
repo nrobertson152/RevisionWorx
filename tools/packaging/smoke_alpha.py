@@ -67,7 +67,7 @@ def cli_json(cli: Path, ws: Path, root: Path, env: dict[str, str],
 
 
 def verify_history(cli: Path, ws: Path, root: Path, env: dict[str, str],
-                   document_id: str) -> list[str]:
+                   document_id: str, phase: str) -> list[str]:
     detail = cli_json(cli, ws, root, env, "doc", "show", document_id, "--hash")
     history = detail.get("history", [])
     if len(history) != 2 or detail.get("checkout") is not None:
@@ -78,7 +78,7 @@ def verify_history(cli: Path, ws: Path, root: Path, env: dict[str, str],
     ids = []
     for i, revision in enumerate(history):
         rev_id = revision["id"]
-        target = root / f"cli-export-{i}.bin"
+        target = root / f"cli-export-{phase}-{i}.bin"
         cli_json(cli, ws, root, env, "rev", "export", rev_id, str(target))
         if not target.is_file() or digest(target.read_bytes()) != revision["sha256"]:
             raise AssertionError(f"CLI historical export mismatch for {rev_id}")
@@ -117,7 +117,7 @@ def exercise(gui: Path, cli: Path) -> None:
         if made["history_rows"] != 2:
             raise AssertionError("GUI accepted fewer than two revisions")
 
-        ids = verify_history(installed_cli, ws, root, env, made["document_id"])
+        ids = verify_history(installed_cli, ws, root, env, made["document_id"], "initial")
         if ids != made["revision_ids"]:
             raise AssertionError("CLI revision IDs do not match Qt GUI evidence")
         authoritative_before_restart = snapshot(ws)
@@ -128,7 +128,7 @@ def exercise(gui: Path, cli: Path) -> None:
             raise AssertionError("GUI lost history after process restart")
         if snapshot(ws) != authoritative_before_restart:
             raise AssertionError("GUI reopen mutated authoritative revision data")
-        if verify_history(installed_cli, ws, root, env, made["document_id"]) != ids:
+        if verify_history(installed_cli, ws, root, env, made["document_id"], "reopen") != ids:
             raise AssertionError("CLI revisions changed after GUI restart")
         if snapshot(ws) != authoritative_before_restart:
             raise AssertionError("CLI verification mutated authoritative revision data")
