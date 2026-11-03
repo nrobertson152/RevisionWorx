@@ -423,3 +423,61 @@ Per Director's priority, **do not repin Phase 2**: source stays `d656884b3940113
 [Actions 41564388195](https://github.com/nrobertson152/RevisionWorx/actions/runs/41564388195) finished **SUCCESS** at exact packaging code/workflow `12dd4b1270991d67c8b89fd82ff2b749565ba09f`, with pinned Phase 2 source `d656884b39401134149273dd0121ef620b76eb8e`. Both `ubuntu-latest` and `windows-latest` on Python 3.11 completed: per OS 5 packaging-safeguard tests, 3 disposable recovery-injection tests, frozen CLI/Qt offscreen build and copied-workspace verification; Windows long/extended-path, localhost UNC and file-sharing probe succeeded. Ubuntu additionally passed relocated frozen GUI+CLI from `/tmp/installed copy Ω/`, `--network none`, no runtime Python/pip, intact two-generation SHA-256 exports after permission denial, and Qt offscreen survival. Its log contains `OFFLINE_CONTAINER_EVIDENCE network=none python=absent relocated_bundle=pass cli_help=pass gui_offscreen_start=pass`. The shell process passed its original/second revision export digest assertions, but its evidence line does not separately print `historical_exports=verified`.
 
 The prior `test -x` failure was resolved by explicitly enabling execution on the **disposable tmpfs**: `--tmpfs /tmp:rw,exec,nosuid,size=768m`. This does not relax `--network none`, read-only bundle mounts, nonroot execution, or the unchanged executable assertions. No actual interactive GUI, physical network absence on Windows, socket syscall audit, native installer or latest Phase 2 safety qualification is implied. All integration release gates remain pending and PR #2 remains draft. Coordination posted on Claude B [issue #13](https://github.com/nrobertson152/RevisionWorx/issues/13#issuecomment-6593621163). Await explicit QA and Distributed Systems accept/reject for `e5b38a6` before any separately pinned compatibility pass.
+
+
+## 2026-11-02 — exact-SHA frozen desktop alpha integration passed
+
+**Coordinator assignment:** separately pinned, disposable, independent frozen
+GUI workflow for Claude B draft PR #14. Implementation remains ONLY on
+integration/openschematix; the distinct production-authority packaging pin is
+unchanged. Test harness source SHA (last code commit):
+7fbd7b31135663f498bb15cc50dc80ba4919db9e. GUI source SHA:
+f00aa31b6f66fbe0e78ff440aed7026e869138b3.
+
+**Results:** [Actions 41566749753](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566749753)
+**SUCCESS on both Ubuntu 3.11 and Windows 3.11**; each ran five successful
+packaging safeguard unittests, frozen build/CLI help/Qt startup and copied
+workspace regression. Both ran the new test-only Qt GUI acceptance with
+real Qt start-page project creation, ImportDialog, checkout, check-in
+dialog and two persisted revisions, a separate frozen GUI process reopen,
+SHA-256 content verification and historical exports by a separately frozen
+CLI; workspace authority hash set remained unchanged on read-only reopen.
+Whole GUI/CLI frozen directories were copied into paths with spaces and
+Unicode. Windows also passed local 401-character/extended path, localhost UNC
+and sharing probes (no multi-host assertion).
+
+Ubuntu additionally ran the Qt widget test and normal GUI startup from the
+copied bundles inside a **nonroot network=none Python/pip-free read-only-root
+container**, with executable disposable tmpfs. Container log:
+OFFLINE_ALPHA_GUI_EVIDENCE python=absent network=none copied_bundle=pass
+qt_create_import_checkout_checkin=pass qt_reopen=pass cli_sha_exports=pass
+normal_gui_start=pass. This is offscreen widget automation, not visible
+mouse/keyboard interaction or attempt-traced absence of sockets.
+
+**Negative/fix:** [initial alpha run 41566452430](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566452430)
+reached GUI success on both OS, then failed solely because the integration
+harness attempted a second exclusive CLI export into an already occupied
+test target. Corrected by using unique, phase-named outputs at 7fbd7b3;
+no core change or safety assertion was weakened. The original production
+packaging workflow still passed at the same code SHA
+[41566749764](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566749764)
+with older approved source d656884b39401134149273dd0121ef620b76eb8e.
+
+**New GUI regression outside approved pin:** Claude B draft PR #14 now at
+e5725df17218b5bb9fb975389a0580aed63f2205. Its own cross-platform
+[CI 41566802123](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566802123)
+fails 10 Qt tests and passes 10 on each OS; common root is
+revisionworx/gui/qt/documents.py line 236 using the wrong relative
+workspace import. Posted a precise handoff to [PR #14](https://github.com/nrobertson152/RevisionWorx/pull/14#issuecomment-6593973493).
+The successful frozen test **must not** be projected onto that newer GUI
+commit; wait for its passing exact-SHA UI regression CI before repinning
+the distinct alpha workflow.
+
+**Safety hold:** Claude A's latest PR #7 core d2b7a1c has a reported
+additional protocol-only crash/revocation race. Director approves trusted
+single-user local filesystem as alpha scope, NOT unverified cooperative
+writer safety, SMB or release. No Phase 1 backport or main merge.
+Unexecuted: real interactive installed GUI, truly disconnected Python-free
+Windows VM, installer, upgrade rollback, power-loss, physical disk-full,
+actual Windows ACL denial, socket attempt tracing and concurrent SMB.
+See docs/FROZEN_DESKTOP_ALPHA_ACCEPTANCE.md and integration matrix.
