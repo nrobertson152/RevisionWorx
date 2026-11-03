@@ -1,0 +1,76 @@
+name: RevisionWorx TEST-ONLY frozen desktop-alpha matrix
+
+on:
+  push:
+    branches:
+      - integration/openschematix
+    paths:
+      - 'tools/packaging/alpha_*.py'
+      - 'tools/packaging/smoke_alpha*'
+      - 'tools/packaging/build.py'
+      - '.github/workflows/revisionworx-alpha-packaging.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revisionworx-frozen-desktop-alpha-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  experimental-alpha:
+    # Separate from older-source packaging CI. This executes UNACCEPTED alpha
+    # core on disposable temporary workspaces ONLY. No merge/release gate.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Integration packaging harness
+        uses: actions/checkout@v4
+      - name: Checkout exact Claude B desktop-alpha source
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: f00aa31b6f66fbe0e78ff440aed7026e869138b3
+          path: external/desktop-alpha
+          persist-credentials: false
+      - name: Select Python 3.11 for BUILD ONLY
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Ubuntu Qt runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xkb1 libxcb-icccm4 libxcb-shape0
+      - name: Verify packaging isolation safeguards
+        run: python tools/packaging/test_builder.py
+      - name: Build and exercise exact-SHA test-only frozen GUI and CLI
+        run: >-
+          python tools/packaging/build.py
+          --source external/desktop-alpha
+          --output packaging-alpha-output
+          --expected-sha f00aa31b6f66fbe0e78ff440aed7026e869138b3
+          --alpha-acceptance
+      - name: Linux copied frozen GUI widget acceptance without Python or network
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker build -f tools/packaging/offline_container.Dockerfile -t revisionworx-alpha-offline tools/packaging
+          docker run --rm --network none --cap-drop ALL --read-only \
+            --tmpfs /tmp:rw,exec,nosuid,size=768m \
+            --mount "type=bind,src=${{ github.workspace }}/packaging-alpha-output/dist,dst=/bundles,readonly" \
+            --mount "type=bind,src=${{ github.workspace }}/tools/packaging,dst=/harness,readonly" \
+            revisionworx-alpha-offline /bin/sh /harness/smoke_alpha_container.sh
+      - name: Windows long-path and localhost UNC-loopback smoke
+        if: runner.os == 'Windows'
+        run: >-
+          python tools/packaging/probe_windows_paths.py
+          --cli packaging-alpha-output/dist/RevisionWorxCLI/RevisionWorxCLI.exe
+      - name: Print artifact/source provenance
+        if: success()
+        run: python -c "from pathlib import Path; print((Path('packaging-alpha-output') / 'provenance.json').read_text())"
