@@ -542,3 +542,19 @@ The strengthened tests now inspect **actual old SHA and verified immutable OLD c
 **Handoff:** [PR #20 QA review #6596121550](https://github.com/nrobertson152/RevisionWorx/pull/20#issuecomment-6596121550) shares code, source pins, measured results and suggestion. Additional full 0.1.0 integrated merge, PR #21 BOM, installed GUI, true power loss, real SMB/NFS and upstream core release gates are NOT covered by this change-control focused work. Core API provisional `register_kind/Workspace.commit/RecordCheck/transaction_outcome` still needs Claude A decision.
 
 **Disposition:** `cb68433` REJECT for the two signoff ECR/ECO P2 defects plus txid mismatch; `3038c9b` **SCOPED ACCEPT** of the two fixed approval workflows and previous successful controls on native Ubuntu/Windows Python 3.11/3.13; **P2 txid import request mismatch OPEN**, PR #20 not fully QA accepted and no release or merge permitted by this QA review. Next: retest same strict replay oracle against Claude D's next exact corrected SHA; run full integration/GUI acceptance after API stabilization and Director-approved merge plan.
+
+
+## 2026-11-03 13:28 UTC — independent native Phase 1 CI qualification (issue #31)
+
+**QA branch source:** `f515f9f975ba140c1b802b66e09127592bf76aa2`; [CI run 41634807017](https://github.com/nrobertson152/RevisionWorx/actions/runs/41634807017) (PR checkout; inspect exact synthetic merge SHA in runner for any combined-source claim). Read native job logs, not just green job status. Commands: `python -m pytest -q -ra tests/qa --ignore=tests/qa/test_core_96f9_cad_provenance.py --ignore=tests/qa/test_core_96f9c36_malformed_journal.py --ignore=tests/qa/test_core_96f9c36_nested_journal_shape.py`, then `python -m pytest -q -ra` with the same three exclusions.
+
+| Runner | QA-only | Full Phase 1 |
+| --- | --- | --- |
+| Ubuntu Python 3.11 | 17 PASS / 26 SKIP / 3 XFAIL | 138 PASS / 26 SKIP / 3 XFAIL |
+| Ubuntu Python 3.13 | 17 PASS / 26 SKIP / 3 XFAIL | 138 PASS / 26 SKIP / 3 XFAIL |
+| Windows Python 3.11 | 17 PASS / 25 SKIP / 4 XFAIL | 137 PASS / 26 SKIP / 4 XFAIL |
+| Windows Python 3.13 | 17 PASS / 25 SKIP / 4 XFAIL | 137 PASS / 26 SKIP / 4 XFAIL |
+
+**Disposition: scoped ACCEPT of Phase 1 workflow collection/separation at QA SHA `f515f9f`**, not acceptance of xfailed or skipped requirements. Both `resolve-phase2-head` and `phase2-stacked-regressions` were SKIPPED by the PR event condition. No Phase 2 source was tested in this run; historical typed-journal RED evidence at production `f01b37d` remains a blocker. The branch's Phase 2 workflow uses `if: github.event_name != 'pull_request'`, while the main Phase 1 matrix uses `if: github.event_name != 'push'`: neither matrix executes on the other's event. A separate push or workflow_dispatch is necessary to produce pinned Phase 2 results; a green PR badge alone cannot qualify Phase 2.
+
+**Next QA milestone:** run/inspect Phase 2 integrated matrix on Ubuntu/Windows Python 3.11/3.13 against a pinned current Claude A source and QA test SHA; independently verify changed-CSV transaction identity on Claude D's current exact SHA, preserving historical negative control. Review backup rehearsal run 41630067018 and GUI run 41633349558 for scoped acceptance only. No installed GUI, physical crash, SMB/NFS, or release claims.
