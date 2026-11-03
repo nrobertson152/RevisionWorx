@@ -28,7 +28,7 @@ jobs:
       - name: Checkout frozen independent QA source
         uses: actions/checkout@v4
         with:
-          ref: 5c61a4a78254713de46c6bba183f4087f02f6ffb
+          ref: 88b0f8d11981b1eec8658a6920ff76c6aa2addcf
           path: qa
       - uses: actions/setup-python@v5
         with:
@@ -40,7 +40,8 @@ jobs:
           from pathlib import Path
           dest = Path("app/tests/qa")
           dest.mkdir(parents=True, exist_ok=True)
-          shutil.copy2("qa/tests/qa/test_rev4_protocol_only_p1.py", dest)
+          for file in ("test_rev4_protocol_only_p1.py", "test_rev5_custody_crash_restart.py"):
+              shutil.copy2(Path("qa/tests/qa") / file, dest)
       - name: Install exact candidate
         working-directory: app
         run: python -m pip install -e ".[dev]"
@@ -53,6 +54,9 @@ jobs:
       - name: Independent P1 positive oracles (must PASS, not XFAIL)
         working-directory: app
         run: python -m pytest -q -ra tests/qa/test_rev4_protocol_only_p1.py
+      - name: Independent custody crash and separate-process restart acceptance
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_rev5_custody_crash_restart.py
       - name: Full candidate regression with QA oracle overlay
         working-directory: app
         run: python -m pytest -q -ra
