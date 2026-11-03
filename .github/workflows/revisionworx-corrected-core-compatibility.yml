@@ -1,0 +1,92 @@
+name: RevisionWorx TEST-ONLY corrected-core plus desktop-alpha compatibility
+
+on:
+  push:
+    branches:
+      - integration/openschematix
+    paths:
+      - 'tools/packaging/stage_corrected_core_gui.py'
+      - '.github/workflows/revisionworx-corrected-core-compatibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revisionworx-corrected-core-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  composite-test-only:
+    # NOT a merge/release/backport/production gating workflow.
+    # Source: independent SCOPED safety acceptances, still pending Director signoff.
+    # Build: disposable mixed checkout only; no production source ref is modified.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
+    steps:
+      - name: Checkout Integration test harness
+        uses: actions/checkout@v4
+      - name: Checkout exact corrected Phase 2 core
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: fe8a179f0203ef08151dc8459c84609dc639c4fe
+          path: external/corrected-core
+          persist-credentials: false
+      - name: Checkout exact independently accepted desktop GUI
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: 17651af68128572c7c83429513044a5948dd07bd
+          path: external/desktop-alpha
+          persist-credentials: false
+      - name: Set up Python 3.11 for disposable BUILD only
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Linux Qt dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xkb1 libxcb-icccm4 libxcb-shape0
+      - name: Validate packaging safeguards
+        run: python tools/packaging/test_builder.py
+      - name: Stage exact two-SHA experimental composite and receipt
+        run: >-
+          python tools/packaging/stage_corrected_core_gui.py
+          --core external/corrected-core
+          --gui external/desktop-alpha
+          --receipt corrected-core-gui-source-receipt.json
+          --core-sha fe8a179f0203ef08151dc8459c84609dc639c4fe
+          --gui-sha 17651af68128572c7c83429513044a5948dd07bd
+      - name: Build disposable frozen combined GUI and CLI, then assert Qt and journal lifecycle
+        run: >-
+          python tools/packaging/build.py
+          --source external/corrected-core
+          --output corrected-core-compat-output
+          --expected-sha fe8a179f0203ef08151dc8459c84609dc639c4fe
+          --alpha-acceptance
+      - name: Linux no-Python network-none combined frozen runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker build -f tools/packaging/offline_container.Dockerfile -t revisionworx-compat-offline tools/packaging
+          docker run --rm --network none --cap-drop ALL --read-only \
+            --tmpfs /tmp:rw,exec,nosuid,size=768m \
+            --mount "type=bind,src=${{ github.workspace }}/corrected-core-compat-output/dist,dst=/bundles,readonly" \
+            --mount "type=bind,src=${{ github.workspace }}/tools/packaging,dst=/harness,readonly" \
+            revisionworx-compat-offline /bin/sh /harness/smoke_alpha_container.sh
+      - name: Windows local path and UNC loopback probes
+        if: runner.os == 'Windows'
+        run: >-
+          python tools/packaging/probe_windows_paths.py
+          --cli corrected-core-compat-output/dist/RevisionWorxCLI/RevisionWorxCLI.exe
+      - name: Record TEST ONLY two-source provenance
+        if: always()
+        run: |
+          python -c "from pathlib import Path; x=Path('corrected-core-gui-source-receipt.json'); print(x.read_text() if x.exists() else 'source staging receipt unavailable')"
+          python -c "from pathlib import Path; x=Path('corrected-core-compat-output/provenance.json'); print(x.read_text() if x.exists() else 'frozen build provenance unavailable')"
