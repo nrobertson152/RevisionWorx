@@ -59,7 +59,14 @@ def files_under(root: Path, *, allow_manifest: bool = False) -> dict[str, tuple[
                     continue
                 raise BackupError("reserved manifest name in source")
             found[rel] = digest(item)
-    # Reject names that alias on common case-insensitive Windows filesystems.\n    folded = {}\n    for name in found:\n        key = name.casefold()\n        if key in folded and folded[key] != name:\n            raise BackupError("case-insensitive path collision: " + folded[key] + " / " + name)\n        folded[key] = name\n    return dict(sorted(found.items()))
+    # Reject names that alias on common case-insensitive Windows filesystems.
+    folded = {}
+    for name in found:
+        key = name.casefold()
+        if key in folded and folded[key] != name:
+            raise BackupError("case-insensitive path collision: " + folded[key] + " / " + name)
+        folded[key] = name
+    return dict(sorted(found.items()))
 
 
 def safe_name(name: object) -> str:
@@ -105,6 +112,12 @@ def load_manifest(root: Path) -> dict[str, tuple[int, str]]:
         except ValueError as exc:
             raise BackupError("invalid hex digest") from exc
         result[name] = (size, sha)
+    folded = {}
+    for name in result:
+        key = name.casefold()
+        if key in folded and folded[key] != name:
+            raise BackupError("case-insensitive manifest path collision: " + folded[key] + " / " + name)
+        folded[key] = name
     return result
 
 
