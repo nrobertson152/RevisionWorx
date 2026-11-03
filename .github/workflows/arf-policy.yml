@@ -1,0 +1,37 @@
+name: ARF policy
+
+# Required check `pr-metadata`. Validates the PR description, that protected files change
+# only under `rules-change`, and that such changes carry the Director's approval status
+# for the exact head commit. Runs the checker from the base commit, never the PR's.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  pr-metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Check PR against ARF policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ ! -f tools/arf.py ]; then
+            echo "::notice::ARF is not on the base branch yet (this is the install PR); skipping."
+            exit 0
+          fi
+          gh pr diff "$PR" --name-only --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/changed.txt"
+          python3 -I tools/arf.py check-pr --event "$GITHUB_EVENT_PATH" --base-dir . \
+            --changed-files "$RUNNER_TEMP/changed.txt"

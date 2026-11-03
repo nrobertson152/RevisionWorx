@@ -1,0 +1,60 @@
+name: ARF Director approval
+
+# Two decisions only the Director can record, each bound to one exact commit:
+#   rules       approve a PR that changes protected files (AGENTS.md, .agents/, .github/, tools/arf.py)
+#   provenance  vouch for a head commit that ARF did not publish (you pushed it, or a hand-run
+#               agent did); it is then reviewed as human-implemented
+# Start it from the Actions tab on the default branch.
+#
+# Why agents can't produce these: starting a workflow needs the Actions permission, which
+# ARF_GH_TOKEN lacks; the job only runs when the actor is the configured ARF_DIRECTOR; and the
+# checks that read these statuses ignore any not written by GitHub Actions.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: What you are approving
+        required: true
+        type: choice
+        options: [rules, provenance]
+      pr:
+        description: PR number
+        required: true
+      sha:
+        description: Full head commit SHA you reviewed (40 characters)
+        required: true
+
+permissions: {}
+
+jobs:
+  approve:
+    if: >-
+      github.ref_name == github.event.repository.default_branch &&
+      vars.ARF_DIRECTOR != '' && github.actor == vars.ARF_DIRECTOR && github.triggering_actor == vars.ARF_DIRECTOR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARF_STATUS_TOKEN: ${{ github.token }}
+      ARF_DIRECTOR: ${{ vars.ARF_DIRECTOR }}
+      KIND: ${{ inputs.kind }}
+      PR: ${{ inputs.pr }}
+      SHA: ${{ inputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Record the approval at this exact commit
+        run: python3 -I tools/arf.py director-approval --kind "$KIND" --pr "$PR" --sha "$SHA"
+      - name: Re-run the check that was waiting for it
+        run: |
+          if [ "$KIND" = rules ]; then wf=arf-policy.yml; else wf=arf-review.yml; fi
+          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --commit "$SHA" \
+                   --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$run_id" ]; then gh run rerun "$run_id" --repo "$GITHUB_REPOSITORY"; fi

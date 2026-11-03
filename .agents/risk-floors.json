@@ -1,0 +1,26 @@
+{
+  "comment": "Minimum risk for any change touching these paths (a directory covers everything under it). Enforced when the coordinator sets risk and again at review. Protected file: changes need rules-change and the Director's approval run. Paths under revisionworx/ apply once the code is merged to main.",
+  "floors": {
+    "AGENTS.md": "high",
+    "CLAUDE.md": "high",
+    ".agents/": "high",
+    ".github/": "critical",
+    "tools/arf.py": "critical",
+    "tools/arf_tests/": "critical",
+    "revisionworx/": "high",
+    "LICENSE": "critical",
+    "pyproject.toml": "high",
+    "docs/REQUIREMENTS.md": "high",
+    "docs/ARCHITECTURE.md": "high",
+    "docs/ADMINISTRATIVE_LOCK_FENCING_DIRECTIVE.md": "critical",
+    "revisionworx/authority.py": "critical",
+    "revisionworx/atomicio.py": "critical",
+    "revisionworx/workspace.py": "critical",
+    "revisionworx/documents.py": "critical",
+    "revisionworx/lifecycle.py": "critical",
+    "revisionworx/index.py": "critical",
+    "revisionworx/clientstate.py": "critical",
+    "revisionworx/content.py": "critical",
+    "revisionworx/paths.py": "critical"
+  }
+}

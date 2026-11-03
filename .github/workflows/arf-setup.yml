@@ -1,0 +1,23 @@
+name: ARF setup
+
+# Run once from the Actions tab after installing ARF (and again after upgrades).
+# Creates or updates the ARF labels.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Create or update labels
+        env:
+          GH_TOKEN: ${{ secrets.ARF_GH_TOKEN }}
+        run: python3 -I tools/arf.py labels

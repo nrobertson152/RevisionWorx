@@ -1,0 +1,191 @@
+name: ARF implement
+
+# Three jobs on three fresh runners:
+#   prepare  no model, read-only token: decides branch, model and base commits
+#   work     the model; no write token; its result leaves only as an artifact
+#   publish  no model; Director's token; validates the artifact, then pushes / opens the PR
+# Nothing the model does can reach the publish runner except the artifact's contents,
+# which tools/arf.py (from the default branch) treats as untrusted data.
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+concurrency:
+  # Only dispatch labels share a group, so unrelated label changes can't cancel a queued run.
+  group: >-
+    arf-implement-${{ github.event.issue.number || github.event.pull_request.number }}-${{
+    (github.event.label.name == 'agent:implement' || github.event.label.name == 'agent:rework') && 'run' || github.event.label.name }}
+  cancel-in-progress: false
+
+env:
+  ARF_IMPLEMENTER: ${{ vars.ARF_IMPLEMENTER }}
+  ARF_CLAUDE_MODEL: ${{ vars.ARF_CLAUDE_MODEL }}
+  ARF_CODEX_MODEL: ${{ vars.ARF_CODEX_MODEL }}
+  ARF_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  GIT_NAME: ${{ github.actor }}
+  GIT_EMAIL: ${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com
+
+jobs:
+  prepare:
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'agent:implement') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'agent:rework')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: read
+    outputs:
+      skip: ${{ steps.prep.outputs.skip }}
+      issue: ${{ steps.prep.outputs.issue }}
+      pr: ${{ steps.prep.outputs.pr }}
+      branch: ${{ steps.prep.outputs.branch }}
+      mode: ${{ steps.prep.outputs.mode }}
+      engine: ${{ steps.prep.outputs.engine }}
+      model: ${{ steps.prep.outputs.model }}
+      default_sha: ${{ steps.prep.outputs.default_sha }}
+      branch_sha: ${{ steps.prep.outputs.branch_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare task
+        id: prep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I tools/arf.py prepare-implement --event "$GITHUB_EVENT_PATH"
+      - uses: actions/upload-artifact@v4
+        if: steps.prep.outputs.skip == ''
+        with:
+          name: task
+          path: .arf-out/task.md
+          retention-days: 7
+
+  work:
+    needs: prepare
+    if: needs.prepare.outputs.skip == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recreate the starting tree
+        env:
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          BRANCH_SHA: ${{ needs.prepare.outputs.branch_sha }}
+          DEFAULT_SHA: ${{ needs.prepare.outputs.default_sha }}
+        run: >-
+          python3 -I tools/arf.py setup-branch --branch "$BRANCH" --branch-sha "$BRANCH_SHA"
+          --default-sha "$DEFAULT_SHA" --author "$GIT_NAME" --email "$GIT_EMAIL"
+      - name: Start from an empty output directory (agent output is never taken from the repository)
+        run: rm -rf .arf-out && mkdir .arf-out
+      - uses: actions/download-artifact@v4
+        with:
+          name: task
+          path: .arf-out
+      - name: Install dependencies
+        if: vars.ARF_BOOTSTRAP_CMD != ''
+        env:
+          CMD: ${{ vars.ARF_BOOTSTRAP_CMD }}
+        run: bash -c "$CMD"
+
+      - name: Implement (Claude)
+        if: needs.prepare.outputs.engine == 'claude'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            You are the ARF Implementer (${{ needs.prepare.outputs.mode }}) for issue #${{ needs.prepare.outputs.issue }} on branch ${{ needs.prepare.outputs.branch }}.
+            Read AGENTS.md, .agents/roles/implementer.md, .agents/REPO_PROFILE.md, .agents/QUALITY_GATES.md and .arf-out/task.md.
+            Follow "In a workflow run" in implementer.md. Do not commit or push. Finish by writing .arf-out/pr.md or .arf-out/blocked.md.
+          claude_args: |
+            --model ${{ needs.prepare.outputs.model }}
+            --max-turns ${{ vars.ARF_MAX_TURNS || '80' }}
+            --allowedTools "Read,Write,Edit,MultiEdit,Glob,Grep,Bash"
+            --disallowedTools "Bash(git push:*),Bash(git commit:*),Bash(git checkout:*),Bash(git reset:*),Bash(gh:*)"
+
+      - name: Implement (Codex)
+        if: needs.prepare.outputs.engine == 'codex'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ vars.ARF_CODEX_MODEL }}
+          permission-profile: ":workspace"
+          prompt: |
+            You are the ARF Implementer (${{ needs.prepare.outputs.mode }}) for issue #${{ needs.prepare.outputs.issue }} on branch ${{ needs.prepare.outputs.branch }}.
+            Read AGENTS.md, .agents/roles/implementer.md, .agents/REPO_PROFILE.md, .agents/QUALITY_GATES.md and .arf-out/task.md.
+            Follow "In a workflow run" in implementer.md. Do not commit or push. Finish by writing .arf-out/pr.md or .arf-out/blocked.md.
+
+      # Only a job that finished successfully hands anything over.
+      - name: Package the result as data
+        run: python3 -I tools/arf.py package-work --out "$RUNNER_TEMP/arf-work"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: work
+          path: ${{ runner.temp }}/arf-work
+          retention-days: 7
+
+  publish:
+    needs: [prepare, work]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write   # GITHUB_TOKEN records arf/provenance on the commit this job pushes
+    env:
+      GH_TOKEN: ${{ secrets.ARF_GH_TOKEN }}
+      ARF_GH_TOKEN: ${{ secrets.ARF_GH_TOKEN }}
+      ARF_STATUS_TOKEN: ${{ github.token }}
+      SKIP: ${{ needs.prepare.outputs.skip }}
+      ISSUE: ${{ needs.prepare.outputs.issue }}
+      PR: ${{ needs.prepare.outputs.pr }}
+      TARGET: ${{ needs.prepare.outputs.pr || needs.prepare.outputs.issue || github.event.issue.number || github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: needs.prepare.outputs.skip == '' && needs.work.result == 'success'
+        continue-on-error: true
+        with:
+          name: work
+          path: ${{ runner.temp }}/arf-work
+      - name: Validate and publish
+        if: needs.prepare.outputs.skip == ''
+        env:
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          BRANCH_SHA: ${{ needs.prepare.outputs.branch_sha }}
+          DEFAULT_SHA: ${{ needs.prepare.outputs.default_sha }}
+          MODEL: ${{ needs.prepare.outputs.model }}
+          WORK_RESULT: ${{ needs.work.result }}
+        run: >-
+          python3 -I tools/arf.py publish-implement --work-result "$WORK_RESULT" --issue "$ISSUE" --pr "$PR" --branch "$BRANCH"
+          --branch-sha "$BRANCH_SHA" --default-sha "$DEFAULT_SHA" --model "$MODEL"
+          --base-branch "$ARF_DEFAULT_BRANCH" --author "$GIT_NAME" --email "$GIT_EMAIL"
+          --work "$RUNNER_TEMP/arf-work"
+      - name: Report why the implementer did not start
+        if: needs.prepare.outputs.skip != ''
+        env:
+          REASON: ${{ needs.prepare.outputs.skip }}
+        run: >-
+          python3 -I tools/arf.py report --target "$TARGET" --text "Implementer not started: $REASON."
+          --add needs:director --remove agent:implement,agent:rework

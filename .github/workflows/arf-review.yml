@@ -1,0 +1,187 @@
+name: ARF review
+
+# Cross-model verification in three jobs:
+#   prepare  no model: free checks first (rules version, PR policy, round cap), then picks a
+#            reviewer model different from Implemented-by-model and a depth from the risk
+#   review   the model; no write token; writes verdict.json as an artifact
+#   publish  no model: validates the verdict against the contract and risk, records the
+#            arf/cross-model-review status with GITHUB_TOKEN, labels with the Director's token
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
+
+permissions: {}
+
+concurrency:
+  group: >-
+    arf-review-${{ github.event.pull_request.number }}-${{
+    github.event.action == 'labeled' && github.event.label.name != 'agent:review' && github.event.label.name || 'review' }}
+  cancel-in-progress: true
+
+env:
+  ARF_IMPLEMENTER: ${{ vars.ARF_IMPLEMENTER }}
+  ARF_REVIEWER: ${{ vars.ARF_REVIEWER }}
+  ARF_CLAUDE_MODEL: ${{ vars.ARF_CLAUDE_MODEL }}
+  ARF_CODEX_MODEL: ${{ vars.ARF_CODEX_MODEL }}
+  ARF_CLAUDE_REVIEW_MODEL: ${{ vars.ARF_CLAUDE_REVIEW_MODEL }}
+  ARF_CODEX_REVIEW_MODEL: ${{ vars.ARF_CODEX_REVIEW_MODEL }}
+  ARF_CLAUDE_LIGHT_MODEL: ${{ vars.ARF_CLAUDE_LIGHT_MODEL }}
+  ARF_CODEX_LIGHT_MODEL: ${{ vars.ARF_CODEX_LIGHT_MODEL }}
+  ARF_MAX_REVIEW_ROUNDS: ${{ vars.ARF_MAX_REVIEW_ROUNDS }}
+  ARF_AUTO_MERGE: ${{ vars.ARF_AUTO_MERGE }}
+
+jobs:
+  prepare:
+    if: github.event.action != 'labeled' || github.event.label.name == 'agent:review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      skip: ${{ steps.prep.outputs.skip }}
+      silent: ${{ steps.prep.outputs.silent }}
+      rework: ${{ steps.prep.outputs.rework }}
+      director: ${{ steps.prep.outputs.director }}
+      pr: ${{ steps.prep.outputs.pr }}
+      sha: ${{ steps.prep.outputs.sha }}
+      engine: ${{ steps.prep.outputs.engine }}
+      model: ${{ steps.prep.outputs.model }}
+      implementer: ${{ steps.prep.outputs.implementer }}
+      round: ${{ steps.prep.outputs.round }}
+      risk: ${{ steps.prep.outputs.risk }}
+      issue: ${{ steps.prep.outputs.issue }}
+      contract_digest: ${{ steps.prep.outputs.contract_digest }}
+      depth: ${{ steps.prep.outputs.depth }}
+      max_turns: ${{ steps.prep.outputs.max_turns }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load ARF tools from the default branch (never from the PR)
+        env:
+          DEFAULT: ${{ github.event.repository.default_branch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/arf-base"
+          git archive "origin/$DEFAULT" tools .agents | tar -x -C "$RUNNER_TEMP/arf-base"
+      - name: Gate and prepare context
+        id: prep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARF_STATUS_TOKEN: ${{ github.token }}
+        run: python3 -I "$RUNNER_TEMP/arf-base/tools/arf.py" prepare-review --event "$GITHUB_EVENT_PATH"
+      - uses: actions/upload-artifact@v4
+        if: steps.prep.outputs.skip == ''
+        with:
+          name: review-context
+          path: .arf-out/review.md
+          retention-days: 7
+
+  review:
+    needs: prepare
+    if: needs.prepare.outputs.skip == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Start from an empty output directory (agent output is never taken from the repository)
+        run: rm -rf .arf-out && mkdir .arf-out
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-context
+          path: .arf-out
+      - name: Install dependencies
+        if: vars.ARF_BOOTSTRAP_CMD != ''
+        env:
+          CMD: ${{ vars.ARF_BOOTSTRAP_CMD }}
+        run: bash -c "$CMD"
+
+      - name: Review (Claude)
+        if: needs.prepare.outputs.engine == 'claude'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            You are the ARF Reviewer for PR #${{ needs.prepare.outputs.pr }} at commit ${{ needs.prepare.outputs.sha }}: a ${{ needs.prepare.outputs.depth }} review.
+            The implementer was ${{ needs.prepare.outputs.implementer }}; you are a different model.
+            Read AGENTS.md, .agents/roles/reviewer.md, .agents/REPO_PROFILE.md, .agents/QUALITY_GATES.md and .arf-out/review.md.
+            Do not modify tracked files. Finish by writing .arf-out/verdict.json exactly as reviewer.md specifies.
+          claude_args: |
+            --model ${{ needs.prepare.outputs.model }}
+            --max-turns ${{ needs.prepare.outputs.max_turns }}
+            --allowedTools "Read,Write,Glob,Grep,Bash"
+            --disallowedTools "Edit,MultiEdit,Bash(git push:*),Bash(git commit:*),Bash(git checkout:*),Bash(git reset:*),Bash(gh:*)"
+
+      - name: Review (Codex)
+        if: needs.prepare.outputs.engine == 'codex'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ needs.prepare.outputs.model != 'codex-default' && needs.prepare.outputs.model || '' }}
+          permission-profile: ":workspace"
+          prompt: |
+            You are the ARF Reviewer for PR #${{ needs.prepare.outputs.pr }} at commit ${{ needs.prepare.outputs.sha }}: a ${{ needs.prepare.outputs.depth }} review.
+            The implementer was ${{ needs.prepare.outputs.implementer }}; you are a different model.
+            Read AGENTS.md, .agents/roles/reviewer.md, .agents/REPO_PROFILE.md, .agents/QUALITY_GATES.md and .arf-out/review.md.
+            Do not modify tracked files. Finish by writing .arf-out/verdict.json exactly as reviewer.md specifies.
+
+      - uses: actions/upload-artifact@v4   # only after a successful review job
+        with:
+          name: verdict
+          path: .arf-out/verdict.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    needs: [prepare, review]
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.silent != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: needs.prepare.outputs.skip == '' && needs.review.result == 'success'
+        continue-on-error: true
+        with:
+          name: verdict
+          path: ${{ runner.temp }}/verdict
+      - name: Validate and record the verdict
+        env:
+          GH_TOKEN: ${{ secrets.ARF_GH_TOKEN }}
+          ARF_STATUS_TOKEN: ${{ github.token }}
+          PR: ${{ needs.prepare.outputs.pr }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          MODEL: ${{ needs.prepare.outputs.model }}
+          IMPLEMENTER: ${{ needs.prepare.outputs.implementer }}
+          ROUND: ${{ needs.prepare.outputs.round }}
+          SKIP: ${{ needs.prepare.outputs.skip }}
+          DIRECTOR: ${{ needs.prepare.outputs.director }}
+          REWORK: ${{ needs.prepare.outputs.rework }}
+          REVIEW_RESULT: ${{ needs.review.result }}
+          ISSUE: ${{ needs.prepare.outputs.issue }}
+          DIGEST: ${{ needs.prepare.outputs.contract_digest }}
+          RISK: ${{ needs.prepare.outputs.risk }}
+        run: >-
+          python3 -I tools/arf.py publish-verdict --pr "$PR" --sha "$SHA" --model "$MODEL"
+          --implementer "$IMPLEMENTER" --round "$ROUND" --verdict "$RUNNER_TEMP/verdict/verdict.json"
+          --skip "$SKIP" --director "$DIRECTOR" --rework "$REWORK" --review-result "$REVIEW_RESULT"
+          --issue "$ISSUE" --contract-digest "$DIGEST" --risk "$RISK"

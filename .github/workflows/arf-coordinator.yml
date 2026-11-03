@@ -1,0 +1,133 @@
+name: ARF coordinator
+
+# snapshot (no model, read-only) → plan (model, no write token, plan.json artifact)
+# → apply (no model, Director's token; re-reads GitHub and validates the plan before acting).
+# Event-driven first; the schedule only catches stalled work and stops before the model if
+# nothing needs attention. Bursts of new issues collapse into one run (one pending run per group).
+
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+  schedule:
+    - cron: "23 */6 * * *"
+
+permissions: {}
+
+concurrency:
+  group: >-
+    arf-coordinator-${{ github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'arf:briefing') && 'briefing' || 'main' }}
+  cancel-in-progress: false
+
+env:
+  ARF_MAX_PARALLEL: ${{ vars.ARF_MAX_PARALLEL }}
+  ARF_MAX_REVIEW_ROUNDS: ${{ vars.ARF_MAX_REVIEW_ROUNDS }}
+  ARF_AUTO_MERGE: ${{ vars.ARF_AUTO_MERGE }}
+  ARF_STALE_HOURS: ${{ vars.ARF_STALE_HOURS }}
+
+jobs:
+  snapshot:
+    if: github.event_name != 'issues' || !contains(github.event.issue.labels.*.name, 'arf:briefing')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: read
+    outputs:
+      run: ${{ steps.snap.outputs.run }}
+      reason: ${{ steps.snap.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Snapshot open issues and PRs
+        id: snap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I tools/arf.py snapshot
+      - uses: actions/upload-artifact@v4
+        if: steps.snap.outputs.run == 'true'
+        with:
+          name: state
+          path: .arf-out/state.json
+          retention-days: 7
+
+  plan:
+    needs: snapshot
+    if: needs.snapshot.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Start from an empty output directory (agent output is never taken from the repository)
+        run: rm -rf .arf-out && mkdir .arf-out
+      - uses: actions/download-artifact@v4
+        with:
+          name: state
+          path: .arf-out
+      - name: Coordinate (Claude)
+        if: (vars.ARF_COORDINATOR || 'claude') == 'claude'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            You are the ARF Coordinator for ${{ github.repository }}. Reason for this run: ${{ needs.snapshot.outputs.reason }}.
+            Read AGENTS.md, .agents/roles/coordinator.md, .agents/REPO_PROFILE.md, .agents/QUALITY_GATES.md and .arf-out/state.json.
+            Then write .arf-out/plan.json exactly as coordinator.md specifies. You have no GitHub access.
+          claude_args: |
+            --model ${{ vars.ARF_COORDINATOR_MODEL || 'claude-sonnet-5-5' }}
+            --max-turns 30
+            --allowedTools "Read,Glob,Grep,Write"
+      - name: Coordinate (Codex)
+        if: vars.ARF_COORDINATOR == 'codex'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ vars.ARF_COORDINATOR_MODEL || vars.ARF_CODEX_MODEL }}
+          permission-profile: ":workspace"
+          prompt: |
+            You are the ARF Coordinator for ${{ github.repository }}. Reason for this run: ${{ needs.snapshot.outputs.reason }}.
+            Read AGENTS.md, .agents/roles/coordinator.md, .agents/REPO_PROFILE.md, .agents/QUALITY_GATES.md and .arf-out/state.json.
+            Then write .arf-out/plan.json exactly as coordinator.md specifies. You have no GitHub access.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: .arf-out/plan.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  apply:
+    needs: [snapshot, plan]
+    if: always() && needs.snapshot.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: needs.plan.result == 'success'
+        continue-on-error: true
+        with:
+          name: plan
+          path: ${{ runner.temp }}/plan
+      - name: Validate against a fresh snapshot and apply
+        env:
+          GH_TOKEN: ${{ secrets.ARF_GH_TOKEN }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+        run: python3 -I tools/arf.py apply-plan --plan "$RUNNER_TEMP/plan/plan.json" --plan-result "$PLAN_RESULT"
