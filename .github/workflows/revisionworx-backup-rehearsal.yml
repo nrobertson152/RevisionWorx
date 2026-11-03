@@ -32,9 +32,22 @@ jobs:
           git rev-parse HEAD
           python --version
           python -c "import platform; print(platform.platform())"
+      - name: Compile backup source and test module
+        shell: bash
+        run: python -m py_compile tools/packaging/offline_backup_rehearsal.py tests/test_offline_backup_rehearsal.py
       - name: Execute isolated backup/restore regression suite
         shell: bash
-        run: python -m unittest discover -s tests -p test_offline_backup_rehearsal.py -v
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p test_offline_backup_rehearsal.py -v 2>&1 | tee backup-rehearsal-test-results.txt
+      - name: Preserve exact native regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-rehearsal-${{ matrix.os }}-py311
+          path: backup-rehearsal-test-results.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check command-line entrypoint without mutating a workspace
         shell: bash
         run: python tools/packaging/offline_backup_rehearsal.py --help
