@@ -13,8 +13,8 @@ import time
 
 import pytest
 
-if importlib.util.find_spec("revisionworx.gui.controller") is None:
-    pytest.skip("Desktop alpha controller not present in source checkout", allow_module_level=True)
+if importlib.util.find_spec("revisionworx.documents") is None or importlib.util.find_spec("revisionworx.gui.controller") is None:
+    pytest.skip("Desktop alpha and Phase 2 documents unavailable on this base", allow_module_level=True)
 
 from revisionworx import documents
 from revisionworx.gui.controller import Controller
