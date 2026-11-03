@@ -39,6 +39,7 @@ import json
 import os
 import re
 import socket
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -242,6 +243,8 @@ class Workspace:
         self.writable = writable
         self._lock_token = lock_token
         self._closed = False
+        self._view_lock = threading.Lock()
+        self._view: dict | None = None
 
     # ------------------------------------------------------------------ lifecycle
     @property
@@ -309,15 +312,34 @@ class Workspace:
         if self._lock_token:
             lock = self.meta_dir / "locks" / "writer.lock"
             try:
-                holder = atomicio.read_json(lock)
-            except (OSError, ValueError):
-                holder = None
-            if holder and holder.get("token") == self._lock_token:
+                ours = self._read_lock_file(lock).get("token") == self._lock_token
+            except FileNotFoundError:
+                ours = False
+            except ValueError:
+                ours = False
+            except OSError:
+                ours = True   # could not look (issue #10). Release is move-then-verify, so trying is safe.
+            if ours:
                 self._unlink_own_lock(lock)
             self._lock_token = None
 
     LOCK_RELEASE_ATTEMPTS = 50
     LOCK_RELEASE_DELAY = 0.02
+
+    @staticmethod
+    def _read_lock_file(path: Path) -> dict:
+        """Read a lock file, retrying transient Windows sharing violations (ADR-016, issue #10): while
+        another process renames the file, opening it can fail with WinError 32. That says nothing
+        about who holds the lock, so it must not be taken for "lost", "free" or "corrupt"."""
+        import time
+        for attempt in range(Workspace.LOCK_RELEASE_ATTEMPTS):
+            try:
+                return atomicio.read_json(path)
+            except PermissionError:
+                if attempt == Workspace.LOCK_RELEASE_ATTEMPTS - 1:
+                    raise
+                time.sleep(Workspace.LOCK_RELEASE_DELAY)
+        raise AssertionError("unreachable")
 
     def _unlink_own_lock(self, lock: Path) -> None:
         """Release our writer lock without ever removing a successor's (ADR-019).
@@ -350,7 +372,7 @@ class Workspace:
                 time.sleep(self.LOCK_RELEASE_DELAY)
                 continue
             try:
-                holder = atomicio.read_json(private)
+                holder = self._read_lock_file(private)
             except (OSError, ValueError):
                 holder = {}
             if holder.get("token") == self._lock_token:
@@ -398,7 +420,7 @@ class Workspace:
     @staticmethod
     def _acquire_writer_lock(meta: Path) -> str:
         lock = meta / "locks" / "writer.lock"
-        existing: dict = {}
+        existing: dict = {"user": "?", "host": "?", "pid": "?", "acquired": "?", "token": "?"}
         for _ in range(Workspace.LOCK_ACQUIRE_ATTEMPTS):
             token = uuid.uuid4().hex
             holder = {**current_actor(), "token": token, "acquired": now_iso()}
@@ -406,7 +428,9 @@ class Workspace:
                 atomicio.publish_exclusive(lock, atomicio.dumps_json(holder))
             except ExclusiveCreateError:
                 try:
-                    existing = atomicio.read_json(lock)
+                    existing = Workspace._read_lock_file(lock)
+                except FileNotFoundError:
+                    continue                     # the holder just left: the name is free, try again
                 except (OSError, ValueError):
                     existing = {"user": "?", "host": "?", "pid": "?", "acquired": "?", "token": "?"}
                 stale = existing.get("token")
@@ -460,7 +484,7 @@ class Workspace:
         def fence_all() -> None:
             for orphan in sorted(locks.glob(".fencing-*")) + sorted(locks.glob(".releasing-*")):
                 try:
-                    holder = atomicio.read_json(orphan)
+                    holder = Workspace._read_lock_file(orphan)
                 except FileNotFoundError:
                     continue
                 except (OSError, ValueError):
@@ -507,7 +531,7 @@ class Workspace:
             except FileNotFoundError:
                 return                               # the releaser finished, or another fencer has it
         try:
-            holder = atomicio.read_json(custody)
+            holder = Workspace._read_lock_file(custody)
         except FileNotFoundError:
             return                                   # a concurrent fencer finished it
         except (OSError, ValueError):
@@ -883,22 +907,48 @@ class Workspace:
             raise WorkspaceCorruptError(f"journal entry {seq} fails its SHA-256 digest check (altered?)")
         return entry
 
+    def _journal_view(self) -> dict:
+        """What the journal says, extended to the current head (ADR-022). Per handle, in memory, built
+        only from digest-verified entries, and only ever read forward: entries are immutable, so each
+        one is read once. The view is thrown away if the journal is shorter than what was seen or the
+        last entry seen has changed (a restored journal).
+
+        ``latest`` maps (kind, id) to (seq, deleted) of the last *effective* write. Going forward in
+        journal order, an entry is fenced exactly when its token is already in ``revoked``."""
+        with self._view_lock:
+            seqs = self.journal_seqs()
+            view = self._view
+            if view is not None and view["seen"]:
+                try:
+                    anchored = (seqs and seqs[-1] >= view["seen"]
+                                and self.read_entry(view["seen"]).get("digest") == view["anchor"])
+                except (FileNotFoundError, WorkspaceCorruptError):
+                    anchored = False
+                if not anchored:
+                    view = None
+            if view is None:
+                view = {"seen": 0, "anchor": None, "revocations": [], "revoked": set(), "latest": {}}
+            for s in seqs:
+                if s <= view["seen"]:
+                    continue
+                entry = self.read_entry(s)
+                tok = entry.get("writer_token")
+                if not (tok and tok in view["revoked"]):
+                    for item in entry["records"]:
+                        view["latest"][(item["kind"], item["id"])] = (s, bool(item.get("delete")))
+                if entry.get("op") == "workspace.lock.break":
+                    for item in entry["records"]:
+                        revoked = (item.get("data") or {}).get("previous_holder", {}).get("token")
+                        if revoked:
+                            view["revocations"].append((s, revoked))
+                            view["revoked"].add(revoked)
+                view["seen"], view["anchor"] = s, entry.get("digest")
+            self._view = view
+            return view
+
     def _revocations(self) -> list[tuple[int, str]]:
         """(seq, token) of every audited writer-lock break, in journal order (issue #8 fence)."""
-        head = self.head_seq()
-        cached = getattr(self, "_revocation_cache", None)
-        if cached and cached[0] == head:
-            return cached[1]
-        out = []
-        for s in self.journal_seqs():
-            e = self.read_entry(s)
-            if e.get("op") == "workspace.lock.break":
-                for item in e["records"]:
-                    tok = (item.get("data") or {}).get("previous_holder", {}).get("token")
-                    if tok:
-                        out.append((s, tok))
-        self._revocation_cache = (head, out)
-        return out
+        return list(self._journal_view()["revocations"])
 
     def is_fenced(self, entry: dict) -> bool:
         """An entry signed with a token that an EARLIER entry revoked never takes effect.
@@ -960,7 +1010,7 @@ class Workspace:
 
     def _check_lock_still_held(self) -> None:
         try:
-            holder = atomicio.read_json(self.meta_dir / "locks" / "writer.lock")
+            holder = self._read_lock_file(self.meta_dir / "locks" / "writer.lock")
         except (OSError, ValueError):
             holder = None
         if not holder or holder.get("token") != self._lock_token:
@@ -986,9 +1036,9 @@ class Workspace:
                 raise ValueError(f"invalid record id {item.id!r}")
         if txid is not None and not re.match(r"^[0-9a-f]{32}$", txid):
             raise ValueError("txid must be 32 lowercase hex characters")
+        self._check_lock_still_held()  # before recover: a writer that lost its lock writes nothing
         if self.applied_seq() != self.head_seq():
             self.recover()
-        self._check_lock_still_held()
         checks = [{"kind": c.kind, "id": c.id, "expect_rev": c.expect_rev}
                   for c in ops if isinstance(c, RecordCheck)]
         identity = request_identity(op, ops, blob_refs)  # also rejects non-finite numbers up front
@@ -1150,39 +1200,67 @@ class Workspace:
         return atomicio.read_json(self.meta_dir / "blobs" / kind / f"{blob_id}.json")
 
     # ------------------------------------------------------------------ reads
-    def _pending_overlay(self) -> dict[tuple[str, str], dict | None]:
-        overlay: dict[tuple[str, str], dict | None] = {}
-        for entry in self.entries_after(self.applied_seq()):
-            for item in entry["records"]:
-                overlay[(item["kind"], item["id"])] = (
-                    None if item.get("delete") else {**item["data"], REV_FIELD: entry["seq"]})
-        return overlay
+    def _record_at(self, kind: str, rid: str, seq: int) -> dict:
+        for item in self.read_entry(seq)["records"]:
+            if item["kind"] == kind and item["id"] == rid and not item.get("delete"):
+                return {**item["data"], REV_FIELD: seq}
+        raise WorkspaceCorruptError(f"journal entry {seq} does not hold the {kind} {rid} it should")
+
+    def _resolve(self, kind: str, rid: str, on_disk: dict | None, latest: tuple[int, bool]) -> dict | None:
+        """The record files are a cache of the journal (ADR-022): a stale writer resuming late can
+        overwrite one with outdated data at any time, and nothing can stop that write. So a file is
+        used only if it is at least as new as the journal's last effective write of that record."""
+        seq, deleted = latest
+        if on_disk is not None and int(on_disk.get(REV_FIELD, 0)) >= seq:
+            return on_disk                           # current (or committed since the view was read)
+        return None if deleted else self._record_at(kind, rid, seq)
+
+    def _latest_writes(self) -> dict[tuple[str, str], tuple[int, bool]]:
+        """The view for reads. A damaged journal must not take away read access to a fully applied
+        workspace (CORE_API: recovery-blocked means read-only), so if everything was applied the files
+        are served as they are. Decisions stay safe: commit() checks revocations first, which raises."""
+        try:
+            return self._journal_view()["latest"]
+        except WorkspaceCorruptError:
+            if self.applied_seq() != self.head_seq():
+                raise
+            return {}
 
     def get(self, kind: str, rid: str) -> dict | None:
-        overlay = self._pending_overlay()
-        if (kind, rid) in overlay:
-            return overlay[(kind, rid)]
-        if not _ID_RE.match(rid):
+        latest = self._latest_writes().get((kind, rid))
+        if latest is None and not _ID_RE.match(rid):
             return None
         path = self.meta_dir / "records" / kind / f"{rid}.json"
         try:
-            return atomicio.read_json(path)
+            on_disk = atomicio.read_json(path)
         except FileNotFoundError:
-            return None
+            on_disk = None
+        except ValueError:
+            if latest is None:
+                raise
+            on_disk = None                           # the journal can answer; verify() reports the file
+        return on_disk if latest is None else self._resolve(kind, rid, on_disk, latest)
 
     def list(self, kind: str) -> dict[str, dict]:
-        out: dict[str, dict] = {}
+        latest = {rid: v for (k, rid), v in self._latest_writes().items() if k == kind}
+        on_disk: dict[str, dict] = {}
         kind_dir = self.meta_dir / "records" / kind
         if kind_dir.is_dir():
             for entry in os.scandir(kind_dir):
                 if entry.name.endswith(".json") and not entry.name.startswith("."):
-                    out[entry.name[:-5]] = atomicio.read_json(Path(entry.path))
-        for (k, rid), data in self._pending_overlay().items():
-            if k == kind:
-                if data is None:
-                    out.pop(rid, None)
-                else:
-                    out[rid] = data
+                    rid = entry.name[:-5]
+                    try:
+                        on_disk[rid] = atomicio.read_json(Path(entry.path))
+                    except FileNotFoundError:
+                        continue
+                    except ValueError:
+                        if rid not in latest:
+                            raise
+        out = {rid: data for rid, data in on_disk.items() if rid not in latest}
+        for rid, seen in latest.items():
+            data = self._resolve(kind, rid, on_disk.get(rid), seen)
+            if data is not None:
+                out[rid] = data
         return out
 
     def settings(self) -> dict:

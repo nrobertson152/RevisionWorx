@@ -61,3 +61,20 @@ def clear_orphan(share: str, name: str, reason: str) -> None:
         Workspace.clear_orphaned_release(Path(share), name, reason=reason)
     except OrphanClearConflict:
         raise SystemExit(3)  # distinct exit code: a competing administrator's clear stands
+
+
+def make_checkout_fixture(share) -> str:
+    """A workspace with one registered document; returns its id. Used by process-race tests."""
+    from pathlib import Path
+    from revisionworx import documents, projects
+    from revisionworx.projects import NewProject
+    from revisionworx.workspace import Workspace
+    share = Path(share)
+    share.mkdir(parents=True)
+    with Workspace.create(share, "race") as ws:
+        projects.add_root(ws, "share", share)
+        project = projects.create_project(ws, NewProject(name="HPU", number="J-1", customer="Acme"))
+        target = projects.project_folder(ws, project) / "02 CAD" / "Parts" / "bracket.ipt"
+        target.write_bytes(b"IPT v1")
+        doc, _ = documents.register_document(ws, project["id"], target)
+    return doc["id"]

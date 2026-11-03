@@ -11,6 +11,8 @@ Oracles, all read back from the journal and the lock directory after the run:
   * authority never interleaves: effective entries never go token A, token B, token A;
   * no lost update: each effective write's expect_rev is the previous effective write of the record;
   * no unfenced evidence: a lock file may leave the scanned namespace only if its token is revoked.
+  * reads match the journal: get() and list() equal a replay of the effective entries, whatever a
+    stale writer later did to the record files (ADR-022).
 
 No claim is made about SMB/NFS, power loss, or outside actors: only protocol processes on a local
 filesystem, in-process threads standing in for processes. Set REVISIONWORX_SCHEDULE_SEEDS to widen.
@@ -128,6 +130,9 @@ def check_invariants(root: pathlib.Path) -> None:
                     assert rec["expect_rev"] == previous_rev, f"lost update at seq {entry['seq']}"
                     previous_rev = entry["seq"]
         revoked = Workspace._revoked_tokens(reader.meta_dir)
+        expected = {"name": "x", REV_FIELD: previous_rev} if previous_rev else None
+        assert reader.get("root", RID) == expected, f"get() disagrees with the journal: {expected}"
+        assert reader.list("root").get(RID) == expected, f"list() disagrees with the journal: {expected}"
     locks = root / ".revisionworx" / "locks"
     for path in locks.iterdir():
         if path.name.startswith(EVIDENCE):
