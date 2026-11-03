@@ -319,6 +319,25 @@ class BackupRehearsalTests(unittest.TestCase):
             self.assertFalse((root / "restored").exists())
             self.assertTrue(external.is_file())
 
+    def test_boolean_manifest_version_is_not_integer_one(self):
+        """JSON true must not alias integer version 1."""
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "source", root / "archive"
+            src.mkdir()
+            (src / "part.step").write_bytes(b"unchanged")
+            mod.backup(src, archive)
+            manifest = archive / mod.MANIFEST
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data["version"] = True
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(mod.BackupError, "version/schema"):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+
     def test_missing_manifest_refused_before_restore_destination_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
