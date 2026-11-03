@@ -210,7 +210,13 @@ Not done yet, in priority order:
 3. Claude B's API requests A1-A7 (triage on PR #7).
 
 Known and watched:
-- One 21 s outlier among five Windows contention trials at `22a5273`; `--durations` is now on in CI to locate it.
+- The 21 s outlier in Windows contention trial 3 is not the product: with `--durations` (run 41577700770) the tests took
+  1.29 s and 0.80 s. It is always the fourth pytest session in the job, so pytest's removal of old temp folders is the
+  likely cause, not proven (the full suite's temp holds the 50,000-folder traversal test).
+- Core CI 41577700770 at `a03f1f0`: ubuntu 3.11 and 3.13 and windows 3.11 passed (windows 3.11: 344 passed, 2 skipped, 5/5
+  contention trials). windows 3.13 failed one test: racing openers of a new index got `IndexBusyError`, because SQLite
+  does not use its busy timeout when switching a new database to WAL. Fixed in the next commit. The real-process crash
+  matrix passed on all four jobs.
 - QA tests that fail on the merged tree with the newest GUI also fail with `fe8a179` as core, so core did not
   cause them: `test_real_postjournal_checkin_failure_survives_restart_once`,
   `test_document_viewmodel_checkout_status_and_filter`, `test_document_viewmodel_rejects_empty_checkin_without_journal_mutation`.

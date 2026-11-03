@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -123,15 +124,27 @@ class LocalIndex:
                 raise IndexBusyError(_BUSY_MESSAGE) from exc
             return False
 
+    def _usable_when_free(self, db: sqlite3.Connection) -> bool | None:
+        """SQLite does not wait on its busy timeout when switching a new database to WAL: racing openers fail at
+        once (seen on real Windows). Being briefly in use is not a reason to give up, so wait here instead."""
+        deadline = time.monotonic() + BUSY_TIMEOUT
+        while True:
+            try:
+                return self._usable(db)
+            except IndexBusyError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+
     def _open(self) -> sqlite3.Connection:
         db = self._connect()
         try:
-            usable = self._usable(db)
+            usable = self._usable_when_free(db)
             if usable is False:
                 db.close()
                 self._discard_files()
                 db = self._connect()
-                usable = self._usable(db)
+                usable = self._usable_when_free(db)
             if usable is None:
                 self._create_schema(db)
         except BaseException:
@@ -304,7 +317,6 @@ class LocalIndex:
         Issue #9: the journal head and the record listing must describe the same state. The head is
         sampled before and after listing all kinds; if anything was committed in between, the
         listing is retried, so the stored cursor never claims less than the cache contains."""
-        import time
         kinds = ("root", "project", "document", "revision", "checkout")
         for attempt in range(50):
             head = self.ws.head_seq()

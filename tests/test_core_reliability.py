@@ -396,6 +396,22 @@ def test_index_open_race_between_threads_on_a_new_cache(share, cache):
         assert not errors, errors
 
 
+def test_opening_waits_out_a_brief_lock_instead_of_failing(share, cache, monkeypatch):
+    """Real Windows, Python 3.13 (Core CI 41577700770): SQLite returns 'locked' at once while another opener switches a new
+    database to WAL, without using its busy timeout, so a racing opener reported 'busy' for no lasting reason."""
+    with Workspace.create(share, "t") as ws:
+        real, denied = LocalIndex._usable, []
+
+        def usable(self, db):
+            if len(denied) < 3:
+                denied.append(1)
+                raise IndexBusyError("injected: another opener is switching to WAL")
+            return real(self, db)
+        monkeypatch.setattr(LocalIndex, "_usable", usable)
+        with open_index(ws, cache) as idx:
+            assert len(denied) == 3 and idx.sync()["mode"] == "current"
+
+
 def test_missing_baseline_blob_does_not_take_search_down(share, cache):
     """verify() reports a missing blob. Until someone repairs it, the rest of the index must still work,
     and coverage must admit the gap rather than imply the project's files were searched."""
