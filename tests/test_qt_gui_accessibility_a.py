@@ -269,7 +269,7 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
     source = tmp_path / "drawing.ipt"
     source_before = source.read_bytes()
     journal = home / ".revisionworx" / "journal"
-    journal_before = {p.name: p.read_bytes() for p in journal.glob("*.json")}
+    journal_before = {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()}
 
     win.show()
     qapp.processEvents()
@@ -277,7 +277,7 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
     qapp.processEvents()
     # Checkout itself may legitimately add journal evidence. Pin the state
     # immediately before cancellation, not before checkout.
-    journal_at_checkout = {p.name: p.read_bytes() for p in journal.glob("*.json")}
+    journal_at_checkout = {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()}
     history_before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
     assert tab.checkin_btn.isEnabled()
     # Pin the managed content tree as well as the external CAD source. A
@@ -305,12 +305,10 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
     qapp.processEvents()
     assert seen == [True]
     assert source.read_bytes() == source_before
-    assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_at_checkout
+    assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_at_checkout
     assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == history_before
 
-    win.close()
-    qapp.processEvents()
-    restarted = Controller(cfg_dir=tmp_path / "cfg",
+    # A rejected check-in must preserve every journal file, including any\n    # future non-JSON evidence, rather than only the currently known suffix.\n    assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_at_checkout\n\n    win.close()\n    qapp.processEvents()\n    restarted = Controller(cfg_dir=tmp_path / "cfg",
                            cache_dir=tmp_path / "cache",
                            state_dir=tmp_path / "state")
     reopened = MainWindow(restarted)
@@ -325,7 +323,7 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
             "The pre-cancellation checkout must remain usable after reopening"
         )
         assert source.read_bytes() == source_before
-        assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_at_checkout
+        assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_at_checkout
         assert ({str(p.relative_to(managed)): p.read_bytes()
                  for p in managed.rglob("*") if p.is_file()}
                 if managed.exists() else {}) == objects_at_checkout
