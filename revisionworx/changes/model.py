@@ -560,10 +560,12 @@ class ChangeOrder(_ChangeBase):
     def content(self) -> dict:
         return {"title": self.title, "description": self.description, "request_ids": list(self.request_ids),
                 "affected": [a.to_dict() for a in self.affected],
+                "dependencies": sorted(([d.change_id, d.dep_type.value] for d in self.dependencies)),
                 "actions": [{"id": a.id, "title": a.title, "required": a.required} for a in self.actions]}
 
     def content_digest(self) -> str:
-        return digest_of("revisionworx/changes/eco-content/v1", self.content())
+        # v2 adds dependencies (Codex P2, PR #20): changing prerequisites invalidates release approvals
+        return digest_of("revisionworx/changes/eco-content/v2", self.content())
 
     def action(self, action_id: str) -> OrderAction:
         for a in self.actions:

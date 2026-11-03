@@ -68,7 +68,13 @@ def available_actions(svc: ChangeService, change: Change, read_only: bool = Fals
         if st in (ECRStatus.SUBMITTED, ECRStatus.IN_REVIEW):
             out += [_act("return_for_rework"), _act("reject")]
         if st is ECRStatus.APPROVED:
-            out.append(_act("create_order"))
+            stale = svc.stale_items(change)
+            if stale and policy.block_stale_baselines:
+                out.append(_act("create_order", False, "some affected documents were revised; return it for "
+                                                       "rework and re-baseline"))
+            else:
+                out.append(_act("create_order"))
+            out.append(_act("return_for_rework"))
         if st in workflow.ECR_STEPS["cancel"][0]:
             out.append(_act("cancel"))
     else:

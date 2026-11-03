@@ -52,8 +52,9 @@ used. Before anything is written it is round-tripped through the same loader.
 
 ```text
 ECR: draft --submit--> submitted --begin_review--> in_review --approve (quorum)--> approved
-       ^                   |                          |
-       +-- return_for_rework (reason) ----------------+--reject (reason)--> rejected
+       ^                   |                          |               |
+       +-- return_for_rework (reason) ----------------+---------------+  (approved: e.g. stale baseline)
+     submitted|in_review --reject (reason)--> rejected
      draft|submitted|in_review|approved --cancel (reason)--> cancelled
      approved --(order created)--> converted --(order closed)--> closed
                                    converted --(order cancelled)--> approved
@@ -80,7 +81,11 @@ Any other step raises `TransitionError` and writes nothing; tests run every step
 
 A rejection signoff in the current gate blocks it until the content changes (release) or a new round
 starts (closure). Returning an ECR for rework and resubmitting starts a new round: earlier approvals stay in
-the record as history but no longer count.
+the record as history but no longer count. This includes returning an *approved* request that is not yet
+on an order, which is the recovery path when a baseline goes stale after approval. An order's approved
+content includes its actions, items and dependencies, so changing prerequisites invalidates release
+approvals (digest domain `eco-content/v2`; release signoffs recorded by earlier builds of this branch no
+longer count, which only affects disposable alpha data).
 
 ## 4. Persistence and the adapter contract (`changes/store.py`)
 

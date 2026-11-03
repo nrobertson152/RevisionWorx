@@ -9,6 +9,7 @@ from revisionworx.changes.catalog import MemoryCatalog
 from revisionworx.changes.model import (DependencyError, DuplicateNumber, ECOStatus, ECRStatus,
                                         ImplementationStatus, MalformedRecord, NotFound, ReplayRefused,
                                         SignoffError, StaleBaseline, TransitionError, ValidationError)
+from revisionworx.changes.model import SignoffStage as changes_stage
 from revisionworx.changes.store import Commit, MemoryStore, Put
 from revisionworx.workspace import ConflictError
 
@@ -523,3 +524,46 @@ def test_merging_requests_refuses_conflicting_actions_or_baselines(env):
         svc.create_order([a, b])
     with pytest.raises(ValidationError, match="different baselines"):
         svc.create_order([a, c])
+
+
+def test_stale_approved_request_can_be_reworked_and_needs_fresh_approval(env):
+    """Codex P2 on PR #20 (cb68433): an approved ECR whose document was revised was stuck."""
+    svc, actors, cat = env
+    ecr_id = approved(svc, actors)
+    cat.add_revision(DOC, R["B"], "B")
+    with pytest.raises(StaleBaseline):
+        svc.create_order([ecr_id])
+    svc.return_for_rework(ecr_id, "drawing moved to B")
+    assert svc.rebaseline(ecr_id).affected[0].baseline_label == "B"
+    svc.submit(ecr_id)
+    svc.begin_review(ecr_id)
+    ecr = svc.request(ecr_id)
+    assert svc.gate(ecr, changes_stage.ECR_REVIEW)["approvals"] == 0      # bob's earlier approval is history
+    with actors.as_(fixtures.BOB):
+        assert svc.approve(ecr_id).status is ECRStatus.APPROVED
+    assert svc.create_order([ecr_id]).status is ECOStatus.PLANNING
+
+
+def test_converted_request_still_cannot_be_returned(env):
+    svc, actors, _ = env
+    ecr_id = approved(svc, actors)
+    svc.create_order([ecr_id])
+    with pytest.raises(TransitionError):
+        svc.return_for_rework(ecr_id, "no")
+
+
+def test_changing_order_dependencies_invalidates_release_approval(env):
+    """Codex P2 on PR #20 (cb68433): a reviewed prerequisite could be removed without re-approval."""
+    svc, actors, _ = env
+    svc.save_policy({"eco_release_approvals_required": 1})
+    prereq = svc.create_request("prereq", "r")
+    eco = svc.create_order([approved(svc, actors)])
+    svc.set_dependencies(eco.id, [prereq.id])
+    with actors.as_(fixtures.BOB):
+        svc.sign_off_order(eco.id, "approve")
+    svc.set_dependencies(eco.id, [])
+    with pytest.raises(SignoffError, match="0 of 1"):
+        svc.start_work(eco.id)
+    with actors.as_(fixtures.BOB):
+        svc.sign_off_order(eco.id, "approve")                 # re-approving the new plan is allowed
+    assert svc.start_work(eco.id).status is ECOStatus.IN_PROGRESS

@@ -275,3 +275,22 @@ def test_csv_import_retry_with_same_txid_returns_the_original_requests(doc_ws):
     first = exchange.import_requests_csv(svc, text, exchange.document_lookup(doc_ws), txid=tx)
     again = exchange.import_requests_csv(svc, text, exchange.document_lookup(doc_ws), txid=tx)
     assert [c.id for c in again] == [c.id for c in first] and len(svc.scan()[0]) == 2
+
+
+def test_where_used_provider_contract_matches_pr21_shape(sample):
+    """Duck-typed provider with the edge keys Claude C published for revisionworx.bom (PR #21)."""
+    svc, _, _, ids = sample
+
+    class Provider:
+        def where_used(self, item):
+            if item.item_type.value not in ("part", "assembly", "bom"):
+                return {"edges": [], "coverage": f"{item.item_type.value} items were not searched"}
+            return {"edges": [{"label": "A-200 Frame", "id": "prt_" + "1" * 32, "relationship": "direct",
+                               "levels": 1, "referenced_revision": "latest", "quantity": 2,
+                               "top_level": True, "verification": "declared-bom"}],
+                    "coverage": "CAD files and unmanaged projects were not searched"}
+    rep = impact.impact_summary(svc, ids["order"], where_used=Provider())
+    asm = [r for r in rep["items"] if r["type"] == "assembly"][0]
+    assert asm["where_used"][0]["relationship"] == "direct"
+    assert "CAD files" in asm["where_used_coverage"]
+    assert impact.NO_WHERE_USED not in rep["coverage"]

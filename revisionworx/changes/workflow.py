@@ -16,7 +16,10 @@ from .model import ECOStatus, ECRStatus, TransitionError, ValidationError, clean
 ECR_STEPS: dict[str, tuple[frozenset, ECRStatus]] = {
     "submit": (frozenset({ECRStatus.DRAFT}), ECRStatus.SUBMITTED),
     "begin_review": (frozenset({ECRStatus.SUBMITTED}), ECRStatus.IN_REVIEW),
-    "return_for_rework": (frozenset({ECRStatus.SUBMITTED, ECRStatus.IN_REVIEW}), ECRStatus.DRAFT),
+    # also from Approved (not yet on an order), e.g. when a baseline went stale: the next submission
+    # starts a new review round, so earlier approvals stay in the record but no longer count
+    "return_for_rework": (frozenset({ECRStatus.SUBMITTED, ECRStatus.IN_REVIEW, ECRStatus.APPROVED}),
+                          ECRStatus.DRAFT),
     "approve": (frozenset({ECRStatus.IN_REVIEW}), ECRStatus.APPROVED),
     "reject": (frozenset({ECRStatus.SUBMITTED, ECRStatus.IN_REVIEW}), ECRStatus.REJECTED),
     "cancel": (frozenset({ECRStatus.DRAFT, ECRStatus.SUBMITTED, ECRStatus.IN_REVIEW, ECRStatus.APPROVED}),

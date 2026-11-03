@@ -260,3 +260,29 @@ def test_killed_process_then_recovery_in_another_process(ws, proj, share, mode, 
         assert found[0].number == "ECR-0001" and svc.verify_history(found[0].id) == []
         assert ro.verify()["problems"] == []
         assert ro.head_seq() > head
+
+
+def test_rework_and_dependency_invalidation_survive_reopen(ws, proj, share):
+    """Codex P2s on PR #20 (cb68433), across a restart on a real workspace."""
+    svc = changes.service_for(ws)
+    svc.save_policy({"eco_release_approvals_required": 1})
+    ecr = approved_ecr(svc, ws)
+    checkin(ws, b"IDW rev B by someone else")
+    svc.return_for_rework(ecr.id, "baseline moved")
+    prereq = svc.create_request("prereq", "r")
+    other = svc.create_request("other", "r", affected=[{"item_type": "part", "label": "P-9"}])
+    svc.submit(other.id)
+    svc.begin_review(other.id)
+    eco = svc.create_order([svc.approve(other.id).id])
+    svc.set_dependencies(eco.id, [prereq.id])
+    svc.sign_off_order(eco.id, "approve")
+    svc.set_dependencies(eco.id, [])
+    ws.close()
+    with Workspace.open(share, writable=True) as w:
+        s = changes.service_for(w)
+        assert s.request(ecr.id).status is ECRStatus.DRAFT
+        assert s.rebaseline(ecr.id).affected[0].baseline_label == "B"
+        with pytest.raises(changes.SignoffError, match="0 of 1"):
+            s.start_work(eco.id)
+        assert s.verify_history(ecr.id) == [] and s.verify_history(eco.id) == []
+        assert w.verify()["problems"] == []
