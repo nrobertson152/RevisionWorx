@@ -1,0 +1,125 @@
+name: RevisionWorx TEST-ONLY four-branch product integration
+
+on:
+  push:
+    branches:
+      - integration/openschematix
+    paths:
+      - 'tools/packaging/stage_product_stack.py'
+      - 'tools/packaging/test_stage_product_stack.py'
+      - '.github/workflows/revisionworx-four-branch-compatibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revisionworx-four-branch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  four-source:
+    name: core+GUI+BOM+ECR (test only) / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - name: Checkout Integration harness
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pinned Phase 2 core
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: f01b37d345c5208ab0fa520588a2abe8c66c894a
+          path: inputs/core
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout pinned desktop GUI
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: 0773bde599f39aee88a8a536c28673bc4a1e13f5
+          path: inputs/gui
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout pinned BOM/parts
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: 59c0f7b56c7e135c6d4179e18bea51b3232d8c9b
+          path: inputs/bom
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout pinned ECR/ECO change control
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: cb684336fbef2edf21bb4bda700146af70d58ee4
+          path: inputs/changes
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Python 3.11 for CI runner only
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Linux Qt runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xkb1 libxcb-icccm4 libxcb-shape0
+      - name: Run isolated stager regression tests
+        run: python tools/packaging/test_stage_product_stack.py
+      - name: Create temporary real Git merge for all four pinned sources
+        run: >-
+          python tools/packaging/stage_product_stack.py
+          --core inputs/core
+          --core-sha f01b37d345c5208ab0fa520588a2abe8c66c894a
+          --gui inputs/gui
+          --gui-sha 0773bde599f39aee88a8a536c28673bc4a1e13f5
+          --bom inputs/bom
+          --bom-sha 59c0f7b56c7e135c6d4179e18bea51b3232d8c9b
+          --changes inputs/changes
+          --changes-sha cb684336fbef2edf21bb4bda700146af70d58ee4
+          --receipt four-source-receipt.json
+      - name: Install combined source with dev test dependencies
+        working-directory: inputs/core
+        run: python -m pip install --no-input -e ".[dev]"
+      - name: Exercise BOM, ECR/ECO and GUI direct contract regressions
+        working-directory: inputs/core
+        run: >-
+          python -m pytest -q -ra
+          tests/test_bom_catalog_workspace.py
+          tests/test_bom_reference_preservation.py
+          tests/test_changes_workspace.py
+          tests/test_qt_gui.py
+      - name: Run entire combined native regression suite
+        working-directory: inputs/core
+        run: python -m pytest -q -ra
+      - name: Verify offline core, BOM and change-control CLI module entrypoints
+        working-directory: inputs/core
+        shell: bash
+        run: |
+          python -m revisionworx.cli --help
+          python -m revisionworx.bom --help
+          python -m revisionworx.changes --help
+      - name: Report provenance and exact source tuple
+        if: always()
+        shell: bash
+        run: |
+          python -c "from pathlib import Path; p=Path('four-source-receipt.json'); print(p.read_text() if p.exists() else 'no source receipt: early stage failure')"
+      - name: Upload small evidence receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-source-receipt-${{ matrix.os }}
+          path: four-source-receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
