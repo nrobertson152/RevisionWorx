@@ -671,3 +671,177 @@ def test_wait_idle_delivers_a_finished_job(qapp, ctl):
     done = []
     assert ctl._run("test", lambda: None, lambda r: done.append(r))
     assert ctl.wait_idle(5) is True and done and not ctl.busy
+
+
+# ---------------------------------------------------------------------------- found on a real display (Xvfb)
+def test_typing_a_path_gives_the_file_name_as_title(qapp, ctl, tmp_path):
+    """Regression: the title was filled once, from the first keystroke, so typing /x/bracket.ipt recorded
+    a document titled "x". Found by driving the real app with real keys."""
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import ImportDialog
+    w, _home, p, _docs = window(qapp, ctl, tmp_path)
+    src = tmp_path / "bracket.ipt"
+    src.write_bytes(b"x")
+    dlg = ImportDialog(ctl, p["id"], "Proj", w)
+    QTest.keyClicks(dlg.source, str(src))
+    assert dlg.title.text() == "bracket"
+    dlg.start()
+    pump(qapp, ctl, lambda: dlg.flow.state == "done" and not ctl.busy)
+    assert dlg.flow.result[0]["title"] == "bracket"
+    w.close()
+
+
+def test_a_title_the_user_typed_is_kept_when_the_path_changes(qapp, ctl, tmp_path):
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import ImportDialog
+    w, _home, p, _docs = window(qapp, ctl, tmp_path)
+    dlg = ImportDialog(ctl, p["id"], "Proj", w)
+    QTest.keyClicks(dlg.source, "first.ipt")
+    dlg.title.clear()
+    QTest.keyClicks(dlg.title, "Mounting bracket")
+    dlg.source.setText("second.ipt")
+    assert dlg.title.text() == "Mounting bracket"
+    w.close()
+
+
+def _export(qapp, ctl, tab, monkeypatch, dest):
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(dest), "")))
+    tab.export()
+    pump(qapp, ctl, lambda: not ctl.busy)
+    qapp.processEvents()
+
+
+def test_export_says_where_the_file_went(qapp, ctl, tmp_path, monkeypatch, boxes):
+    """Regression: a successful export showed nothing at all."""
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    dest = tmp_path / "out.txt"
+    _export(qapp, ctl, tab, monkeypatch, dest)
+    assert dest.read_bytes() == b"a.txt" and "out.txt" in tab.status.text() and tab.panel.message_level == "ok"
+    assert not boxes
+    w.close()
+
+
+def test_export_replaces_a_file_the_save_dialog_confirmed(qapp, ctl, tmp_path, monkeypatch, boxes):
+    """Regression: after the dialog's own "replace?" was answered yes, export failed with a disk error."""
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    dest = tmp_path / "out.txt"
+    dest.write_bytes(b"old")
+    _export(qapp, ctl, tab, monkeypatch, dest)
+    assert dest.read_bytes() == b"a.txt" and tab.panel.message_level == "ok" and not boxes
+    w.close()
+
+
+def test_export_cannot_overwrite_a_managed_working_file(qapp, ctl, tmp_path, monkeypatch):
+    """Exporting an older revision over the working file would change it without a checkout."""
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    wf = ctl.working_file(docs[0]["id"])
+    wf.write_bytes(b"precious edits")
+    _export(qapp, ctl, tab, monkeypatch, wf)
+    assert wf.read_bytes() == b"precious edits"
+    assert tab.panel.message_level == "error" and "Restore" in tab.status.text()
+    w.close()
+
+
+def test_export_cannot_write_inside_the_workspace_metadata(qapp, ctl, tmp_path, monkeypatch):
+    w, home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    dest = home / ".revisionworx" / "out.txt"
+    _export(qapp, ctl, tab, monkeypatch, dest)
+    assert not dest.exists() and tab.panel.message_level == "error"
+    w.close()
+
+
+def test_export_failure_is_reported(qapp, ctl, tmp_path, monkeypatch):
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    _export(qapp, ctl, tab, monkeypatch, tmp_path / "no_such_folder" / "out.txt")
+    assert tab.panel.message_level == "error" and "Exported" not in tab.status.text()
+    assert "out.txt" in tab.status.text() and "checkout" not in tab.panel.message  # about the export, not a checkout
+    w.close()
+
+
+def test_export_runs_in_the_background(qapp, ctl, tmp_path, monkeypatch):
+    """A CAD revision can be gigabytes; the window must not freeze."""
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(tmp_path / "bg.txt"), "")))
+    release = threading.Event()
+    real = documents.export_revision
+    monkeypatch.setattr(documents, "export_revision", lambda *a, **k: (release.wait(30), real(*a, **k))[1])
+    tab.export()
+    assert ctl.busy and tab.panel.message.startswith("Exporting")
+    release.set()
+    pump(qapp, ctl, lambda: not ctl.busy)
+    assert (tmp_path / "bg.txt").exists()
+    w.close()
+
+
+def test_default_window_leaves_room_for_the_title_bar(qapp, ctl, monkeypatch):
+    """Regression: on a 768 px high screen the status bar was cut off (seen on a real display)."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QGuiApplication
+    from revisionworx.gui.qt.mainwindow import MainWindow
+
+    class Screen:
+        def availableGeometry(self):
+            return QRect(0, 0, 1366, 768)
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: Screen()))
+    w = MainWindow(ctl)
+    assert w.height() <= 768 - 30 and w.width() <= 1366
+    w.close()
+
+
+def test_opening_a_project_selects_its_first_document(qapp, ctl, tmp_path):
+    """Regression: after a restart the panel was empty and Ctrl+K silently did nothing (real display)."""
+    w, _home, p, docs = window(qapp, ctl, tmp_path, ("a.txt", "b.txt"))
+    st = w.observable_state()
+    assert st["selected_document"] == docs[0]["id"] and st["actions"]["checkout"]
+    w.close()
+
+
+def test_an_empty_project_selects_no_document(qapp, ctl, tmp_path):
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    p = ctl.quick_start(tmp_path / "home", "Empty")
+    w = MainWindow(ctl)
+    assert w.open_location(tmp_path / "home", quiet=True, select_project=p["id"])
+    st = w.observable_state()
+    assert st["selected_project"] == p["id"] and st["selected_document"] is None
+    w.close()
+
+
+def test_error_text_can_be_selected_and_copied(qapp, ctl, tmp_path, monkeypatch):
+    """Regression: the crash-lock message holds a command with a 32-character token, and on Linux the
+    dialog's text could not be selected (seen on a real display)."""
+    from PySide6.QtCore import Qt
+    w, *_ = window(qapp, ctl, tmp_path)
+    box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Icon.Critical, "t", "copy me", parent=w)
+    box.show()
+    qapp.processEvents()
+    labels = [x for x in box.findChildren(QtWidgets.QLabel) if x.text() == "copy me"]
+    assert labels and labels[0].textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse
+    box.close()
+    w.close()
+
+
+def test_crash_lock_message_names_the_real_folder(qapp, ctl, tmp_path, boxes):
+    from revisionworx.workspace import Workspace
+    w, home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    holder = Workspace.open(home, writable=True)
+    try:
+        tab.checkout()
+    finally:
+        holder.close()
+    assert f'-w "{home}"' in boxes[0][1][1]
+    w.close()

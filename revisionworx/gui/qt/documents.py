@@ -164,6 +164,8 @@ class DocumentsTab(QWidget):
         self.panel.load(None)
         self.table.clearSelection()
         self.list_vm.load(project_id)
+        if not keep and self.list_vm.rows:  # predictable: the actions always have a target when there can be one
+            keep = self.list_vm.row_id(0)
         if keep:
             self.select_document(keep)
 
@@ -220,7 +222,7 @@ class DocumentsTab(QWidget):
             self.transition_box.addItem(name, sid)
         self.transition_box.setEnabled(p.can_transition)
         self.transition_btn.setEnabled(p.can_transition)
-        self.export_btn.setEnabled(bool(p.history))
+        self.export_btn.setEnabled(bool(p.history) and not self.ctl.busy)
         self.history_model.reload()
         self.revision_detail.setPlainText(p.revision_text(0) if p.history else "")
         self._history_buttons()
@@ -389,9 +391,10 @@ class DocumentsTab(QWidget):
         if not self.panel.history:
             return
         rows = self.history.selectionModel().selectedRows()
-        rev = self.panel.history[rows[0].row()] if rows else self.panel.history[0]
+        row = rows[0].row() if rows else 0
+        rev = self.panel.history[row]
         doc = self.panel.detail["document"]
         suggested = f"{Path(doc['rel_path']).stem}_rev{rev['label']}{Path(doc['rel_path']).suffix}"
         dest, _ = QFileDialog.getSaveFileName(self, "Export revision", suggested)
         if dest:
-            self.run(lambda: self.ctl.export_revision(rev["id"], Path(dest)), refresh=False)
+            self.panel.start_export(row, dest)

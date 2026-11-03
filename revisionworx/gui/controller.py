@@ -217,7 +217,7 @@ class Controller:
         read-only health check cannot see every cause, such as a blocked lock namespace, so this may
         be the first anyone learns of it. F5 re-checks; if the cause remains, the next write finds it
         again and fails closed."""
-        from ..workspace import WorkspaceCorruptError
+        from ..workspace import WorkspaceCorruptError, WorkspaceLockedError
         if self.location is None:
             raise RuntimeError("no workspace is open")
         if self.blocked_reason is not None:
@@ -227,6 +227,9 @@ class Controller:
                 yield ws
         except WorkspaceCorruptError as exc:
             self.blocked_reason = str(exc)
+            raise
+        except WorkspaceLockedError as exc:
+            exc.workspace_location = self.location  # for the recovery command in describe_error
             raise
 
     def _index(self, ws: Workspace) -> LocalIndex:
@@ -358,9 +361,27 @@ class Controller:
         with self._write() as ws:
             return documents.transition(ws, rev_id, state, comment, expected_rev=expected_rev)
 
-    def export_revision(self, rev_id: str, dest: Path) -> Path:
+    def export_revision(self, rev_id: str, dest: Path, overwrite: bool = False) -> Path:
+        """Export a copy. An export is never a way to change managed data, so it refuses the workspace
+        metadata and any registered working file, whatever ``overwrite`` says."""
         with self._read() as ws:
-            return documents.export_revision(ws, rev_id, Path(dest))
+            target = Path(dest).resolve()
+            if ws.meta_dir.resolve() in target.parents:
+                raise ImportError_(f"{dest} is inside the workspace's own data; choose another folder.")
+            for doc in ws.list("document").values():
+                try:
+                    managed = documents.working_path(ws, doc).resolve()
+                except Exception:  # unreachable root: it cannot be the target of this write either
+                    continue
+                if managed == target:
+                    raise ImportError_(f"{dest} is the working file of a managed document, so it was not "
+                                       "changed. To bring back an older revision, check the document out "
+                                       "and use Restore to working file.")
+            return documents.export_revision(ws, rev_id, Path(dest), overwrite=overwrite)
+
+    def start_export(self, rev_id: str, dest: Path, on_done=None) -> bool:
+        """For a destination the user chose in a save dialog, which has already confirmed replacing."""
+        return self._run("export", lambda: self.export_revision(rev_id, dest, overwrite=True), on_done)
 
     def start_register(self, project_id: str, file_path: Path, on_done=None, **kw) -> bool:
         def job():
@@ -671,17 +692,20 @@ def describe_error(exc: BaseException) -> str:
     if isinstance(exc, documents.CheckoutConflict):
         return f"This document is {exc}. Ask them to check it in, or ask an administrator to release it."
     if isinstance(exc, documents.NoChanges):
-        return str(exc)
+        return ("The working file is identical to the latest revision, so there is nothing to record. "
+                "Save your edits first, cancel the checkout, or tick \u201cCheck in even if the file is "
+                "unchanged\u201d.")
     if isinstance(exc, ConflictError):
         return f"{exc}\n\nThis item changed while you were viewing it. Reload and reapply your change."
     if isinstance(exc, CommittedNotApplied):
         return f"Saved. Your change is recorded, but finishing it was delayed:\n{exc}"
     if isinstance(exc, WorkspaceLockedError):
         token = (getattr(exc, "holder", None) or {}).get("token", "<token from 'lock show'>")
+        folder = getattr(exc, "workspace_location", None) or "<workspace folder>"
         return (f"{exc}\n\nNothing was written. Another RevisionWorx window or process is saving changes, so "
                 "try again in a moment. If none is running, a previous session crashed and left its lock "
                 "behind. Close every other RevisionWorx window first, then from a command prompt run:\n\n"
-                f"revisionworx -w \"<workspace folder>\" lock break --token {token} --reason \"session crashed\"")
+                f"revisionworx -w \"{folder}\" lock break --token {token} --reason \"session crashed\"")
     if isinstance(exc, PermissionError):
         return f"Permission denied: {exc.filename or exc}\nCheck your access rights on this file or folder."
     if isinstance(exc, OSError):

@@ -114,9 +114,9 @@ class ImportDialog(QDialog):
     def _sync(self) -> None:
         self.flow.subfolder = self.folder.currentData() or ""
         if self.source.text() != self.flow.source:
+            self.flow.title = self.title.text()
             self.flow.set_source(self.source.text())
-            if not self.title.text():
-                self.title.setText(self.flow.title)
+            self.title.setText(self.flow.title)
         self.render()
 
     def browse(self) -> None:

@@ -39,6 +39,7 @@ PENDING_STYLE = "background: #eef4fb; color: #1b3a5c; padding: 6px;"
 def configure_table(view: QTableView, columns) -> None:
     view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
     view.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+    view.setTabKeyNavigation(False)  # Tab leaves the table; arrow keys move within it
     view.setAlternatingRowColors(True)
     view.verticalHeader().setVisible(False)
     view.setWordWrap(False)
@@ -62,9 +63,12 @@ class MainWindow(QMainWindow):
         # No fixed minimum: the layout's own minimum keeps every action and table usable.
         screen = QGuiApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else None
-        self.resize(min(1200, avail.width()) if avail else 1200, min(760, avail.height()) if avail else 760)
+        # availableGeometry excludes the taskbar but not this window's own title bar.
+        self.resize(min(1200, avail.width()) if avail else 1200, min(760, avail.height() - 40) if avail else 760)
         self._restoring_selection = False
         self._write_actions: list[QAction] = []
+        # Errors hold paths and commands people need to copy; 3 = selectable by mouse and keyboard.
+        self.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 3; }")
         self._build_menu()
 
         shell = QWidget(self)

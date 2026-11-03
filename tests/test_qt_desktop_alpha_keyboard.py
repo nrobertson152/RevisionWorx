@@ -147,3 +147,27 @@ def test_arrow_keys_change_the_selected_document(qapp, setup, tmp_path):
     QTest.keyClick(tab.table, Qt.Key.Key_Down)
     qapp.processEvents()
     assert w.observable_state()["selected_document"] == other["id"]
+
+
+def test_tab_leaves_the_tables(qapp, setup):
+    """Regression: inside a table Tab moved between cells, so a keyboard user could not get past it.
+    Found by pressing real keys on a real display."""
+    w, *_ = setup
+    tab = w.documents_tab
+    for view in (w.table, tab.table, tab.history, w.files):
+        assert not view.tabKeyNavigation(), view.objectName()
+    w.activateWindow()
+    tab.table.setFocus()
+    qapp.processEvents()
+    if QtWidgets.QApplication.focusWidget() is tab.table:  # window focus is not guaranteed offscreen
+        QTest.keyClick(tab.table, Qt.Key.Key_Tab)
+        qapp.processEvents()
+        assert QtWidgets.QApplication.focusWidget() is not tab.table
+
+
+def test_identical_file_message_names_the_real_control(qapp, setup):
+    from revisionworx import documents
+    from revisionworx.gui.controller import describe_error
+    text = describe_error(documents.NoChanges("the file is identical to the latest revision; cancel the "
+                                              "checkout instead, or check in anyway with 'allow unchanged'"))
+    assert "allow unchanged" not in text and "Check in even if the file is unchanged" in text

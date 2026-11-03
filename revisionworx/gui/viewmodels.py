@@ -662,6 +662,28 @@ class DocumentPanel(Observable):
         self.reload()
         return rev
 
+    def start_export(self, row: int, dest: str, on_done=None) -> bool:
+        """Copy one revision out, in the background (it can be gigabytes), and say where it went."""
+        from pathlib import Path
+        rev = self.history[row]
+
+        def done(res: JobResult) -> None:
+            exc = res.error
+            if isinstance(exc, OSError) and exc.strerror:  # about the destination, not the document
+                self.set_message(f"Export failed: {exc.strerror}. Nothing was exported to {dest}.", "error")
+            elif exc:
+                self.set_message(f"Export failed. {describe_error(exc)}", "error")
+            else:
+                self.set_message(f"Exported revision {rev['label']} to {dest} (SHA-256 verified).")
+            if on_done:
+                on_done(res)
+        started = self.ctl.start_export(rev["id"], Path(dest), on_done=done)
+        if started:
+            self.set_message(f"Exporting revision {rev['label']}…")
+        else:
+            self.set_message("Another task is still running; try again in a moment.", "warning")
+        return started
+
     def start_checkin(self, message: str, on_done=None, allow_unchanged: bool = False,
                       label: str | None = None) -> bool:
         if not message.strip():
@@ -774,6 +796,7 @@ class ImportFlow(Observable):
         self.subfolder = ""
         self.number = ""
         self.title = ""
+        self._auto_title = ""
         self.description = "Initial revision"
         self.subfolders: list[str] = []
         self.state = "idle"
@@ -788,8 +811,8 @@ class ImportFlow(Observable):
     def set_source(self, path: str) -> None:
         from pathlib import Path
         self.source = path
-        if path and not self.title:
-            self.title = Path(path).stem
+        if path and (not self.title or self.title == self._auto_title):  # never replaces a typed title
+            self.title = self._auto_title = Path(path).stem
         self.changed()
 
     def validate(self) -> bool:
