@@ -233,7 +233,7 @@ class DocumentsTab(QWidget):
     def run(self, fn, refresh: bool = True) -> bool:
         """Run a quick action. A saved-with-warning outcome is a success shown as a warning, never
         as an error (CORE_API §4: CommittedNotApplied means the change IS saved)."""
-        from ..workspace import CommittedNotApplied
+        from ...workspace import CommittedNotApplied
         try:
             fn()
         except (SavedWithWarning, CommittedNotApplied) as exc:
