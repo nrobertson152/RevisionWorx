@@ -100,7 +100,7 @@ def test_checkin_dialog_tab_shift_tab_and_escape_do_not_commit(qapp, desktop):
     win.show()
     qapp.processEvents()
     win.documents_tab.checkout()
-    before = len(ctl.document_history(doc["id"]))
+    before = len(win.observable_state()["history"])
     dialog = CheckinDialog("drawing", win)
     dialog.show()
     dialog.activateWindow()
@@ -117,5 +117,5 @@ def test_checkin_dialog_tab_shift_tab_and_escape_do_not_commit(qapp, desktop):
     qapp.processEvents()
     assert dialog.result() == QtWidgets.QDialog.DialogCode.Rejected
     assert not dialog.isVisible()
-    assert len(ctl.document_history(doc["id"])) == before
+    assert len(win.observable_state()["history"]) == before
     assert win.documents_tab.checkin_btn.isEnabled(), "Cancellation must retain checkout"
