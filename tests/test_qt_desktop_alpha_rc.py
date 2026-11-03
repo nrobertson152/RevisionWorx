@@ -90,6 +90,15 @@ def _width_report(w) -> str:
             f"dpi={w.logicalDpiX()} widest={rows[:14]}")
 
 
+def _width_limit(qapp, w) -> float:
+    """1000 px on a real screen. Offscreen font metrics are not real: on Windows CI the fallback font is about
+    1.9x wider than Linux at the same size and DPI (CI run 41569788201), so offscreen the limit scales with the
+    text. The Windows job also runs these checks on the native platform, with real fonts, unscaled."""
+    if qapp.platformName() != "offscreen":
+        return 1000
+    return 1000 * max(1.0, w.fontMetrics().horizontalAdvance("Compare with previous") / 131)
+
+
 def _row_capacity(view) -> float:
     """How many data rows the view can show."""
     return view.viewport().height() / max(1, view.verticalHeader().defaultSectionSize())
@@ -120,7 +129,8 @@ def test_minimum_size_fits_a_small_laptop_screen(qapp, ctl, tmp_path):
     """1366x768 minus title bar and taskbar: the window must be able to fit."""
     w, *_ = window(qapp, ctl, tmp_path)
     hint = w.minimumSizeHint()
-    assert hint.width() <= 1000 and hint.height() <= 700, (hint, _width_report(w))
+    print(f"platform={qapp.platformName()} minimum={hint.width()}x{hint.height()} {_width_report(w)[:120]}")
+    assert hint.width() <= _width_limit(qapp, w) and hint.height() <= 700, (hint, _width_report(w))
     w.close()
 
 
@@ -147,7 +157,7 @@ def test_long_paths_and_names_do_not_force_a_wide_window(qapp, ctl, tmp_path):
     w.start_page.preview.setText(path)
     w.start_page.preview.setToolTip(path)
     qapp.processEvents()
-    assert w.minimumSizeHint().width() <= 1000, (w.minimumSizeHint(), _width_report(w))
+    assert w.minimumSizeHint().width() <= _width_limit(qapp, w), (w.minimumSizeHint(), _width_report(w))
     assert path in tab.status.toolTip() and path in tab.summary.toolTip() and path in w.warning_label.toolTip()
     assert path in w.start_page.error_label.toolTip() and path in w.start_page.preview.toolTip()
     w.close()
