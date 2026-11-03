@@ -78,3 +78,12 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Native CI workflow:** `56a13d8d5cf61696cd905a8fa09a629bdd053953`, `.github/workflows/core-a-cad-revision-chain.yml`; Ubuntu/Windows Python 3.11/3.13, two cases per job (8 planned). CI workflow pins production SHA, reports both checkout SHAs, overlays only the new test file.
 - **Execution:** NOT EXECUTED in this session; 0 observed PASS/FAIL/SKIP/XFAIL. No CI URL or production acceptance claimed. No production source or shared-data protocol changes. Existing historical malformed-journal negatives remain open.
 - **Next:** inspect new native CI job logs and fix any fixture defects on role branch. QA #31 independently verify exact test SHA; Claude A retains source-provenance race and journal schema fixes. When corrected Phase 2 SHA exists, run unchanged positive requalification on both OS/Python versions. No SMB/NFS or physical-crash safety claim.
+
+
+## 2026-11-03 — Unicode nested CAD provenance and unmanaged sibling regression
+
+- **Checkout:** #29 trust-based protocol; independent #28 reserve item 13; Claude A currently owns production journal/CAD source-capture corrections, so no production files modified.
+- **Test commit:** `0ed627d9d49ca52b373fc2c72c4d79e1a15bb37f`; `tests/test_core_unicode_cad_provenance.py`. Two cases: (1) nested non-ASCII part and assembly names preserve exact original spelling, embedded relative-reference bytes, revision hashes and latest revision after read-only restart; (2) unmanaged nested vendor CAD sibling files preserve bytes and nanosecond mtime across managed revision and restart. Synthetic payloads, **not** actual Inventor/SolidWorks reference parsing.
+- **Workflow commit:** `6505d262c89721bebe802d87ca5f91b26f353123`; `.github/workflows/core-a-unicode-cad-provenance.yml`. Pinned Phase 2 production `f01b37d345c5208ab0fa520588a2abe8c66c894a`, separate test checkout, Ubuntu/Windows Python 3.11/3.13, `python -m pytest -q -ra tests/test_core_unicode_cad_provenance.py`, two tests per job (8 planned).
+- **Verification:** no tests executed or native job logs observed during authoring: **0 observed PASS/FAIL/SKIP/XFAIL**. CI is not accepted until per-job logs and exact test checkout SHA are inspected. No claim of CAD parser, filesystem race, or multi-host safety.
+- **Next:** inspect Actions native jobs, correct fixture assumptions if necessary; independent QA review. After Claude A checks in corrected SHA, run unchanged strict malformed-journal tests and CAD source-race acceptance separately.
