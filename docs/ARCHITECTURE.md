@@ -539,15 +539,43 @@ exists. Adding more token re-checks only narrows the window.
   | After `refused` result, before quarantine | `.clearing-*`, refused result | blocks; resume moves the bytes to the recorded quarantine name |
   | After terminal result, before custody disposal | evidence + `.clearing-*` | resume disposes custody if the bytes still match |
 
-  **Threat-model boundary (explicit).** The protocol defends against *pathname* races: any
-  replacement, rename or re-creation at the orphan name, the custody name or the evidence name,
-  by any process. Bytes written *in place* through a handle opened **before** the custody move
-  cannot change the evidence (step 3), but can change the custody duplicate before disposal.
-  That duplicate is then quarantined rather than deleted. The one residual case: a write
-  landing between the final custody re-hash and its `unlink` loses only those injected bytes.
-  It can neither alter the evidence nor grant authority. An actor able to do that can also
-  write the journal directly, which is outside every file-journal guarantee (ADR-014 gates the
-  multi-host design).
+  **Threat model (corrected after the Codex review of `e5b38a6`).** Rev. 3 as first published
+  claimed defence against pathname replacement *at the custody names*. That was wrong for writer
+  exclusivity, and this section replaces that claim.
+
+  *Actors.* "Protocol processes" are RevisionWorx clients and administrators that touch
+  `locks/` only through this code, and may crash at any instruction, pause for any time and
+  interleave arbitrarily. Every name they create is fresh (`uuid4`), so no protocol process ever
+  renames onto an existing `.releasing-*`, `.fencing-*` or `.clearing-*` name. An "outside actor"
+  renames, replaces or deletes files in `locks/` by other means (a script, a user in Explorer,
+  malware, an older incompatible build).
+
+  | Property | Protocol processes + crashes | Outside actor |
+  |---|---|---|
+  | At most one effective writer (ADR-015/019) | **Guaranteed** | **Not achievable** with a file-only authority |
+  | Evidence archived under an audit equals the audited SHA-256 at archival | **Guaranteed** | **Guaranteed** (evidence is published from the verified buffer by exclusive create) |
+  | Later alteration or removal of archived evidence | n/a | **Detected** by `verify()` (`orphan-evidence-altered` / `-missing`), not prevented |
+  | One authorisation and one terminal result per orphan incarnation | **Guaranteed** (journal CAS) | **Guaranteed** while the journal itself is not forged |
+
+  *Why exclusivity is out of reach for an outside actor.* The baseline needs no orphan code: one
+  rename of a live `writer.lock` lets a second writer acquire while the first, paused after its
+  preflight, still commits (`tests/test_lock_namespace_threat_model.py::test_boundary_baseline_*`).
+  More generally, any file-only protocol must at some point remove a blocking file by pathname, or
+  the blocking set grows forever. POSIX has no unlink or rename bound to an inspected object, so an
+  actor who can rename onto that name at that instant substitutes a live lock. Both Codex
+  counterexamples (`workspace.py:693` custody disposal, `:472` fencing archival) are exactly this.
+  They are reproduced deterministically as `test_boundary_codex_*`, and a control with identical
+  protocol moves and timing but no outside rename is safe. Re-hashing, identity checks (dev/ino)
+  or extra renames only narrow the window, so none is claimed as a fix. Exclusivity against
+  outside actors needs an authority the actor cannot write: OS permissions on `locks/` and the
+  journal, or the ADR-014 coordinator. That is a Director decision, recorded here as **open**.
+
+  *Orphan incarnation identity.* An incarnation is the authorisation's `clear_id`, bound to (file
+  name, SHA-256) at a journal sequence. Name and digest alone are not an identity: identical
+  bytes reappearing at the same name after a terminal result are a new incarnation with a new
+  `clear_id` (tested). There is no authenticated principal: "same administrator" means same
+  reason and same `user@host`. An identical request resumes idempotently (lost acknowledgement,
+  crash, restart). Any other request raises `OrphanClearConflict` and records nothing.
 
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.

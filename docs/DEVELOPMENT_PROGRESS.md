@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-02 (session 8: ADR-019 rev. 3)
+**Updated:** 2026-11-02 (session 9: ADR-019 rev. 3 threat model, CORE_API.md)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -72,6 +72,31 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | GUI | `gui/viewmodels.py`, `gui/qt/documents.py` | View-models tested headless; Qt Documents tab **not executed** |
 
 ## Session log
+
+### 2026-11-02 (session 9) — Codex P1 findings on `e5b38a6`: threat model corrected; P2 conflicts; API contract
+- **Codex `workspace.py:693` (custody disposal) and `:472` (fencing archival): both reproduced
+  deterministically.** See `tests/test_lock_namespace_threat_model.py::test_boundary_codex_*`.
+  - Each needs an *outside* rename of a live lock onto a custody name.
+  - The same capability yields two effective writers with **no orphan code at all**
+    (`test_boundary_baseline_*`: one rename of `writer.lock`).
+  - A control with identical protocol moves and timing, but no outside rename, is safe.
+  - Conclusion: there is no protocol-internal race; ADR-019 rev. 3 *overclaimed*. Its threat model
+    is rewritten with a property-by-actor table. Exclusivity against outside actors is recorded as
+    an **open Director decision** (OS permissions or the ADR-014 coordinator). No narrowing
+    "fixes" were made.
+- **DS P2 semantics:**
+  - A different reason or `user@host` for the same orphan incarnation raises
+    `OrphanClearConflict` and records nothing.
+  - An identical request resumes idempotently (crash, lost ACK).
+  - Identical bytes recreated after a terminal result are a new incarnation (new `clear_id`).
+  - CLI exit code 2 on conflict.
+- **Evidence tampering is now detectable:** `verify()` reports `orphan-evidence-altered` /
+  `orphan-evidence-missing`.
+- **`docs/CORE_API.md`:** the stable UI/integration contract for Claude B (issue #13).
+- **Tests:** `python -m pytest -q` → **213 passed, 1 skipped (Qt)**, Linux, Python 3.13.18, 8+3
+  consecutive full runs identical. With `e5b38a6`'s `workspace.py`/`cli.py`, 3 of the new tests
+  fail (conflict, verify, process exit codes). The boundary tests reproduce on both versions, by
+  design. Windows not executed here.
 
 ### 2026-11-02 (session 8) — ADR-019 rev. 3: custody-bound, serialized orphan clear (DS P1 + P2)
 - **Reproduced first.** `tests/test_orphan_clear_custody.py`: all 16 tests fail on `366d435`.

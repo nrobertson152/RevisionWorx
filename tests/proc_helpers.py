@@ -56,5 +56,8 @@ def race_checkout(location: str, doc_id: str, barrier, results) -> None:
 def clear_orphan(share: str, name: str, reason: str) -> None:
     """Spawned administrator racing others on one orphan (ADR-019 rev. 3, DS P2)."""
     from pathlib import Path
-    from revisionworx.workspace import Workspace
-    Workspace.clear_orphaned_release(Path(share), name, reason=reason)
+    from revisionworx.workspace import OrphanClearConflict, Workspace
+    try:
+        Workspace.clear_orphaned_release(Path(share), name, reason=reason)
+    except OrphanClearConflict:
+        raise SystemExit(3)  # distinct exit code: a competing administrator's clear stands

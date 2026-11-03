@@ -197,8 +197,7 @@ def cmd_lock_clear_orphan(args):
                              "that file and clear it separately (recorded in the journal).")
     if r["outcome"] != "completed":
         raise WorkspaceError(f"{args.file} is being cleared by another administrator; retry shortly.")
-    note = " (an existing authorisation for this file was completed; your reason was not recorded)" \
-        if r["adopted"] else ""
+    note = " (resumed your earlier authorisation)" if r["adopted"] else ""
     _emit(args, {"cleared": args.file, **r},
           f"Cleared {args.file} as {r['evidence']} (verified against the audited SHA-256; recorded in "
           f"the journal){note}.")

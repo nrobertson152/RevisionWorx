@@ -114,6 +114,20 @@ class TxidReuseError(WorkspaceError):
     """A transaction id was reused for different content; nothing was written."""
 
 
+class OrphanClearConflict(WorkspaceError):
+    """An administrative orphan clear for this orphan incarnation already exists under a different
+    reason or administrator (ADR-019 rev. 3). Nothing new was authorised; the existing clear stands
+    and is completed by the next acquisition or by its own administrator re-running it."""
+
+    def __init__(self, existing: dict, outcome: str):
+        self.existing, self.outcome = existing, outcome
+        by = existing.get("by") or {}
+        super().__init__(
+            f"{existing['file']} is already being cleared as {existing['clear_id']} by "
+            f"{by.get('user', '?')}@{by.get('host', '?')} (reason: {existing.get('reason')!r}; "
+            f"state: {outcome}); your request was not recorded")
+
+
 class LockLostError(WorkspaceError):
     """This handle's writer lock was broken or replaced; it must not write any more."""
 
@@ -499,9 +513,10 @@ class Workspace:
 
           1. **Authorise** (serialized): publish ``workspace.orphan.clear`` with the reason, file name,
              SHA-256 of the bytes the administrator inspected and the planned evidence name, as a
-             compare-and-swap on the journal head. If an unfinished authorisation for this file
-             already exists, it is adopted instead (whatever this caller's reason): there is never
-             more than one open authorisation per orphan.
+             compare-and-swap on the journal head. If an authorisation for this incarnation already
+             exists, an identical request (same reason, same user@host) resumes it idempotently and
+             any other request raises :class:`OrphanClearConflict`: there is never more than one
+             authorisation per orphan incarnation.
           2. **Take custody**: atomically rename the orphan to a private ``.clearing-<clear_id>-*``
              name. Whatever is now there is exactly what was moved; it keeps blocking writers.
           3. **Verify and archive**: read the custody file once; if its SHA-256 equals the audited
@@ -521,6 +536,13 @@ class Workspace:
         if not re.match(r"^\.releasing-[0-9a-f]{1,64}$", name):
             raise WorkspaceError(f"{name!r} is not an orphaned release file")
         auth, adopted = cls._authorise_orphan_clear(meta, name, reason)
+        me, by = current_actor(), auth.get("by") or {}
+        if adopted and (auth.get("reason") != reason or (by.get("user"), by.get("host"))
+                        != (me["user"], me["host"])):
+            # A different request for the same incarnation: never a second authorisation and never a
+            # silent merge. The existing one is still driven by acquisition / its own administrator.
+            result = cls._orphan_clear_state(meta)[1].get(auth["clear_id"])
+            raise OrphanClearConflict(auth, result["outcome"] if result else "pending")
         result = cls._drive_orphan_clear(meta, auth)
         return {"clear_id": auth["clear_id"], "adopted": adopted, "outcome": result["outcome"],
                 "evidence": auth["evidence"], "quarantine": result.get("quarantine")}
@@ -994,6 +1016,20 @@ class Workspace:
             self.recover()
         expected: dict[tuple[str, str], dict | None] = {}
         problems: list[dict] = []
+        auths, results = Workspace._orphan_clear_state(self.meta_dir, self)
+        for a in auths:  # ADR-019 rev. 3: archived evidence must still be the audited bytes
+            if (results.get(a["clear_id"]) or {}).get("outcome") != "completed":
+                continue
+            ev = self.meta_dir / "locks" / a["evidence"]
+            try:
+                ok = hashlib.sha256(ev.read_bytes()).hexdigest() == a["file_sha256"]
+            except FileNotFoundError:
+                problems.append({"problem": "orphan-evidence-missing", "clear_id": a["clear_id"],
+                                 "evidence": a["evidence"]})
+                continue
+            if not ok:
+                problems.append({"problem": "orphan-evidence-altered", "clear_id": a["clear_id"],
+                                 "evidence": a["evidence"]})
         for s in self.journal_seqs():
             entry = self.read_entry(s)
             if "digest" not in entry:

@@ -10,7 +10,7 @@ import os
 import pytest
 
 import revisionworx.workspace as wsmod
-from revisionworx.workspace import RecordPut, Workspace, WorkspaceError
+from revisionworx.workspace import OrphanClearConflict, RecordPut, Workspace, WorkspaceError
 
 NAME = ".releasing-deadbeef"
 ORIGINAL = b"{ torn"
@@ -244,7 +244,7 @@ def test_crash_after_evidence_before_terminal_result(share, monkeypatch, resume)
     assert (locks / auth["evidence"]).read_bytes() == ORIGINAL
     assert [p for p in locks.iterdir() if p.name.startswith(".clearing-")]   # still blocking
     if resume == "operator-retry":
-        Workspace.clear_orphaned_release(share, NAME, reason="operator retry")
+        Workspace.clear_orphaned_release(share, NAME, reason="writer confirmed stopped")
     with Workspace.open(share, writable=True):
         pass
     res = _results(share)
@@ -306,7 +306,7 @@ def test_ds_p2_overlapping_admin_clears_publish_one_authorisation(share, monkeyp
     def reentrant(cls, meta, op, *a, **kw):
         if op == "workspace.orphan.clear" and not state["nested"]:
             state["nested"] = True
-            state["b"] = Workspace.clear_orphaned_release(share, NAME, reason="admin B: other reason")
+            state["b"] = Workspace.clear_orphaned_release(share, NAME, reason="admin A")
         return real(cls, meta, op, *a, **kw)
     monkeypatch.setattr(Workspace, "_publish_admin_entry", classmethod(reentrant))
     a = Workspace.clear_orphaned_release(share, NAME, reason="admin A")
@@ -315,6 +315,7 @@ def test_ds_p2_overlapping_admin_clears_publish_one_authorisation(share, monkeyp
     assert len(auths) == 1, auths
     assert len(res) == 1 and res[0]["outcome"] == "completed"
     assert a["clear_id"] == state["b"]["clear_id"] == auths[0]["clear_id"]
+    assert a["adopted"] and not state["b"]["adopted"]       # the inner request won the CAS
     assert sum(1 for p in locks.iterdir() if p.name.startswith("writer.lock.orphaned-")) == 1
     assert _evidence_matches_audit(locks, share)
 
@@ -331,7 +332,8 @@ def test_concurrent_clears_in_processes(share):
         p.start()
     for p in procs:
         p.join(60)
-    assert all(p.exitcode == 0 for p in procs), [p.exitcode for p in procs]
+    codes = sorted(p.exitcode for p in procs)
+    assert codes == [0, 3, 3, 3], codes                       # one clear; three explicit conflicts
     assert len(_auths(share)) == 1 and len(_results(share)) == 1
     assert _results(share)[0]["outcome"] == "completed"
     assert sum(1 for p in locks.iterdir() if p.name.startswith("writer.lock.orphaned-")) == 1
@@ -340,17 +342,56 @@ def test_concurrent_clears_in_processes(share):
         pass
 
 
-def test_retry_with_different_reason_adopts_existing(share, monkeypatch):
+def test_different_reason_is_a_conflict_identical_retry_resumes(share, monkeypatch):
+    """DS P2: a different reason (or administrator) for the same incarnation is rejected, not merged;
+    the identical request resumes after a crash or lost acknowledgement, exactly once."""
     locks = _orphan(share)
     _die_on(monkeypatch, lambda s, d: s.endswith(NAME))
     with pytest.raises(SystemExit):
         Workspace.clear_orphaned_release(share, NAME, reason="first reason")
     monkeypatch.undo()
-    r = Workspace.clear_orphaned_release(share, NAME, reason="a different reason")
+    with pytest.raises(OrphanClearConflict, match="first reason") as ei:
+        Workspace.clear_orphaned_release(share, NAME, reason="a different reason")
+    assert ei.value.outcome == "pending" and (locks / NAME).exists()   # nothing done for it
+    monkeypatch.setattr(wsmod, "current_actor", lambda: {"user": "other", "host": "elsewhere", "pid": 1})
+    with pytest.raises(OrphanClearConflict):                            # different administrator
+        Workspace.clear_orphaned_release(share, NAME, reason="first reason")
+    monkeypatch.undo()
+    r = Workspace.clear_orphaned_release(share, NAME, reason="first reason")
     assert r["adopted"] is True and r["outcome"] == "completed"
-    assert [a["reason"] for a in _auths(share)] == ["first reason"]
-    assert len(_results(share)) == 1
+    again = Workspace.clear_orphaned_release(share, NAME, reason="first reason")  # lost ACK replay
+    assert again == r
+    assert [a["reason"] for a in _auths(share)] == ["first reason"] and len(_results(share)) == 1
+    with pytest.raises(OrphanClearConflict, match="completed"):
+        Workspace.clear_orphaned_release(share, NAME, reason="late, different")
     assert not (locks / NAME).exists()
+
+
+def test_recreated_identical_bytes_are_a_new_incarnation(share):
+    """DS: name + digest cannot identify an incarnation. After a terminal result, identical bytes
+    reappearing at the same name are a new orphan that needs its own authorisation."""
+    locks = _orphan(share)
+    first = Workspace.clear_orphaned_release(share, NAME, reason="r")
+    (locks / NAME).write_bytes(ORIGINAL)
+    with pytest.raises(WorkspaceError, match="orphaned"):
+        Workspace.open(share, writable=True)
+    second = Workspace.clear_orphaned_release(share, NAME, reason="r")
+    assert second["clear_id"] != first["clear_id"] and not second["adopted"]
+    assert len(_auths(share)) == 2 and len(_results(share)) == 2
+
+
+def test_verify_detects_altered_or_missing_evidence(share):
+    locks = _orphan(share)
+    r = Workspace.clear_orphaned_release(share, NAME, reason="r")
+    with Workspace.open(share) as ws:
+        assert not [p for p in ws.verify()["problems"] if p["problem"].startswith("orphan-evidence")]
+    (locks / r["evidence"]).write_bytes(b"tampered")
+    with Workspace.open(share) as ws:
+        assert {"problem": "orphan-evidence-altered", "clear_id": r["clear_id"],
+                "evidence": r["evidence"]} in ws.verify()["problems"]
+    (locks / r["evidence"]).unlink()
+    with Workspace.open(share) as ws:
+        assert any(p["problem"] == "orphan-evidence-missing" for p in ws.verify()["problems"])
 
 
 def test_cli_reports_refusal_and_exits_nonzero(share, monkeypatch, capsys):
@@ -407,7 +448,7 @@ def test_stale_view_missing_file_is_redecided_not_reported_absent(share, monkeyp
             state["a"] = Workspace.clear_orphaned_release(share, NAME, reason="admin A")
         return real_read(self)
     monkeypatch.setattr(wsmod.Path, "read_bytes", read_bytes)
-    b = Workspace.clear_orphaned_release(share, NAME, reason="admin B")
+    b = Workspace.clear_orphaned_release(share, NAME, reason="admin A")   # same request, retried
     monkeypatch.undo()
     assert b["adopted"] and b["clear_id"] == state["a"]["clear_id"] and b["outcome"] == "completed"
     assert len(_auths(share)) == 1 and len(_results(share)) == 1
