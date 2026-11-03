@@ -33,6 +33,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install Linux Qt runtime libraries for full suite
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
       - name: Copy independently authored regression tests without editing production
         shell: python
         run: |
@@ -64,3 +69,6 @@ jobs:
         working-directory: app
         run: |
           python -m pytest -q -ra tests/test_core_reliability.py::test_a_stopped_checkin_reports_the_retry_that_finished_for_it tests/test_materialisation_authority.py::test_late_put_cannot_change_reads
+      - name: Full source-pinned Phase 2 regression, including Qt
+        working-directory: app
+        run: python -m pytest -q -ra
