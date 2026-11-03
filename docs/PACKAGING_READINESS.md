@@ -105,3 +105,28 @@ The safe proposed sequence remains director review of independent QA for #8/#9/#
 The isolated focused packaging workflow is .github/workflows/revisionworx-packaging-readiness.yml. It runs on packaging-file changes or manual dispatch only, not on ordinary documentation updates. It does not modify Claude's core modules or QA's workflows, and it never publishes an artifact. All future production packaging workflows require Claude/QA review and Director approval.
 
 **Release status:** NOT READY. A passing bundle smoke will be evidence only for the two subprocess checks above.
+
+## Separate TEST-ONLY frozen desktop-alpha acceptance
+
+An independent workflow, revisionworx-alpha-packaging.yml, builds exact
+Claude B desktop-alpha source f00aa31b6f66fbe0e78ff440aed7026e869138b3,
+**not** the normal d656884b source used by the production-core packaging
+matrix. It uses the regular tools/packaging/build.py with an explicit
+--alpha-acceptance flag to select a **test-only** GUI wrapper. That wrapper
+instantiates the actual PySide6 GUI, and its optional alpha probe exercises
+project create, import, checkout/checkin, history and process restart.
+A separately frozen CLI exports both revisions and checks SHA-256.
+
+Run 41566749753 passed Ubuntu and Windows; Ubuntu also succeeded in a
+Python-free, network-none Docker runtime from relocated Unicode/spaces
+onedir trees. Complete evidence, commands, integrity assertions and
+limitations: docs/FROZEN_DESKTOP_ALPHA_ACCEPTANCE.md. The old packaging
+workflow also passed at its unchanged source pin in run 41566749764.
+
+**Never distribute the --alpha-acceptance bundle.** It intentionally embeds
+test automation entrypoints and is only a CI validation artifact. Build the
+normal app without that flag when real installable package approval becomes
+possible. Interactive VM acceptance, native installation, real network
+absence on Windows and current Phase 2 safety remain unverified; no release
+is authorized. Source f00aa31b acceptance does not carry forward to newer
+GUI SHA e5725df, whose native Qt tests currently fail.
