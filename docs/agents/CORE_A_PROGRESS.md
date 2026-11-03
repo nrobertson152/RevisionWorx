@@ -13,3 +13,13 @@
 ## Next milestone
 
 Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` reports typed corruption rather than raising raw exceptions or returning healthy. QA: run `python -m pytest -q tests/test_core_independent_journal_shape.py` on the pinned old source to establish red controls, then rerun unchanged against Claude A's corrected exact SHA on Ubuntu/Windows Python 3.11/3.13. Keep the CAD source provenance defect as an independent merge blocker. Core Engineer A next: ADR-017 canonical RecordCheck identity and replay-after-restart regression or nonduplicative crash recovery gate, after reviewing newer QA work.
+
+## 2026-11-03 — ADR-017/021 ordered RecordCheck restart gates
+
+- **Assignment:** issue #29; simple comment checkout before writing, no atomic-ref lock.
+- **Pinned production baseline:** `f01b37d345c5208ab0fa520588a2abe8c66c894a` (runtime `96f9c368`). Reconfirm before any corrected-source acceptance.
+- **Test-only source commit:** `60b1c4a66697507b9e58b2cdba45970cdeeb202a` on `core/independent-journal-schema-regressions`; new file `tests/test_core_adr017_ordered_checks_restart.py`.
+- **Three deterministic cases:** (1) identical txid/ordered RecordChecks replay idempotently after restart while reordered checks are rejected; (2) changed RecordCheck expectation after restart raises `TxidReuseError` without advancing journal; (3) identical retry after a checked record changes returns the earlier committed outcome, without rechecking stale preconditions or appending a journal entry.
+- **Interfaces:** existing `Workspace.commit`, `transaction_outcome`, `head_seq`, `RecordCheck`, `RecordPut`, `TxidReuseError`. No public API change, production source edit, or branch merge.
+- **Execution:** tests NOT EXECUTED; this GitHub connector can commit files but cannot run pytest or Actions. No OS/Python pass/fail count or CI URL. Prior local clone DNS failure is not treated as proof that this test passes. QA should run `python -m pytest -q tests/test_core_adr017_ordered_checks_restart.py` on pinned old source and latest corrected exact SHA across native Ubuntu/Windows Python 3.11/3.13, and inspect all strict outcomes.
+- **Next:** examine nonoverlapping orphan recovery/disk-full crash fixture or read-only integrity-doctor fixture after QA confirms overlap and exact source. Core malformed-journal and CAD source-provenance production fixes remain Claude A-owned P0 merge blockers.
