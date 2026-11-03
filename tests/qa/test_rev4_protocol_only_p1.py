@@ -339,3 +339,113 @@ def test_displaced_archive_crash_positive_safety_no_two_writers(tmp_path, monkey
             reason="d2b7a1c: displaced B archived outside scanner then crash before revocation"))
     observed = _run_displaced_archive_crash(tmp_path, monkeypatch)
     assert not (observed["B"] and observed["C"] and not observed["revoked_B"]), observed
+
+
+def _break_archive_unguarded():
+    src = inspect.getsource(Workspace.break_writer_lock)
+    return ('current.get("token") == expected_token' in src and
+            "os.replace(lock, broken)" in src)
+
+
+def _run_admin_break_snapshot_race(tmp_path, monkeypatch):
+    """Admin has journal-revoked A and read A in writer.lock, pauses before
+    evidence move. B legally archives revoked A and takes its own lock.
+    Admin resumes its *normal* os.replace and inadvertently moves B to a
+    nonblocking .broken-* name without revoking B. C and paused B both commit.
+    No outside / custom custody mutation: all operations are production API.
+    """
+    root, locks = make_workspace(tmp_path)
+    lock = locks / "writer.lock"
+    a = Workspace.open(root, writable=True)
+    a_token = a._lock_token
+    real_replace = os.replace
+    admin_at_break = threading.Event()
+    resume_admin = threading.Event()
+    b_preflight = threading.Event()
+    resume_b = threading.Event()
+    witnessed = []
+    errors = []
+    state = {}
+
+    def pause_break_evidence_move(src, dst, *args, **kwargs):
+        if (Path(src) == lock and Path(dst).name.startswith("writer.lock.broken-")
+                and not witnessed):
+            witnessed.append(True)
+            admin_at_break.set()
+            if not resume_admin.wait(12):
+                raise AssertionError("paused administrative break never resumed")
+        return real_replace(src, dst, *args, **kwargs)
+
+    def admin_run():
+        try:
+            state["admin"] = Workspace.break_writer_lock(
+                root, a_token, "previous A writer was verified stopped")
+        except BaseException as exc:
+            errors.append(("admin", repr(exc)))
+
+    def b_run(b):
+        actual_rev = b._current_rev
+        def pause_after_preflight(kind, record_id):
+            b_preflight.set()
+            if not resume_b.wait(12):
+                raise AssertionError("B preflighted commit did not resume")
+            return actual_rev(kind, record_id)
+        b._current_rev = pause_after_preflight
+        try:
+            put_b(b)
+        except WorkspaceError as exc:
+            state["b_error"] = type(exc).__name__
+        except BaseException as exc:
+            errors.append(("B", repr(exc)))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", pause_break_evidence_move)
+        admin_thread = threading.Thread(target=admin_run, name="qa-delayed-admin-break")
+        admin_thread.start()
+        b = None
+        b_thread = None
+        try:
+            assert admin_at_break.wait(12), "admin did not reach post-revocation move"
+            assert a_token in Workspace._revoked_tokens(root / ".revisionworx")
+            b = Workspace.open(root, writable=True)  # legitimate automatic cleanup of revoked A
+            state["b_token"] = b._lock_token
+            b_thread = threading.Thread(target=b_run, args=(b,), name="qa-break-successor-B")
+            b_thread.start()
+            assert b_preflight.wait(12), "B did not pass real commit checks"
+            resume_admin.set()
+            admin_thread.join(12)
+            assert not admin_thread.is_alive(), "admin archive did not finish"
+            assert list(locks.glob("writer.lock.broken-*")), "B was not moved into broken evidence"
+            with Workspace.open(root, writable=True) as c:
+                state["c_token"] = c._lock_token
+                put_c(c)
+        finally:
+            resume_admin.set()
+            resume_b.set()
+            admin_thread.join(12)
+            if b_thread is not None:
+                b_thread.join(12)
+            if b is not None:
+                b.close()
+            a.close()
+    assert witnessed and not errors, errors
+    return effective(root, state["b_token"], state["c_token"])
+
+
+def test_admin_break_race_unsafe_two_effective_protocol_writers(tmp_path, monkeypatch):
+    """PASS is an additional independent protocol-only P1 unsafe witness."""
+    if not _break_archive_unguarded():
+        pytest.skip("unguarded admin archive mechanism changed")
+    observed = _run_admin_break_snapshot_race(tmp_path, monkeypatch)
+    assert observed["B"] and observed["C"], observed
+    assert observed["B_entry"] and observed["C_entry"]
+    assert not observed["revoked_B"]
+
+
+def test_admin_break_race_positive_safety_no_unrevoked_two_writers(tmp_path, monkeypatch, request):
+    if _break_archive_unguarded():
+        request.node.add_marker(pytest.mark.xfail(
+            strict=True, raises=AssertionError,
+            reason="d2b7a1c: admin break re-reads A before moving unrevoked successor B lock"))
+    observed = _run_admin_break_snapshot_race(tmp_path, monkeypatch)
+    assert not (observed["B"] and observed["C"] and not observed["revoked_B"]), observed
