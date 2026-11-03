@@ -225,6 +225,43 @@ class Phase2AdministratorConflictBoundary(unittest.TestCase):
         self.assertEqual(len(self._entries("workspace.orphan.clear.result")), 1)
         self.assertEqual(evidence.read_bytes(), TORN)
 
+    def test_recreated_identical_evidence_is_new_clear_incarnation(self):
+        """Name+bytes are not durable identity after a completed recovery."""
+        first = self.ws.Workspace.clear_orphaned_release(
+            self.meta, ORPHAN, "operator inspected and confirmed stopped")
+        self.assertEqual(first["outcome"], "completed")
+        self.orphan.write_bytes(TORN)  # new observed orphan at the same pathname
+        with self.assertRaises(self.ws.WorkspaceError):
+            self.ws.Workspace.open(self.meta, writable=True)
+        second = self.ws.Workspace.clear_orphaned_release(
+            self.meta, ORPHAN, "operator inspected and confirmed stopped")
+        self.assertNotEqual(first["clear_id"], second["clear_id"])
+        self.assertFalse(second["adopted"])
+        self.assertEqual(len(self._entries("workspace.orphan.clear")), 2)
+        self.assertEqual(len(self._entries("workspace.orphan.clear.result")), 2)
+        self.assertEqual((self.locks / first["evidence"]).read_bytes(), TORN)
+        self.assertEqual((self.locks / second["evidence"]).read_bytes(), TORN)
+
+    def test_verify_reports_post_archive_evidence_tampering_and_removal(self):
+        """Evidence is bound to an audit on publication; later tampering is detected."""
+        result = self.ws.Workspace.clear_orphaned_release(
+            self.meta, ORPHAN, "operator inspected and confirmed stopped")
+        evidence = self.locks / result["evidence"]
+        with self.ws.Workspace.open(self.meta) as reader:
+            initial = reader.verify()["problems"]
+        self.assertFalse([p for p in initial if p["problem"].startswith("orphan-evidence")])
+        evidence.write_bytes(b"unauthorized modification")
+        with self.ws.Workspace.open(self.meta) as reader:
+            altered = reader.verify()["problems"]
+        self.assertTrue(any(p["problem"] == "orphan-evidence-altered"
+                            and p["clear_id"] == result["clear_id"] for p in altered))
+        evidence.unlink()
+        with self.ws.Workspace.open(self.meta) as reader:
+            missing = reader.verify()["problems"]
+        self.assertTrue(any(p["problem"] == "orphan-evidence-missing"
+                            and p["clear_id"] == result["clear_id"] for p in missing))
+
+
 
 if __name__ == "__main__":
     unittest.main()
