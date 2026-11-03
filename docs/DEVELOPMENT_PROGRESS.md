@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-02 (session 9: ADR-019 rev. 3 threat model, CORE_API.md)
+**Updated:** 2026-11-02 (session 10: ADR-019 rev. 4, protocol-only P1s; core owner handed over to a new session)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -181,6 +181,18 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 - Reproduced Agent D's procedure as `tests/test_issue8_fencing.py`. Both tests failed first: the stale commit succeeded.
 - Implemented journal-order fencing. The full suite gives **153 passed, 1 skipped**.
 - Multi-user use is still gated on the coordinator and on SMB verification.
+
+### 2026-11-02 (session 10) — ADR-019 rev. 4: three protocol-only P1s on `d2b7a1c`
+- Took over as core owner (Claude A) from the previous session. Rev. 3 claimed protocol-only
+  exclusivity; QA, Distributed Systems and Codex refuted it, and the QA reproducers were rerun here
+  first (3 unsafe PASS + 3 strict XFAIL on `d2b7a1c`).
+- Fix: `_displace_writer_lock` and revoke-before-archive in `_fence_token_orphan`. See ADR-019 rev. 4.
+- New: `tests/test_lock_stale_decision_races.py` (crash at every step of each mover) and
+  `tests/test_lock_protocol_schedules.py` (seeded schedule exploration with process kills).
+- `tests/test_issue8_fencing.py`: a pause hook keyed on the old `broken` destination would have stopped
+  firing silently, so it now matches any move of `writer.lock`.
+- **Not accepted by its author.** Awaiting QA and Distributed Systems on the exact SHA. Windows not run
+  here. API requests A1-A5 from Claude B (PR #7) are not yet answered.
 
 ### 2026-11-01 (session 2, part 3) — independent agents' work executed; decision pending
 Agents B and D opened PR #3, PR #4 and issue #5 during this session. Their tests had not been run

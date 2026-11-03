@@ -328,8 +328,9 @@ class Workspace:
           2. atomically ``rename`` whatever is at writer.lock to a private name, then inspect THAT
              file: it is exactly what we removed;
           3. ours -> delete it; someone else's -> put it back with an exclusive create;
-          4. if a third writer took the name in between, fail closed: publish a journaled revocation
-             of the displaced token (ADR-015), keeping the displaced file as evidence.
+          4. if a third writer took the name in between, fail closed: the displaced file stays in the
+             scanned namespace until its token's revocation (ADR-015) is durable, and only then
+             becomes evidence (ADR-019 rev. 4), so a crash at any point leaves the obligation behind.
         Windows sharing violations (ADR-016) are retried with a bound."""
         import time
         last: OSError | None = None
@@ -361,27 +362,29 @@ class Workspace:
                              f"({last}); it is still held by this session. An administrator can break it.")
 
     def _restore_foreign_lock(self, private: Path, lock: Path, holder: dict) -> None:
-        try:
-            if os.name == "nt":
-                os.rename(private, lock)  # refuses an existing destination
-            else:
-                os.link(private, lock)    # fails with EEXIST
-                private.unlink(missing_ok=True)
-            return
-        except FileNotFoundError:
-            return  # a concurrent acquirer already fenced the token and took custody (evidence)
-        except FileExistsError:
-            pass
-        evidence = lock.with_name(f"writer.lock.displaced-{uuid.uuid4().hex[:8]}")
-        try:
-            os.replace(private, evidence)
-        except FileNotFoundError:
-            return  # taken into custody (and fenced) by a concurrent acquirer
         tok = holder.get("token")
-        if tok and tok not in Workspace._revoked_tokens(self.meta_dir):
-            Workspace._publish_revocation(
-                self.meta_dir, holder, reason="lock displaced during a concurrent release; revoked to "
-                "fail closed (ADR-019)", evidence=evidence.name)
+        try:
+            already_revoked = bool(tok) and tok in Workspace._revoked_tokens(self.meta_dir)
+        except WorkspaceError:
+            already_revoked = False              # unreadable journal: restoring is still the safe move
+        if not already_revoked:
+            try:
+                if os.name == "nt":
+                    os.rename(private, lock)     # refuses an existing destination
+                else:
+                    os.link(private, lock)       # fails with EEXIST
+                    private.unlink(missing_ok=True)
+                return
+            except FileNotFoundError:
+                return                           # a concurrent acquirer fenced it and took custody
+            except FileExistsError:
+                pass
+        if not tok:
+            return                               # unreadable: it stays a blocking .releasing-* orphan
+        evidence = f"writer.lock.displaced-{uuid.uuid4().hex[:8]}"
+        Workspace._fence_token_orphan(
+            self.meta_dir, private, planned_evidence={tok: evidence},
+            reason="lock displaced during a concurrent release; revoked to fail closed (ADR-019)")
 
     def __enter__(self):
         return self
@@ -390,25 +393,59 @@ class Workspace:
         self.close()
 
     # ------------------------------------------------------------------ locking
+    LOCK_ACQUIRE_ATTEMPTS = 20
+
     @staticmethod
     def _acquire_writer_lock(meta: Path) -> str:
-        token = uuid.uuid4().hex
-        holder = {**current_actor(), "token": token, "acquired": now_iso()}
         lock = meta / "locks" / "writer.lock"
-        try:
-            atomicio.publish_exclusive(lock, atomicio.dumps_json(holder))
-        except ExclusiveCreateError:
+        existing: dict = {}
+        for _ in range(Workspace.LOCK_ACQUIRE_ATTEMPTS):
+            token = uuid.uuid4().hex
+            holder = {**current_actor(), "token": token, "acquired": now_iso()}
             try:
-                existing = atomicio.read_json(lock)
-            except (OSError, ValueError):
-                existing = {"user": "?", "host": "?", "pid": "?", "acquired": "?", "token": "?"}
-            if existing.get("token") in Workspace._revoked_tokens(meta):
-                # Revocation is already authoritative in the journal; this file is only evidence.
-                os.replace(lock, lock.with_name(f"writer.lock.revoked-{uuid.uuid4().hex[:8]}"))
-                return Workspace._acquire_writer_lock(meta)
-            raise WorkspaceLockedError(existing) from None
-        Workspace._fence_orphaned_releases(meta, token)
-        return token
+                atomicio.publish_exclusive(lock, atomicio.dumps_json(holder))
+            except ExclusiveCreateError:
+                try:
+                    existing = atomicio.read_json(lock)
+                except (OSError, ValueError):
+                    existing = {"user": "?", "host": "?", "pid": "?", "acquired": "?", "token": "?"}
+                stale = existing.get("token")
+                if stale not in Workspace._revoked_tokens(meta):
+                    raise WorkspaceLockedError(existing) from None
+                # Only permission to look: what gets moved may no longer be this file (ADR-019 rev. 4).
+                try:
+                    Workspace._displace_writer_lock(
+                        meta, {stale: f"writer.lock.revoked-{uuid.uuid4().hex[:8]}"},
+                        "lock displaced while clearing a revoked lock; revoked to fail closed (ADR-019)")
+                except PermissionError:
+                    raise WorkspaceLockedError(existing) from None
+                continue
+            Workspace._fence_orphaned_releases(meta, token)
+            return token
+        raise WorkspaceLockedError(existing)
+
+    @staticmethod
+    def _displace_writer_lock(meta: Path, planned_evidence: dict[str, str], reason: str) -> None:
+        """Vacate writer.lock on behalf of someone other than its owner (ADR-019 rev. 4).
+
+        The caller decided from an earlier read, and an ordinary acquirer can replace the file before
+        the rename, so that read proves nothing about the object moved. The file therefore moves to
+        a scanned ``.releasing-*`` name, is inspected there, and has its actual token revoked before
+        it stops blocking. ``planned_evidence`` names the archive for tokens the caller expected."""
+        import time
+        locks = meta / "locks"
+        custody = locks / f".releasing-{uuid.uuid4().hex}"
+        for attempt in range(Workspace.LOCK_RELEASE_ATTEMPTS):
+            try:
+                os.replace(locks / "writer.lock", custody)
+                break
+            except FileNotFoundError:
+                return
+            except PermissionError:              # WinError 32: another process has it open (ADR-016)
+                if attempt == Workspace.LOCK_RELEASE_ATTEMPTS - 1:
+                    raise
+                time.sleep(Workspace.LOCK_RELEASE_DELAY)
+        Workspace._fence_token_orphan(meta, custody, planned_evidence=planned_evidence, reason=reason)
 
     @staticmethod
     def _fence_orphaned_releases(meta: Path, own_token: str) -> None:
@@ -454,7 +491,12 @@ class Workspace:
             raise
 
     @staticmethod
-    def _fence_token_orphan(meta: Path, orphan: Path) -> None:
+    def _fence_token_orphan(meta: Path, orphan: Path, planned_evidence: dict[str, str] | None = None,
+                            reason: str = "lock orphaned by an interrupted release; revoked to fail "
+                                          "closed (ADR-019)") -> None:
+        """Revoke the token in ``orphan``, then archive it. This is the only way a token-bearing lock
+        file leaves the scanned namespace: revocation first, so a crash anywhere leaves a blocking
+        file for the next acquirer to finish (ADR-019 rev. 4)."""
         locks = meta / "locks"
         if orphan.name.startswith(".fencing-"):
             custody = orphan                         # resumed after a crash in this very step
@@ -477,15 +519,13 @@ class Workspace:
             raise WorkspaceCorruptError(
                 f"orphaned lock-release file {orphan.name} changed while being fenced; nobody may write "
                 "until an administrator runs 'revisionworx lock clear-orphan'")
-        evidence = f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}"
+        evidence = (planned_evidence or {}).get(tok) or f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}"
         if tok not in Workspace._revoked_tokens(meta):
-            Workspace._publish_revocation(
-                meta, holder, reason="lock orphaned by an interrupted release; revoked to fail "
-                "closed (ADR-019)", evidence=evidence)
+            Workspace._publish_revocation(meta, holder, reason=reason, evidence=evidence)
         try:
             os.replace(custody, locks / evidence)
-        except FileNotFoundError:
-            pass
+        except (FileNotFoundError, PermissionError):
+            pass                                     # finished by a competitor, or a later scan will
 
     @staticmethod
     def _revoked_tokens(meta: Path) -> set[str]:
@@ -788,21 +828,24 @@ class Workspace:
         if not reason.strip():
             raise WorkspaceError("a reason is required to break a writer lock")
         meta = cls.meta_dir_for(location)
-        lock = meta / "locks" / "writer.lock"
         holder = cls.read_writer_lock(meta)
         if holder is None:
             raise WorkspaceError("there is no writer lock to break")
         if holder.get("token") != expected_token:
             raise WorkspaceError("the writer lock changed since it was inspected; inspect it again")
-        broken = lock.with_name(f"writer.lock.broken-{uuid.uuid4().hex[:8]}")
-        cls._publish_revocation(meta, holder, reason=reason, evidence=broken.name)
-        # Evidence only; safe if it races: acquisition also treats a revoked-token lock as stale.
+        broken = f"writer.lock.broken-{uuid.uuid4().hex[:8]}"
+        cls._publish_revocation(meta, holder, reason=reason, evidence=broken)
+        # Archiving is optional (acquisition also clears a revoked lock). This check only avoids
+        # needless displacement; a successor moved after it is fenced, never silently archived.
         current = cls.read_writer_lock(meta)
         if current and current.get("token") == expected_token:
             try:
-                os.replace(lock, broken)
+                cls._displace_writer_lock(
+                    meta, {expected_token: broken},
+                    "lock displaced by an administrative break of an earlier writer; revoked to fail "
+                    "closed (ADR-019)")
             except OSError:
-                pass
+                pass                                 # the revocation above is what counts
         return holder
 
     # ------------------------------------------------------------------ journal

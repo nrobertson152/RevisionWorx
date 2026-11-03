@@ -420,7 +420,7 @@ afterwards and is only evidence.
   remains an implementation detail.
 - The historical extension comes from `revision.source_rel_path`.
 
-### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED; rev. 3 awaiting independent review
+### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED; rev. 4 awaiting independent review
 **Defect.** Reproduced by Distributed Systems (run 41387552435) and here
 (`tests/test_lock_release_race.py`, which failed on `d202b28`):
 1. Writer A verifies the token in `writer.lock`, then pauses before its pathname `unlink`.
@@ -552,7 +552,7 @@ exists. Adding more token re-checks only narrows the window.
 
   | Property | Protocol processes + crashes | Outside actor |
   |---|---|---|
-  | At most one effective writer (ADR-015/019) | **Guaranteed** | **Not achievable** with a file-only authority |
+  | At most one effective writer (ADR-015/019) | **Design goal, rev. 4** (rev. 3's "guaranteed" was refuted on `d2b7a1c`; pending independent review) | **Not achievable** with a file-only authority |
   | Evidence archived under an audit equals the audited SHA-256 at archival | **Guaranteed** | **Guaranteed** (evidence is published from the verified buffer by exclusive create) |
   | Later alteration or removal of archived evidence | n/a | **Detected** by `verify()` (`orphan-evidence-altered` / `-missing`), not prevented |
   | One authorisation and one terminal result per orphan incarnation | **Guaranteed** (journal CAS) | **Guaranteed** while the journal itself is not forged |
@@ -576,6 +576,56 @@ exists. Adding more token re-checks only narrows the window.
   `clear_id` (tested). There is no authenticated principal: "same administrator" means same
   reason and same `user@host`. An identical request resumes idempotently (lost acknowledgement,
   crash, restart). Any other request raises `OrphanClearConflict` and records nothing.
+
+- **Rev. 4: no stale decision can unfence a lock** (three protocol-only P1s on `d2b7a1c`, from Codex,
+  QA and Distributed Systems, all reproduced first; rev. 3's claim of protocol-only exclusivity was
+  wrong). Every failure had the same shape: a process read token A at `writer.lock`, an ordinary
+  acquirer B then replaced A, and the delayed pathname move took **B's** live lock, while the file
+  ended up outside the scanned namespace with B unrevoked. A successor C then saw nothing, and C and
+  B (already past its preflight) both took effect.
+
+  | Mover | `d2b7a1c` | Failure |
+  |---|---|---|
+  | Revoked-lock cleanup in acquisition | `writer.lock` → `writer.lock.revoked-*` | moved B, never revoked it |
+  | `break_writer_lock` | `writer.lock` → `writer.lock.broken-*` | moved B, never revoked it |
+  | `_restore_foreign_lock` | `.releasing-*` → `writer.lock.displaced-*`, *then* revoke | crash in between lost the obligation |
+
+  **Invariant.** A token-bearing lock file stops blocking only after the token *read from that moved
+  file* is durably revoked. Two rules deliver it:
+  1. Nobody but the owner moves `writer.lock` except through `_displace_writer_lock`, which moves it
+     to a fresh scanned `.releasing-*` name. An earlier read only gives permission to look.
+  2. Token-bearing files reach an evidence name only through `_fence_token_orphan`: inspect the
+     moved file, revoke, archive.
+
+  Why that closes the race: the rename out of `writer.lock` happens before the name can be vacant,
+  so any later acquirer's scan, which runs after its own exclusive create, finds the file. B's next
+  publication lands after the revocation and is fenced, or lands before it and precedes C entirely.
+  Evidence names are unchanged when the moved file is the expected one, and the audit's planned name
+  stays accurate. A successor found instead gets `writer.lock.orphaned-*` from its own audit.
+  Acquisition's retry is now a bounded loop (`LOCK_ACQUIRE_ATTEMPTS`), not recursion.
+
+  Crash windows for all three movers (each tested at every filesystem step):
+
+  | Crash point | State | Result |
+  |---|---|---|
+  | Before the move | `writer.lock` unchanged | blocked, or cleared if revoked |
+  | After the move, before revocation | `.releasing-*` | next acquirer revokes the actual token before writing |
+  | After custody, before revocation | `.fencing-*` | same |
+  | After revocation, before archive | `.fencing-*` | next acquirer archives; the token is already fenced |
+
+  **Decision: a displaced successor is revoked, not restored,** in cleanup and break. Restoring would
+  keep B running but adds states and another exclusive-create race for a very rare case. The release
+  path keeps its existing restore attempt. Consequence: B can lose a healthy session in this race and
+  gets `LockLostError`. That is unavailability, not corruption, and it reopens.
+
+  **Schedule exploration.** `tests/test_lock_protocol_schedules.py` runs three writers and an
+  administrator over the real code with a seeded scheduler that can switch or kill an actor before any
+  filesystem operation, and checks the property from the journal: authority never interleaves, no
+  lost update, no live token in evidence. It finds the defect on `d2b7a1c` within a few seeds. It
+  explores randomly and is not a proof; threads stand in for processes.
+
+  **Not claimed:** SMB/NFS, power loss, Windows until run there, outside actors (unchanged from
+  rev. 3), or a formal proof of the protocol. Independent QA and Distributed Systems review is pending.
 
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.
