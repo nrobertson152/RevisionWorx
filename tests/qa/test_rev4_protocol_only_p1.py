@@ -162,3 +162,180 @@ def test_revoked_cleanup_positive_safety_no_unrevoked_two_writers(tmp_path, monk
             reason="d2b7a1c: stale token A read then rename deletes live unrevoked B lock"))
     observed = _run_revoked_cleanup_race(tmp_path, monkeypatch)
     assert not (observed["B"] and observed["C"] and not observed["revoked_B"]), observed
+
+
+def _displaced_archival_unguarded():
+    source = inspect.getsource(Workspace._restore_foreign_lock)
+    return ("os.replace(private, evidence)" in source and
+            "Workspace._publish_revocation(" in source and
+            source.index("os.replace(private, evidence)") < source.index("Workspace._publish_revocation("))
+
+
+def _run_displaced_archive_crash(tmp_path, monkeypatch):
+    """A passes its real release preflight; admin breaks A and B legitimately
+    acquires. Delayed A release displaces B; C acquires but pauses before fencing.
+    A archives B outside the scanned .releasing namespace and crashes before
+    revocation. C scans clean and commits; preflighted B also commits.
+    Every filesystem move is the actual production protocol move.
+    """
+    root, locks = make_workspace(tmp_path)
+    lock = locks / "writer.lock"
+    a = Workspace.open(root, writable=True)
+    a_token = a._lock_token
+
+    a_before_move = threading.Event()
+    resume_a_move = threading.Event()
+    b_preflight = threading.Event()
+    resume_b = threading.Event()
+    b_displaced = threading.Event()
+    resume_a_restore = threading.Event()
+    c_has_lock = threading.Event()
+    resume_c_scan = threading.Event()
+    a_crashed = threading.Event()
+    error = []
+    state = {}
+    real_replace = os.replace
+    real_restore = a._restore_foreign_lock
+    real_fence = Workspace._fence_orphaned_releases
+    real_revoke = Workspace._publish_revocation
+    release_seen = []
+
+    def pause_release_replace(src, dst, *args, **kwargs):
+        if (Path(src) == lock and Path(dst).name.startswith(".releasing-")
+                and not release_seen):
+            release_seen.append(True)
+            a_before_move.set()
+            if not resume_a_move.wait(12):
+                raise AssertionError("A release move was not resumed")
+        return real_replace(src, dst, *args, **kwargs)
+
+    def paused_restore(private, target, holder):
+        assert holder.get("token") == state["b_token"], holder
+        state["private_B"] = private
+        b_displaced.set()
+        if not resume_a_restore.wait(12):
+            raise AssertionError("A foreign restoration was not resumed")
+        return real_restore(private, target, holder)
+
+    def fail_before_revocation(cls, meta, holder, reason, evidence):
+        if holder.get("token") == state.get("b_token"):
+            a_crashed.set()
+            raise SystemExit("release crashed after archiving B and before revocation")
+        return real_revoke(meta, holder, reason=reason, evidence=evidence)
+
+    def pause_successor_fence(meta, own_token):
+        if own_token != state.get("b_token") and not c_has_lock.is_set():
+            state["c_token"] = own_token
+            c_has_lock.set()
+            if not resume_c_scan.wait(12):
+                raise AssertionError("C was not resumed to fence orphans")
+        return real_fence(meta, own_token)
+
+    def release_a():
+        try:
+            a._unlink_own_lock(lock)
+        except SystemExit as exc:
+            state["a_crash"] = str(exc)
+        except BaseException as exc:
+            error.append(("A", repr(exc)))
+
+    def commit_b(b):
+        real_rev = b._current_rev
+        def pause_after_checked(kind, record_id):
+            b_preflight.set()
+            if not resume_b.wait(12):
+                raise AssertionError("B commit never resumed")
+            return real_rev(kind, record_id)
+        b._current_rev = pause_after_checked
+        try:
+            put_b(b)
+        except WorkspaceError as exc:
+            state["b_exception"] = type(exc).__name__
+        except BaseException as exc:
+            error.append(("B", repr(exc)))
+
+    def acquire_and_commit_c():
+        try:
+            with Workspace.open(root, writable=True) as c:
+                state["c_token"] = c._lock_token
+                put_c(c)
+        except BaseException as exc:
+            error.append(("C", repr(exc)))
+
+    # The pause is inside the actual A lock-release method *after* it tests
+    # current journal revocations and *before* it renames writer.lock.
+    a._restore_foreign_lock = paused_restore
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", pause_release_replace)
+        a_thread = threading.Thread(target=release_a, name="qa-old-releaser")
+        a_thread.start()
+        b = None
+        b_thread = None
+        c_thread = None
+        try:
+            assert a_before_move.wait(12), "A release never passed revocation preflight"
+            Workspace.break_writer_lock(root, a_token, "admin confirmed A was stopped")
+            b = Workspace.open(root, writable=True)
+            state["b_token"] = b._lock_token
+            b_thread = threading.Thread(target=commit_b, args=(b,), name="qa-delayed-B")
+            b_thread.start()
+            assert b_preflight.wait(12), "B never passed its true commit preflight"
+
+            # A's stale releaser displaces B's *live* lock. This happens using
+            # A's own production _unlink_own_lock(), not an outside rename.
+            resume_a_move.set()
+            assert b_displaced.wait(12), "A did not take B's lock into release custody"
+
+            patch.setattr(Workspace, "_publish_revocation", classmethod(fail_before_revocation))
+            patch.setattr(Workspace, "_fence_orphaned_releases", staticmethod(pause_successor_fence))
+            c_thread = threading.Thread(target=acquire_and_commit_c, name="qa-successor-C")
+            c_thread.start()
+            assert c_has_lock.wait(12), "C never acquired writer.lock before its fence scan"
+
+            # C's lock makes restoring B exclusive-fail, so A archives B in a
+            # nonblocking writer.lock.displaced-* name before its journal revocation.
+            resume_a_restore.set()
+            a_thread.join(12)
+            assert not a_thread.is_alive() and a_crashed.is_set(), (
+                "A must crash after B evidence archive and before durable revocation")
+            assert list(locks.glob("writer.lock.displaced-*")), "B evidence was not archived"
+            assert not list(locks.glob(".releasing-*")), "orphan still blocks C"
+
+            resume_c_scan.set()
+            c_thread.join(12)
+            assert not c_thread.is_alive(), "C did not finish committing"
+        finally:
+            resume_a_move.set()
+            resume_a_restore.set()
+            resume_c_scan.set()
+            resume_b.set()
+            if b_thread is not None:
+                b_thread.join(12)
+            if c_thread is not None:
+                c_thread.join(12)
+            a_thread.join(12)
+            if b is not None:
+                b.close()
+            a.close()
+    assert not error, error
+    assert release_seen and "b_token" in state and "c_token" in state
+    return effective(root, state["b_token"], state["c_token"])
+
+
+def test_displaced_archive_crash_unsafe_two_effective_protocol_writers(tmp_path, monkeypatch):
+    """PASS is proof of protocol-only breach, never a safety acceptance."""
+    if not _displaced_archival_unguarded():
+        pytest.skip("unverified archive-before-revoke implementation changed")
+    observed = _run_displaced_archive_crash(tmp_path, monkeypatch)
+    assert observed["B"] and observed["C"]
+    assert observed["B_entry"] and observed["C_entry"]
+    assert not observed["revoked_B"]
+
+
+def test_displaced_archive_crash_positive_safety_no_two_writers(tmp_path, monkeypatch, request):
+    if _displaced_archival_unguarded():
+        request.node.add_marker(pytest.mark.xfail(
+            strict=True, raises=AssertionError,
+            reason="d2b7a1c: displaced B archived outside scanner then crash before revocation"))
+    observed = _run_displaced_archive_crash(tmp_path, monkeypatch)
+    assert not (observed["B"] and observed["C"] and not observed["revoked_B"]), observed
