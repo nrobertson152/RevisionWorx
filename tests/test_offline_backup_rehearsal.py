@@ -159,5 +159,81 @@ class BackupRehearsalTests(unittest.TestCase):
                 mod.restore(archive, root / "restored")
             self.assertFalse((root / "restored").exists())
 
+
+    def test_duplicate_manifest_keys_fail_closed(self):
+        """Duplicate JSON keys must not silently replace authoritative hashes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "source", root / "archive"
+            src.mkdir()
+            (src / "part.ipt").write_bytes(b"original")
+            mod.backup(src, archive)
+            manifest = archive / mod.MANIFEST
+            import json
+            original = json.loads(manifest.read_text(encoding="utf-8"))
+            entry = json.dumps(original["files"]["part.ipt"])
+            manifest.write_text(
+                '{"version":1,"files":{"part.ipt":' + entry +
+                ',"part.ipt":' + entry + '}}', encoding="utf-8"
+            )
+            with self.assertRaisesRegex(mod.BackupError, "duplicate"):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+
+    def test_source_mutation_during_backup_rejected_without_manifest(self):
+        """A changed closed-workspace source cannot produce a valid backup."""
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "source", root / "archive"
+            src.mkdir()
+            original = src / "part.step"
+            original.write_bytes(b"before")
+            real_copy = mod.shutil.copyfile
+
+            def mutating_copy(source, destination, **kwargs):
+                result = real_copy(source, destination, **kwargs)
+                original.write_bytes(b"after")
+                return result
+
+            with patch.object(mod.shutil, "copyfile", side_effect=mutating_copy):
+                with self.assertRaisesRegex(mod.BackupError, "source changed"):
+                    mod.backup(src, archive)
+            self.assertFalse((archive / mod.MANIFEST).exists())
+            with self.assertRaises(mod.BackupError):
+                mod.verify(archive)
+            self.assertEqual(original.read_bytes(), b"after")
+
+    def test_interrupted_restore_cannot_be_mistaken_for_verified(self):
+        """Partial restore is visible and must never be treated as accepted."""
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive, restored = (root / name for name in ("source", "archive", "restored"))
+            src.mkdir()
+            (src / "a").write_bytes(b"a")
+            (src / "b").write_bytes(b"b")
+            mod.backup(src, archive)
+            real_copy = mod.shutil.copyfile
+            calls = [0]
+
+            def interrupted(*args, **kwargs):
+                calls[0] += 1
+                if calls[0] == 2:
+                    raise OSError("simulated restore interruption")
+                return real_copy(*args, **kwargs)
+
+            with patch.object(mod.shutil, "copyfile", side_effect=interrupted):
+                with self.assertRaises(OSError):
+                    mod.restore(archive, restored)
+            self.assertTrue(restored.exists())
+            self.assertFalse((restored / mod.MANIFEST).exists())
+            self.assertEqual(len(list(restored.iterdir())), 1)
+            self.assertEqual(len(mod.verify(archive)), 2)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, restored)
+
 if __name__ == "__main__":
     unittest.main()
