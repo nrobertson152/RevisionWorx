@@ -223,6 +223,10 @@ Done:
 - Differential test: incremental index equals a fresh rebuild across random histories. 6 seeds pass; it found no defect.
 - Negative controls for the explorer (budget 500): `d2b7a1c` 5 failed, 2 passed; `fe8a179` and `22a5273` 1 failed, 6 passed.
 
+- **Candidate `96f9c36`:** Core CI 41579731163 passed all four jobs, 393 passed and 3 skipped on each, with 5/5 Windows contention
+  trials on both Windows jobs. Exhaustive explorer at that SHA (Linux, Python 3.13.18): 17,537 schedules, 7 passed, none sampled.
+  Handed to QA and Distributed Systems. Not yet independently accepted; QA suite and GUI trial merge last ran at `feffbcf`.
+
 Not done yet, in priority order:
 1. Claude B's remaining API requests: A2, A3, A7 (A1, A4, A5 and A6 are done).
 2. Director question: same-host dead-process lock recovery (a stale lock is never stolen today, so every crash needs the CLI).
