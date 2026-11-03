@@ -59,7 +59,7 @@ def files_under(root: Path, *, allow_manifest: bool = False) -> dict[str, tuple[
                     continue
                 raise BackupError("reserved manifest name in source")
             found[rel] = digest(item)
-    return dict(sorted(found.items()))
+    # Reject names that alias on common case-insensitive Windows filesystems.\n    folded = {}\n    for name in found:\n        key = name.casefold()\n        if key in folded and folded[key] != name:\n            raise BackupError("case-insensitive path collision: " + folded[key] + " / " + name)\n        folded[key] = name\n    return dict(sorted(found.items()))
 
 
 def safe_name(name: object) -> str:
