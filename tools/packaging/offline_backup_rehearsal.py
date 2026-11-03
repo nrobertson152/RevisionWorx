@@ -100,7 +100,7 @@ def load_manifest(root: Path) -> dict[str, tuple[int, str]]:
         data = json.loads(manifest_path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
     except (OSError, ValueError) as exc:
         raise BackupError("manifest unreadable or malformed") from exc
-    if not isinstance(data, dict) or set(data) != {"version", "files"} or data["version"] != VERSION:
+    if not isinstance(data, dict) or set(data) != {"version", "files"} or type(data["version"]) is not int or data["version"] != VERSION:
         raise BackupError("unsupported manifest version/schema")
     if not isinstance(data["files"], dict):
         raise BackupError("invalid file table")
