@@ -31,7 +31,7 @@ It modifies **114 paths relative to the core**, with all six core authority Git 
 
 [Four-source CI 41583331179](https://github.com/nrobertson152/RevisionWorx/actions/runs/41583331179) is the first native Windows/Linux compatibility matrix at harness `6e7afa20`:
 - Ubuntu Python 3.11: actual three Git merges **PASS**; 11 staged-source regression tests **PASS**; native full `python -m pytest -q -ra`: **1,141 PASS / 2 SKIP / 0 FAIL**. Focused BOM, ECR/ECO and Qt interface tests passed before the full suite. Normal BOM/change-control/core CLI `--help` modules passed.
-- Windows Python 3.11: **record completed result before claiming**. Passing on Linux does not imply Windows acceptance.
+- Windows Python 3.11: **SUCCESS**; eleven staging-safety tests pass, focused BOM/ECR/GUI tests **24 PASS**, full `python -m pytest -q -ra`: **1,139 PASS / 4 SKIP / 0 FAIL**. Same test-only merge SHA `6c9950b` and exact parent source SHAs; no real merge or release was performed.
 
 **Follow-on Integration-only oracles authored:** `tools/packaging/test_product_stack_contract.py` combines a registered native CAD document, BOM parts and WhereUsed relation with an ECR impact query on a disposable core workspace. It verifies declared-vs-verified identity, coverage disclosure, journal integrity, stable CAD original bytes/mtime and read-only restart. `tools/packaging/check_product_wheel.py` audits a test-only wheel for all three product packages, core and both CLI entrypoints, declared GPL license, no required third-party core dependencies, no unexpected native objects, and SHA-256 manifest. **Neither follow-on test is accepted until its exact CI run is recorded.**
 
