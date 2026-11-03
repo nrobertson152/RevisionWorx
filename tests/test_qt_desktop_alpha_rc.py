@@ -535,3 +535,85 @@ def test_create_workspace_prompt_is_local(qapp, ctl, monkeypatch):
     w.create_ws()
     assert titles and "shared" not in titles[0].lower()
     w.close()
+
+
+# ---------------------------------------------------------------------------- crash and write-time blocks
+def _cli(home, *args):
+    from revisionworx.cli import main
+    assert main(["-w", str(home), *args]) in (0, None)
+
+
+def test_recovery_block_found_while_writing_makes_the_gui_read_only(qapp, ctl, tmp_path, boxes):
+    """Regression: the read-only health check cannot see a blocked lock namespace, so after refusing a
+    write the GUI stayed writable and invited the same failure again, against contract §4."""
+    w, home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    qapp.processEvents()
+    orphan = home / ".revisionworx" / "locks" / ".releasing-deadbeef"
+    orphan.write_text("{}")
+    assert w.observable_state()["actions"]["checkout"]
+    tab.checkout()
+    w.poll()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert [b[0] for b in boxes] == ["critical"] and "clear-orphan" in boxes[0][1][1]
+    assert st["read_only"] and "RECOVERY BLOCKED" in st["health_banner"] and "READ-ONLY" in st["health_banner"]
+    assert not any(st["actions"][k] for k in ("checkout", "import", "new_project", "change_state"))
+    tab.checkout()  # guarded: no second dialog and no retry loop
+    assert len(boxes) == 1
+    _cli(home, "lock", "clear-orphan", orphan.name, "--reason", "test: writer confirmed stopped")
+    w.refresh_all()  # F5 after the administrator's repair
+    qapp.processEvents()
+    st = w.observable_state()
+    # The clear is journalled but not yet applied, so the read-only check notes it until the next write.
+    assert not st["read_only"] and "RECOVERY BLOCKED" not in st["health_banner"] and st["actions"]["checkout"]
+    tab.checkout()
+    assert tab.panel.detail["checkout"] is not None and len(boxes) == 1
+    w.refresh_all()
+    assert w.observable_state()["health_banner"] == ""
+    w.close()
+
+
+def test_recovery_block_found_by_a_background_job_makes_the_gui_read_only(qapp, ctl, tmp_path):
+    w, home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    qapp.processEvents()
+    tab.checkout()
+    ctl.working_file(docs[0]["id"]).write_bytes(b"two")
+    (home / ".revisionworx" / "locks" / ".releasing-deadbeef").write_text("{}")
+    tab.panel.start_checkin("Refused by the block")
+    pump(qapp, ctl, lambda: not ctl.busy and not tab.panel.message.startswith("Checking in"))
+    w.poll()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert st["read_only"] and st["message_level"] == "error" and "Checked in" not in st["document_status"]
+    assert len(st["history"]) == 1 and not st["actions"]["checkin"]
+    w.close()
+
+
+def test_lock_left_by_a_crash_has_a_working_way_out(qapp, ctl, tmp_path, boxes):
+    """Regression: a crash left a lock and the only advice was to try again in a moment, for ever. The
+    error now gives the token and the commands, and following them really does recover."""
+    import subprocess
+    import sys
+    w, home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    qapp.processEvents()
+    code = ("import os, sys; from pathlib import Path; from revisionworx.workspace import Workspace; "
+            "Workspace.open(Path(sys.argv[1]), writable=True); os._exit(9)")
+    subprocess.run([sys.executable, "-c", code, str(home)], check=False,
+                   env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)})
+    from revisionworx.workspace import Workspace
+    token = Workspace.read_writer_lock(home)["token"]
+    tab.checkout()
+    assert [b[0] for b in boxes] == ["critical"]
+    text = boxes[0][1][1]
+    assert token in text and "lock break" in text and "crash" in text
+    assert tab.panel.detail["checkout"] is None and not w.observable_state()["read_only"]  # locked, not corrupt
+    _cli(home, "lock", "break", "--token", token, "--reason", "test: the session crashed")
+    tab.checkout()
+    assert tab.panel.detail["checkout"] is not None and len(boxes) == 1
+    w.close()

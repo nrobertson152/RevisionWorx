@@ -497,6 +497,8 @@ class MainWindow(QMainWindow):
 
     def poll(self) -> None:
         """Deliver background results on the GUI thread (never block on slow disk I/O)."""
+        if self.ctl.read_only and not self.status_vm.blocked:
+            self.status_vm.note_write_refused()
         busy = self.ctl.busy
         if busy != self._was_busy:  # enable/disable actions that would collide with the job
             self._was_busy = busy

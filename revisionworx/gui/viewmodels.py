@@ -868,6 +868,13 @@ class AppStatus(Observable):
             self.health = {"ok": False, "blocked": False, "problems": [], "message": describe_error(exc)}
         self.changed()
 
+    def note_write_refused(self) -> None:
+        """A write found what the read-only check could not: show the same read-only state."""
+        from ..workspace import WorkspaceCorruptError
+        self.health = {"ok": False, "blocked": True, "problems": [],
+                       "message": describe_error(WorkspaceCorruptError(self.ctl.blocked_reason))}
+        self.changed()
+
     @property
     def blocked(self) -> bool:
         return bool(self.health.get("blocked"))

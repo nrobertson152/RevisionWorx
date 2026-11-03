@@ -17,9 +17,10 @@ import shutil
 import stat
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .. import atomicio, documents, paths, projects
 from ..lifecycle import allowed_targets
@@ -208,12 +209,23 @@ class Controller:
             raise RuntimeError("no workspace is open")
         return Workspace.open(self.location)
 
-    def _write(self) -> Workspace:
+    @contextmanager
+    def _write(self) -> Iterator[Workspace]:
+        """A short writable handle. A refusal for safety (CORE_API §1) makes the GUI read-only: the
+        read-only health check cannot see every cause, such as a blocked lock namespace, so this may
+        be the first anyone learns of it. F5 re-checks; if the cause remains, the next write finds it
+        again and fails closed."""
+        from ..workspace import WorkspaceCorruptError
         if self.location is None:
             raise RuntimeError("no workspace is open")
         if self.blocked_reason is not None:
             raise RecoveryBlocked(self.blocked_reason)
-        return Workspace.open(self.location, writable=True)
+        try:
+            with Workspace.open(self.location, writable=True) as ws:
+                yield ws
+        except WorkspaceCorruptError as exc:
+            self.blocked_reason = str(exc)
+            raise
 
     def _index(self, ws: Workspace) -> LocalIndex:
         return open_index(ws, self.cache_dir)
@@ -615,10 +627,10 @@ def describe_error(exc: BaseException) -> str:
                 "written. An administrator must resolve this with the command-line tools; then use "
                 "Workspace \u203a Check workspace health.")
     if isinstance(exc, WorkspaceCorruptError):
-        return (f"RECOVERY BLOCKED \u2014 the workspace's saved history failed an integrity check:\n{exc}\n\n"
-                "To protect your data, RevisionWorx refuses all changes. Nothing was written. Do not "
-                "edit files inside .revisionworx. Run 'revisionworx verify' from a command prompt and "
-                "keep a copy of the workspace folder before any repair.")
+        return (f"RECOVERY BLOCKED \u2014 RevisionWorx cannot confirm this workspace is safe to change:\n{exc}\n\n"
+                "To protect your data, it refuses all changes. Nothing was written. Do not edit files "
+                "inside .revisionworx. Keep a copy of the workspace folder, follow any instruction above "
+                "from a command prompt (otherwise run 'revisionworx verify'), then press F5.")
     if isinstance(exc, (LockLostError, IdentityUnverifiable)):
         return (f"{exc}\n\nRevisionWorx stopped this change to stay safe. Reload and check the document "
                 "history before trying again.")
@@ -653,9 +665,11 @@ def describe_error(exc: BaseException) -> str:
     if isinstance(exc, CommittedNotApplied):
         return f"Saved. Your change is recorded, but finishing it was delayed:\n{exc}"
     if isinstance(exc, WorkspaceLockedError):
-        return (f"{exc}\n\nAnother RevisionWorx session is saving changes. Try again in a moment. "
-                "If that session crashed, an administrator can release the lock with "
-                "'revisionworx lock show' / 'lock break'.")
+        token = (getattr(exc, "holder", None) or {}).get("token", "<token from 'lock show'>")
+        return (f"{exc}\n\nNothing was written. Another RevisionWorx window or process is saving changes, so "
+                "try again in a moment. If none is running, a previous session crashed and left its lock "
+                "behind. Close every other RevisionWorx window first, then from a command prompt run:\n\n"
+                f"revisionworx -w \"<workspace folder>\" lock break --token {token} --reason \"session crashed\"")
     if isinstance(exc, PermissionError):
         return f"Permission denied: {exc.filename or exc}\nCheck your access rights on this file or folder."
     if isinstance(exc, OSError):
