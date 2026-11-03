@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Independent *protocol-only* ADR-019 post-d2b7a1c P1 race reproducers.
+"""Independent protocol-only ADR-019 P1 negative control and rev. 4 acceptance.
 
-Deliberately passing unsafe tests prove two EFFECTIVE writers. Paired strict
-XFAILs are unmet positive safety oracles, not passing safety certificates.
+Old-source unsafe witnesses deliberately PASS and paired positive oracles strictly
+XFAIL on d2b7a1c. On rev. 4, old witnesses SKIP and the unchanged journal-effective
+safety oracles MUST PASS normally; additional assertions require durable B revocation,
+no effective B revision, C effective commit, and expected LockLostError for B.
 No actor renames foreign custody names outside the product protocol.
 """
 from __future__ import annotations
@@ -67,7 +69,8 @@ def _run_revoked_cleanup_race(tmp_path, monkeypatch):
     real_replace = os.replace
 
     def deny_post_revocation_archive(src, dst, *args, **kwargs):
-        if Path(src) == lock and Path(dst).name.startswith("writer.lock.broken-"):
+        if (Path(src) == lock and Path(dst).name.startswith(
+                ("writer.lock.broken-", ".releasing-"))):
             raise PermissionError("injected sharing failure after durable break")
         return real_replace(src, dst, *args, **kwargs)
 
@@ -87,8 +90,8 @@ def _run_revoked_cleanup_race(tmp_path, monkeypatch):
     result = {}
 
     def pause_old_rename(src, dst, *args, **kwargs):
-        if (Path(src) == lock and Path(dst).name.startswith("writer.lock.revoked-")
-                and not witnessed):
+        if (Path(src) == lock and Path(dst).name.startswith(
+                ("writer.lock.revoked-", ".releasing-")) and not witnessed):
             witnessed.append(True)
             d_at_old_revoked.set()
             if not resume_d.wait(12):
@@ -142,7 +145,9 @@ def _run_revoked_cleanup_race(tmp_path, monkeypatch):
             d_thread.join(12)
     assert not errors, errors
     assert witnessed and "b_token" in result and "c_token" in result
-    return effective(root, result["b_token"], result["c_token"])
+    observed = effective(root, result["b_token"], result["c_token"])
+    observed["B_error"] = result.get("b_exception")
+    return observed
 
 
 def test_revoked_cleanup_unsafe_two_effective_protocol_writers(tmp_path, monkeypatch):
@@ -162,6 +167,10 @@ def test_revoked_cleanup_positive_safety_no_unrevoked_two_writers(tmp_path, monk
             reason="d2b7a1c: stale token A read then rename deletes live unrevoked B lock"))
     observed = _run_revoked_cleanup_race(tmp_path, monkeypatch)
     assert not (observed["B"] and observed["C"] and not observed["revoked_B"]), observed
+    if not _revoked_cleanup_unguarded():
+        assert observed["C"] and observed["C_entry"], observed
+        assert observed["revoked_B"] and not observed["B"], observed
+        assert observed["B_error"] == "LockLostError", observed
 
 
 def _displaced_archival_unguarded():
@@ -218,7 +227,8 @@ def _run_displaced_archive_crash(tmp_path, monkeypatch):
         return real_restore(private, target, holder)
 
     def fail_before_revocation(cls, meta, holder, reason, evidence):
-        if holder.get("token") == state.get("b_token"):
+        if (holder.get("token") == state.get("b_token")
+                and threading.current_thread().name == "qa-old-releaser"):
             a_crashed.set()
             raise SystemExit("release crashed after archiving B and before revocation")
         return real_revoke(meta, holder, reason=reason, evidence=evidence)
@@ -298,8 +308,15 @@ def _run_displaced_archive_crash(tmp_path, monkeypatch):
             a_thread.join(12)
             assert not a_thread.is_alive() and a_crashed.is_set(), (
                 "A must crash after B evidence archive and before durable revocation")
-            assert list(locks.glob("writer.lock.displaced-*")), "B evidence was not archived"
-            assert not list(locks.glob(".releasing-*")), "orphan still blocks C"
+            if _displaced_archival_unguarded():
+                assert list(locks.glob("writer.lock.displaced-*")), "B evidence was not archived"
+                assert not list(locks.glob(".releasing-*")), "orphan still blocks C"
+            else:
+                import json
+                blocking = list(locks.glob(".releasing-*")) + list(locks.glob(".fencing-*"))
+                assert blocking, "interrupted displacement lost scanner-visible B custody"
+                assert any(json.loads(p.read_text(encoding="utf-8")).get("token") == state["b_token"]
+                           for p in blocking), "the actual B token must remain visible to the scanner"
 
             resume_c_scan.set()
             c_thread.join(12)
@@ -319,7 +336,9 @@ def _run_displaced_archive_crash(tmp_path, monkeypatch):
             a.close()
     assert not error, error
     assert release_seen and "b_token" in state and "c_token" in state
-    return effective(root, state["b_token"], state["c_token"])
+    observed = effective(root, state["b_token"], state["c_token"])
+    observed["B_error"] = state.get("b_exception")
+    return observed
 
 
 def test_displaced_archive_crash_unsafe_two_effective_protocol_writers(tmp_path, monkeypatch):
@@ -339,6 +358,10 @@ def test_displaced_archive_crash_positive_safety_no_two_writers(tmp_path, monkey
             reason="d2b7a1c: displaced B archived outside scanner then crash before revocation"))
     observed = _run_displaced_archive_crash(tmp_path, monkeypatch)
     assert not (observed["B"] and observed["C"] and not observed["revoked_B"]), observed
+    if not _displaced_archival_unguarded():
+        assert observed["C"] and observed["C_entry"], observed
+        assert observed["revoked_B"] and not observed["B"], observed
+        assert observed["B_error"] == "LockLostError", observed
 
 
 def _break_archive_unguarded():
@@ -368,8 +391,8 @@ def _run_admin_break_snapshot_race(tmp_path, monkeypatch):
     state = {}
 
     def pause_break_evidence_move(src, dst, *args, **kwargs):
-        if (Path(src) == lock and Path(dst).name.startswith("writer.lock.broken-")
-                and not witnessed):
+        if (Path(src) == lock and Path(dst).name.startswith(
+                ("writer.lock.broken-", ".releasing-")) and not witnessed):
             witnessed.append(True)
             admin_at_break.set()
             if not resume_admin.wait(12):
@@ -415,7 +438,8 @@ def _run_admin_break_snapshot_race(tmp_path, monkeypatch):
             resume_admin.set()
             admin_thread.join(12)
             assert not admin_thread.is_alive(), "admin archive did not finish"
-            assert list(locks.glob("writer.lock.broken-*")), "B was not moved into broken evidence"
+            if _break_archive_unguarded():
+                assert list(locks.glob("writer.lock.broken-*")), "B was not moved into broken evidence"
             with Workspace.open(root, writable=True) as c:
                 state["c_token"] = c._lock_token
                 put_c(c)
@@ -429,7 +453,9 @@ def _run_admin_break_snapshot_race(tmp_path, monkeypatch):
                 b.close()
             a.close()
     assert witnessed and not errors, errors
-    return effective(root, state["b_token"], state["c_token"])
+    observed = effective(root, state["b_token"], state["c_token"])
+    observed["B_error"] = state.get("b_exception")
+    return observed
 
 
 def test_admin_break_race_unsafe_two_effective_protocol_writers(tmp_path, monkeypatch):
@@ -449,3 +475,7 @@ def test_admin_break_race_positive_safety_no_unrevoked_two_writers(tmp_path, mon
             reason="d2b7a1c: admin break re-reads A before moving unrevoked successor B lock"))
     observed = _run_admin_break_snapshot_race(tmp_path, monkeypatch)
     assert not (observed["B"] and observed["C"] and not observed["revoked_B"]), observed
+    if not _break_archive_unguarded():
+        assert observed["C"] and observed["C_entry"], observed
+        assert observed["revoked_B"] and not observed["B"], observed
+        assert observed["B_error"] == "LockLostError", observed
