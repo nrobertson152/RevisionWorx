@@ -1,0 +1,53 @@
+name: QA independent Claude D PR20 review pinned cb68433
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-claude-d-review-cb68433-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  review:
+    name: "${{ matrix.os }} / Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cb684336fbef2edf21bb4bda700146af70d58ee4
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: 11dba60c85e2d6d2aae7c5bd61ba5473ca6cf21f
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Overlay frozen independent QA tests
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dest=Path("app/tests/qa")
+          dest.mkdir(parents=True,exist_ok=True)
+          shutil.copy2(Path("qa/tests/qa/test_change_control_pr20_independent_review.py"),dest)
+      - name: Install precise candidate and test requirements
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Print exact tested revisions
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Run Claude D's existing ECR/ECO regression suite
+        working-directory: app
+        run: python -m pytest -q -ra tests/test_changes_model.py tests/test_changes_workflow.py tests/test_changes_service.py tests/test_changes_workspace.py tests/test_changes_reports.py
+      - name: Strict independent ECR/ECO correctness and idempotency review
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_change_control_pr20_independent_review.py
