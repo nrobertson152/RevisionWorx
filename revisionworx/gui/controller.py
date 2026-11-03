@@ -220,9 +220,19 @@ class Controller:
                     and (p.get("kind"), p.get("id")) not in pending_keys]
         parts = []
         if pending:
-            parts.append(f"{pending} saved change{' is' if pending == 1 else 's are'} waiting to be applied "
-                         "(left by an interruption or an administrator command). Nothing is lost: your next "
-                         "change applies {0} first.".format("it" if pending == 1 else "them"))
+            it = "it" if pending == 1 else "them"
+            head = (f"{pending} saved change{' is' if pending == 1 else 's are'} waiting to be applied "
+                    "(left by an interruption or an administrator command). Nothing is lost: ")
+            holder = self._writer_lock_holder()
+            if holder is None:
+                parts.append(head + f"your next change applies {it} first.")
+            else:
+                # Typically the session that was interrupted: its lock is still there, so every change is
+                # refused until it is released or broken. Don't promise that the next change will work.
+                parts.append(head + f"the first change after the writer lock is free applies {it}. The "
+                             f"writer lock is held by {holder}, so changes are refused until it is released. "
+                             "If that session has crashed, the change you try shows how an administrator "
+                             "can break the lock.")
         if problems:
             first = problems[0]
             what = ", ".join(f"{k}={v}" for k, v in first.items())
@@ -251,6 +261,19 @@ class Controller:
                     f"\n\nThe block could not be re-checked just now: {exc}")
         self._set_block(None)
         return None
+
+    def _writer_lock_holder(self) -> str | None:
+        """Who holds the writer lock, for display only (public ``Workspace.read_writer_lock``). Read only
+        when changes are pending, so it adds no lock-file reads in normal use. Unreadable → described as
+        unknown, never as free."""
+        try:
+            holder = Workspace.read_writer_lock(self.location)
+        except (OSError, ValueError):
+            return "an unknown session (the lock file could not be read)"
+        if not holder:
+            return None
+        return (f"{holder.get('user', '?')}@{holder.get('host', '?')} (pid {holder.get('pid', '?')}, "
+                f"since {holder.get('acquired', '?')})")
 
     @staticmethod
     def _pending_changes(ws: Workspace) -> tuple[set, int]:

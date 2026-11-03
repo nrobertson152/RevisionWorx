@@ -44,7 +44,7 @@ jobs:
       - name: Versions
         run: python -c "import sys, PySide6, PySide6.QtCore as c; print(sys.version); print('PySide6', PySide6.__version__, 'Qt', c.qVersion())"
       - name: Qt widget tests (must not be skipped)
-        run: python -m pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py tests/test_qt_desktop_alpha_rc.py
+        run: python -m pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py tests/test_qt_desktop_alpha_rc.py tests/test_qt_desktop_alpha_journey.py
       - name: Full suite
         run: python -m pytest -q -ra
       - name: Window size on the native Windows platform (real fonts, not offscreen)
