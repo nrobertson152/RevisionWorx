@@ -1,0 +1,66 @@
+name: QA current core 58a79b7 focused merge acceptance (pinned)
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-current-core-58a79b7-acceptance-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: "${{ matrix.os }} / Python ${{ matrix.python-version }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 58a79b7fcea1029a56fd94c5f1784d33b197a6f6
+          path: app
+      - name: Exact independent QA tests
+        uses: actions/checkout@v4
+        with:
+          ref: b5c66fde857bb898243e7e43a8f0b3b14637d328
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Copy independently authored regression tests without editing production
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dest = Path("app/tests/qa")
+          dest.mkdir(parents=True, exist_ok=True)
+          for name in (
+              "test_core_latest_win_retry_acceptance.py",
+              "test_rev4_protocol_only_p1.py",
+              "test_rev5_custody_crash_restart.py",
+              "test_rev5_failclosed_faults.py",
+          ):
+              shutil.copy2(Path("qa/tests/qa") / name, dest)
+      - name: Install exact core
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Print immutable test inputs
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Independent positive retry, authority, crash and fail-closed gate
+        working-directory: app
+        run: |
+          python -m pytest -q -ra tests/qa/test_core_latest_win_retry_acceptance.py tests/qa/test_rev4_protocol_only_p1.py tests/qa/test_rev5_custody_crash_restart.py tests/qa/test_rev5_failclosed_faults.py
+      - name: New checkin retry race and old ADR-022 stale cache specific cases
+        working-directory: app
+        run: |
+          python -m pytest -q -ra tests/test_core_reliability.py::test_a_stopped_checkin_reports_the_retry_that_finished_for_it tests/test_materialisation_authority.py::test_late_put_cannot_change_reads
