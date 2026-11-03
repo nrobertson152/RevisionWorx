@@ -60,3 +60,24 @@ At the later GitHub check both feature branches advanced **by two commits each**
 - Change-control PR #20: `cb68433` → `3038c9b` → **`724993c74bd7aa6f2c00ed38f8b44c39a42bdd08`**. New ECR rework semantics and corrected ECO dependency content binding, including changes to model/workflow and tests. A fresh independent review and actual combined merge test are necessary.
 
 The original four-source CI remains useful as historical baseline interoperability evidence, not latest-head certification. Never silently replace these pinned sources inside the existing workflow or retarget PRs. A new, clearly labeled, pinned candidate should follow owner API review and completion of P1 core fixes.
+
+## Completed cross-domain and wheel packaging evidence
+
+[Test-only domain+wheel CI run 41584278631](https://github.com/nrobertson152/RevisionWorx/actions/runs/41584278631), pinned four-source inputs as above, workflow at Integration SHA `650a597f2711bacdd0de968334d508fae9126cd0`:
+
+| Platform | Real doc → part/BOM → ECR native CAD preservation/restart test | Source wheel structural/metadata audit |
+|---|---|---|
+| Ubuntu runner, Python 3.11 | **1 PASS / 0 FAIL / 0 SKIP** | PASS |
+| Windows runner, Python 3.11 | **1 PASS / 0 FAIL / 0 SKIP** | PASS |
+
+Both runners verified the temporary real Git source tuple, opened a real disposable workspace, registered a native Inventor part with its journaled revision, associated that document to a BOM part, added a parent assembly usage, created an ECR affecting the part, and produced a WhereUsed impact report with the expected assembly while explicitly stating that the rest of the BOM universe was **not searched**. The report was read-only. The data remained correct after a separate read-only workspace reopening, with the original native CAD bytes and modification times unchanged.
+
+After building a **test-only source wheel**, `tools/packaging/check_product_wheel.py` independently inspected the wheel: 65 archive paths, 20 `revisionworx/bom/` paths, 13 `revisionworx/changes/`, 10 GUI paths; exact expected user CLI/GUI entrypoint declarations, core files and GPL-3.0-or-later metadata present. **Zero mandatory third-party runtime dependencies and zero embedded native binaries** in that wheel. These facts concern a Python wheel, **not** a PyInstaller bundle, AppImage, Windows installer, signed release or a clean offline installed machine.
+
+The wheel SHA-256 values **differ by platform even at the same source SHA tuple**:
+- Ubuntu: `9130cf80d853c00bed7dcd2aa408e688e2eb1f22a7ce97aafd2b151b5fc97009`.
+- Windows: `a0095f3f59628d655332dbd828bc82d90e090a811dde1c0c0507eb4a62d3a4c0`.
+
+Both are recorded separately, so the present process **does not certify byte-for-byte reproducible cross-platform builds**. The initial domain/wheel [run 41584058598](https://github.com/nrobertson152/RevisionWorx/actions/runs/41584058598) was Ubuntu green/Windows **red** solely at wheel creation: the Windows CI host lacked `bdist_wheel` when `--no-build-isolation` was selected. Pinned CI-only build prerequisite `wheel==0.45.1` was added at workflow commit `650a597f`; [run 41584278631](https://github.com/nrobertson152/RevisionWorx/actions/runs/41584278631) then passed both platforms. It is a build-host tool, not a runtime dependency.
+
+**No change to production/release HOLD:** the historic pinned BOM/ECO SHA tuple is not the latest head, and core integrity/recovery P1 issues require independent correction. Do not merge the synthetic test-only commits.
