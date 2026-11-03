@@ -87,7 +87,9 @@ class Commit:
 
 class CatalogStore(Protocol):
     def get(self, kind: str, rid: str) -> dict | None:
-        """The record with its ``_rev`` (1, 2, ...), or None."""
+        """The record with its ``_rev``, or None. ``_rev`` is an opaque positive version token: pass back the
+        value you read as ``expect_rev``. (The memory store counts 1, 2, ...; the workspace store uses the
+        journal sequence of the record's last write.)"""
 
     def list(self, kind: str) -> dict[str, dict]:
         """All records of a kind, by id, each with ``_rev``."""

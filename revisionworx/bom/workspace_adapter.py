@@ -141,3 +141,60 @@ def single_root(structure, root_number: str = "") -> str:
     if len(tops) != 1:
         raise BomError(f"the BOM has {len(tops)} top-level items ({', '.join(tops[:5])}); name the root")
     return tops[0]
+
+
+# ------------------------------------------------------------------------------- document links
+@dataclass(frozen=True)
+class LinkStatus:
+    """Result of checking one part -> document link against the workspace (read-only)."""
+
+    part_id: str
+    part_number: str
+    document_id: str
+    revision_id: str
+    role: str
+    status: str            # ok | missing-document | missing-revision | newer-revision-available | unrevisioned
+    document_label: str = ""
+    linked_label: str = ""
+    latest_label: str = ""
+    released_label: str = ""
+
+
+def verify_document_links(ws: Any, parts) -> list[LinkStatus]:
+    """Check every :class:`~revisionworx.bom.parts.DocumentLink` of ``parts`` with Stable read calls only
+    (``documents.list_documents`` and ``documents.history``, CORE_API.md section 3). Nothing is written and
+    no file is opened. A link pinned to an older revision is reported, not changed."""
+    from revisionworx import documents
+    docs = {d["id"]: d for d in documents.list_documents(ws)}
+    histories: dict[str, list[dict]] = {}
+    out: list[LinkStatus] = []
+    for part in sorted(parts, key=lambda p: (p.key, p.part_id)):
+        for link in part.documents:
+            doc = docs.get(link.document_id)
+            base = dict(part_id=part.part_id, part_number=part.number, document_id=link.document_id,
+                        revision_id=link.revision_id, role=link.role)
+            if doc is None:
+                out.append(LinkStatus(status="missing-document", **base))
+                continue
+            label = doc.get("number") or doc.get("rel_path", "")
+            if link.document_id not in histories:
+                histories[link.document_id] = documents.history(ws, link.document_id)
+            hist = histories[link.document_id]
+            latest = hist[-1] if hist else None
+            released = next((r for r in reversed(hist) if r.get("state") == "released"), None)
+            common = dict(document_label=label, latest_label=latest["label"] if latest else "",
+                          released_label=released["label"] if released else "")
+            if not hist:
+                out.append(LinkStatus(status="unrevisioned", **base, **common))
+                continue
+            if not link.revision_id:
+                out.append(LinkStatus(status="ok", linked_label="(latest)", **base, **common))
+                continue
+            linked = next((r for r in hist if r["id"] == link.revision_id), None)
+            if linked is None:
+                out.append(LinkStatus(status="missing-revision", **base, **common))
+            elif linked["id"] != latest["id"]:
+                out.append(LinkStatus(status="newer-revision-available", linked_label=linked["label"], **base, **common))
+            else:
+                out.append(LinkStatus(status="ok", linked_label=linked["label"], **base, **common))
+    return out

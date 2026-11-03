@@ -1,0 +1,156 @@
+{
+  "bomline": [
+    {
+      "attributes": {},
+      "child_id": "prt_22222222222222222222222222222222",
+      "child_revision": "B",
+      "find_number": "10",
+      "id": "bln_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "note": "",
+      "parent_id": "prt_11111111111111111111111111111111",
+      "provenance": "declared",
+      "quantity": "2",
+      "reference_designators": [],
+      "unit": "EA"
+    },
+    {
+      "attributes": {},
+      "child_id": "prt_33333333333333333333333333333333",
+      "child_revision": "",
+      "find_number": "20",
+      "id": "bln_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "note": "torque 25 Nm",
+      "parent_id": "prt_11111111111111111111111111111111",
+      "provenance": "declared",
+      "quantity": "8",
+      "reference_designators": [
+        "B1",
+        "B2",
+        "B10"
+      ],
+      "unit": "EA"
+    },
+    {
+      "attributes": {},
+      "child_id": "prt_55555555555555555555555555555555",
+      "child_revision": "",
+      "find_number": "30",
+      "id": "bln_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "note": "",
+      "parent_id": "prt_11111111111111111111111111111111",
+      "provenance": "inferred",
+      "quantity": "1",
+      "reference_designators": [],
+      "unit": "EA"
+    },
+    {
+      "attributes": {},
+      "child_id": "prt_33333333333333333333333333333333",
+      "child_revision": "",
+      "find_number": "10",
+      "id": "bln_cccccccccccccccccccccccccccccccc",
+      "note": "",
+      "parent_id": "prt_22222222222222222222222222222222",
+      "provenance": "cad-extracted",
+      "quantity": "4",
+      "reference_designators": [],
+      "unit": "EA"
+    },
+    {
+      "attributes": {
+        "Route": "+left side"
+      },
+      "child_id": "prt_44444444444444444444444444444444",
+      "child_revision": "",
+      "find_number": "20",
+      "id": "bln_dddddddddddddddddddddddddddddddd",
+      "note": "",
+      "parent_id": "prt_22222222222222222222222222222222",
+      "provenance": "declared",
+      "quantity": "1.25",
+      "reference_designators": [],
+      "unit": "m"
+    }
+  ],
+  "part": [
+    {
+      "attributes": {},
+      "description": "Welded frame",
+      "documents": [
+        {
+          "document_id": "doc_ffffffffffffffffffffffffffffffff",
+          "revision_id": "rev_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "role": "drawing"
+        }
+      ],
+      "id": "prt_11111111111111111111111111111111",
+      "kind": "assembly",
+      "manual_number": false,
+      "manufacturers": [],
+      "number": "FRAME-100",
+      "revision": "C",
+      "status": "active",
+      "unit": "EA",
+      "vendors": []
+    },
+    {
+      "attributes": {
+        "Material": "8.8"
+      },
+      "description": "Hex bolt M8×20 – zinc",
+      "documents": [],
+      "id": "prt_33333333333333333333333333333333",
+      "kind": "part",
+      "manual_number": false,
+      "manufacturers": [
+        {
+          "manufacturer": "Acme",
+          "mpn": "-B8"
+        },
+        {
+          "manufacturer": "Würth",
+          "mpn": "0057 08 20"
+        }
+      ],
+      "number": "BOLT-M8",
+      "revision": "",
+      "status": "active",
+      "unit": "EA",
+      "vendors": [
+        {
+          "sku": "S-1",
+          "vendor": "Shop"
+        }
+      ]
+    },
+    {
+      "attributes": {},
+      "description": "Hose ½ in",
+      "documents": [],
+      "id": "prt_44444444444444444444444444444444",
+      "kind": "material",
+      "manual_number": true,
+      "manufacturers": [],
+      "number": "HOSE-12",
+      "revision": "",
+      "status": "active",
+      "unit": "m",
+      "vendors": []
+    }
+  ],
+  "partrule": [
+    {
+      "digits": 6,
+      "id": "std",
+      "prefix": "P-",
+      "reserved": [
+        [
+          900,
+          999
+        ]
+      ],
+      "start": 1,
+      "suffix": "-A"
+    }
+  ]
+}

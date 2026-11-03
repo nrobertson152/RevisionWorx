@@ -102,3 +102,29 @@ https://github.com/nrobertson152/RevisionWorx/issues/18#issuecomment-6595828009
 - Claude A: review of the workspace record kinds (asked on #18 and PR #7).
 - Claude B: approval of a widget boundary.
 - Claude D: confirmation that the where-used seam fits PR #20.
+
+## Checkpoint 3: 2026-11-03, coordinator backlog #28 item 5
+
+I checked the item out on #18 and #28 under the trust-based protocol (PR #22). Scope: a stable data contract,
+native file reference preservation, document-link verification, and a transaction persistence review.
+
+**Added:**
+- **Data contract.** `docs/bom/DATA_CONTRACT.md` describes contract version 1 and its versioning rules. Golden
+  files in `tests/fixtures/bom/` freeze the bytes of every form. They have their own `.gitattributes` so line
+  endings are never converted. `tests/test_bom_contract.py` adds 9 tests.
+- **Document links.** `workspace_adapter.verify_document_links(ws, parts)` checks part document links with Stable
+  core reads only. It reports `ok`, `missing-document`, `missing-revision`, `newer-revision-available` or
+  `unrevisioned`, and never rewrites a pin.
+- **Reference preservation.** `tests/test_bom_reference_preservation.py` adds 3 tests. They register `.iam`,
+  `.ipt` and `.idw` documents and a BOM CSV, run every catalog, BOM, report and adapter operation, and check that
+  the project tree is byte- and mtime-identical. Link verification leaves `.revisionworx` unchanged.
+- **Persistence review.** `docs/bom/BOM_API.md` section 7 has the failure-mode table and residual risks.
+  `tests/test_bom_catalog_persistence.py` adds 3 tests: a second writer is refused; a fenced writer publishes
+  nothing; a writer killed by a real subprocess keeps its committed change.
+- **Correction.** `_rev` is an opaque version token. In the workspace it is the journal sequence of the record's
+  last write. Callers pass back what they read; the docstrings now say so.
+
+**Evidence:** sandbox Linux, Python 3.13.18.
+- `pytest -q -ra`: 680 passed, 1 skipped (Qt).
+- BOM tests: 435 passed.
+- CI results are on #18 and PR #21 in the check-in.

@@ -293,3 +293,30 @@ time stamps, so a blind service-level retry is a new request, and its duplicate-
 **Parts CSV** (`bom.parts_csv`). One row per part, with `part_id` and `number` columns. Numbered column groups
 hold the references: `manufacturer_N`/`mpn_N`, `vendor_N`/`sku_N` and `document_id_N`/`revision_id_N`/`role_N`.
 `attr:<Name>` columns hold attributes. Export then import is lossless. The CSV safety rules from section 3 apply.
+
+## 7. Transaction persistence review of `WorkspaceCatalogStore` (backlog #28 item 5)
+
+This is a self-review, not Claude A's acceptance. It covers the trusted-local, single-writer model only. Nothing
+here is a claim about SMB, NFS or multiple hosts.
+
+| Failure | Behaviour | Evidence |
+|---|---|---|
+| Edit would add a validation error | `EditRejected`; no commit is attempted | `test_bom_catalog.py`, `test_bom_catalog_workspace.py` |
+| Stale read (`expect_rev`), duplicate number, raced cycle | Core `ConflictError` becomes `StoreConflict`; nothing written | same |
+| Second writer while the catalog writer holds the workspace | `WorkspaceLockedError`; readers are not blocked | `test_bom_catalog_persistence.py` |
+| Writer revoked by an administrator between check and publish | `LockLostError`; `transaction_outcome(txid)` is `not-found`; the number was never claimed | same (ADR-015/019 fencing, unchanged core) |
+| Writer process killed right after `commit` returned | Change durable and visible on reopen; `verify()` clean; the dead writer's lock is not silently taken | same, real subprocess |
+| Ambiguous failure (crash or lost reply) | Ask `ws.transaction_outcome(txid)`. The store replays an identical request with the same txid without a second entry | `test_bom_catalog_workspace.py` |
+| `CommittedNotApplied` | Propagates unchanged; **the change is saved** (CORE_API.md section 4) | core contract. Not reproduced here, because it needs core fault injection |
+| Damaged record or journal | Core `WorkspaceCorruptError` propagates; the BOM layer does not repair | core contract |
+
+**Residual risks, open for Claude A's review:**
+1. Record ids rely on the core's `_ID_RE`. `pn:` placeholders can never be stored. Import maps them to `prt_` ids
+   first.
+2. Every BOM line change bumps one `bomstruct` record. This serialises all structure edits in a workspace. It is
+   simple and correct for single-writer Tier 1, but it could become a contention point under the ADR-014
+   coordinator.
+3. Validation reads the whole structure on each edit, which is O(lines). That is fine for alpha sizes; nothing
+   is claimed beyond that.
+4. `WorkspaceCatalogStore` registers six record kinds at construction. A core that later reserves one of these
+   names would need a rename, which would be a data contract change (DATA_CONTRACT.md).
