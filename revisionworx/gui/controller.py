@@ -309,6 +309,47 @@ class Controller:
                     "latest": latest,
                     "transitions": allowed_targets(lc, latest["state"]) if latest else []}
 
+    def state_names(self) -> dict[str, str]:
+        with self._read() as ws:
+            return {s["id"]: s["name"] for s in documents.get_lifecycle(ws)["states"]}
+
+    def my_checkouts(self, doc_ids: list[str] | None = None) -> set[str]:
+        """Which documents this session holds the checkout token for."""
+        with self._read() as ws:
+            held = {did for did, co in ws.list("checkout").items() if self.tokens.get(ws.id, did) == co.get("token")}
+        return held if doc_ids is None else held & set(doc_ids)
+
+    def checkout_counts(self) -> dict[str, int]:
+        """Documents checked out by this session, per project, for the project list."""
+        counts: dict[str, int] = {}
+        if self.location is None:
+            return counts
+        with self._read() as ws:
+            for did, co in ws.list("checkout").items():
+                if self.tokens.get(ws.id, did) != co.get("token"):
+                    continue
+                doc = ws.get("document", did)
+                if doc:
+                    counts[doc["project_id"]] = counts.get(doc["project_id"], 0) + 1
+        return counts
+
+    def restore_missing_file(self, doc_id: str) -> None:
+        """Put the latest revision back when the working file has gone missing, using only public core
+        calls. Without a checkout of our own, one is taken for the moment and released."""
+        with self._write() as ws:
+            history = documents.history(ws, doc_id)
+            if not history:
+                raise documents.DocumentError("this document has no revision to restore")
+            latest = history[-1]
+            if ws.get("checkout", doc_id):
+                documents.restore_to_working(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", latest["id"])
+                return
+            token = documents.checkout(ws, doc_id, "Restoring a missing file")["token"]
+            self.tokens.put(ws.id, doc_id, token)  # kept until released, so a failure below is recoverable
+            documents.restore_to_working(ws, doc_id, token, latest["id"])
+            documents.cancel_checkout(ws, doc_id, token)
+            self._forget_token(ws.id, doc_id)
+
     def doctypes(self) -> dict[str, dict]:
         with self._read() as ws:
             return documents.list_doctypes(ws)
@@ -432,6 +473,10 @@ class Controller:
                                    "can only be imported into managed projects")
             ws.verify()  # fail closed (WorkspaceCorruptError) before touching the project folder
             base = projects.project_folder(ws, rec)
+            if base.resolve() in source.resolve().parents:  # already inside the project: register it in place
+                return documents.register_document(
+                    ws, project_id, source, number=number.strip(), title=title.strip(),
+                    revision_description=description.strip() or "Initial revision")
             rel = paths.normalize_relative("/".join(p for p in (subfolder.strip("/"), source.name) if p))
             dest = paths.resolve_under_root(base, rel)
             try:

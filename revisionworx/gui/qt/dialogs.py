@@ -2,6 +2,7 @@
 """Qt dialogs. Validation and workflow state live in ``viewmodels``; these only bind widgets."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget)
@@ -9,12 +10,12 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from ...workspace import CommittedNotApplied
 from ..controller import Controller, describe_error
 from ..viewmodels import AdoptFlow, CheckinForm, ImportFlow, NewProjectForm
+from . import theme
 
 
 def error_label(parent) -> QLabel:
     label = QLabel(parent)
     label.setObjectName("formError")
-    label.setStyleSheet("color: #b00020")
     label.setWordWrap(True)
     return label
 
@@ -23,30 +24,56 @@ class CheckinDialog(QDialog):
     """Collects a meaningful change description (required), optional label and the explicit
     "check in unchanged" override. ``form`` holds the accepted values."""
 
-    def __init__(self, doc_title: str, parent=None):
+    def __init__(self, doc_title: str, parent=None, unchanged: bool = False):
         super().__init__(parent)
         self.setWindowTitle(f"Check in — {doc_title}")
-        self.resize(520, 320)
+        self.resize(480, 300)
         self.form = CheckinForm()
-        layout = QFormLayout(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        heading = QLabel(f"Check in {doc_title}", self)
+        heading.setProperty("role", "h2")
+        heading.setTextFormat(Qt.TextFormat.PlainText)
+        heading.setWordWrap(True)
+        layout.addWidget(heading)
+        tip = QLabel("This becomes a new revision. Earlier revisions stay in History.", self)
+        tip.setProperty("role", "muted")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+        prompt = QLabel("&What changed?", self)
+        prompt.setStyleSheet("font-weight: 500")
+        layout.addWidget(prompt)
         self.description = QPlainTextEdit(self)
+        prompt.setBuddy(self.description)
         self.description.setPlaceholderText("What changed and why? e.g. “Widened mounting slot to 8 mm per ECR-12”")
         self.description.setAccessibleName("Change description")
         self.description.setTabChangesFocus(True)
-        layout.addRow("&Description *", self.description)
+        layout.addWidget(self.description, 1)
+        label_row = QHBoxLayout()
+        label_row.setSpacing(8)
+        label_prompt = QLabel("Revision &label", self)
+        label_prompt.setProperty("role", "muted")
         self.label = QLineEdit(self)
+        label_prompt.setBuddy(self.label)
         self.label.setPlaceholderText("automatic")
-        layout.addRow("Revision &label", self.label)
+        label_row.addWidget(label_prompt)
+        label_row.addWidget(self.label, 1)
+        layout.addLayout(label_row)
         self.unchanged = QCheckBox("Check in even if the file is &unchanged", self)
-        layout.addRow(self.unchanged)
+        self.unchanged.setVisible(unchanged)  # only offered when it applies
+        layout.addWidget(self.unchanged)
         self.error = error_label(self)
-        layout.addRow(self.error)
+        layout.addWidget(self.error)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                    QDialogButtonBox.StandardButton.Cancel, parent=self)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Check &in")
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setText("Check &in")
+        ok.setProperty("role", "primary")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Not yet")
         buttons.accepted.connect(self.submit)
         buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
+        layout.addWidget(buttons)
         self.description.setFocus()
 
     def submit(self) -> None:
@@ -103,6 +130,7 @@ class ImportDialog(QDialog):
                                         QDialogButtonBox.StandardButton.Close, parent=self)
         self.import_btn = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.import_btn.setText("&Import")
+        self.import_btn.setProperty("role", "primary")
         self.buttons.accepted.connect(self.start)
         self.buttons.rejected.connect(self.reject)
         layout.addRow(self.buttons)
@@ -139,11 +167,13 @@ class ImportDialog(QDialog):
         self.dest.setText(self.flow.destination_preview or "—")
         self.import_btn.setEnabled(self.flow.can_import)
         error = self.flow.state == "error" or bool(self.flow.errors)
-        self.message.setStyleSheet("color: #b00020" if error else "")
+        self.message.setStyleSheet("color: " + (theme.current["dangerFg"] if error else theme.current["ink"]))
         self.message.setText(self.flow.message)
 
 
 class NewProjectDialog(QDialog):
+    USE_EXISTING_FOLDER = 2  # exec() result: the person would rather adopt a folder they already have
+
     def __init__(self, ctl: Controller, parent=None):
         super().__init__(parent)
         self.setWindowTitle("New project")
@@ -169,14 +199,19 @@ class NewProjectDialog(QDialog):
         self.tpl_box.setCurrentIndex(max(0, self.tpl_box.findData("standard")))
         layout.addRow("Folder template", self.tpl_box)
         self.error_label = QLabel(self)
-        self.error_label.setStyleSheet("color: #b00020")
+        self.error_label.setObjectName("formError")
         self.error_label.setWordWrap(True)
         layout.addRow(self.error_label)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                    QDialogButtonBox.StandardButton.Cancel, parent=self)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Create")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setProperty("role", "primary")
         buttons.accepted.connect(self.submit)
         buttons.rejected.connect(self.reject)
+        existing = QPushButton("Use an existing folder instead", self)
+        existing.setProperty("role", "link")
+        existing.clicked.connect(lambda *_: self.done(self.USE_EXISTING_FOLDER))
+        layout.addRow(existing)
         layout.addRow(buttons)
 
     def submit(self) -> None:

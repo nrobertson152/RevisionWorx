@@ -219,6 +219,7 @@ QListWidget {{ border: 1px solid {t['line']}; border-radius: 8px; padding: 4px; 
 QListWidget::item {{ padding: 6px 8px; border-radius: 6px; }}
 QListWidget::item:selected {{ background: {t['tint']}; color: {t['accentInk']}; }}
 QHeaderView::section {{ background: transparent; border: 0; color: {t['sub']}; font-weight: 500; padding: 4px 8px; }}
+QTabWidget::pane {{ border: 0; }}
 QSplitter::handle {{ background: {t['line']}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}

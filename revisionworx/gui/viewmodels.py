@@ -348,6 +348,26 @@ def preview_report(s: dict) -> str:
 
 
 # ---------------------------------------------------------------------------- Phase 2: documents
+def friendly_time(iso: str, now=None) -> str:
+    """``2026-11-02T21:51:00+00:00`` as a person would say it, in local time."""
+    from datetime import datetime
+    try:
+        moment = datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone()
+    except (ValueError, TypeError):
+        return str(iso or "")
+    now = now or datetime.now(moment.tzinfo)
+    clock = f"{moment.hour % 12 or 12}:{moment.minute:02d} {'AM' if moment.hour < 12 else 'PM'}"
+    days = (now.date() - moment.date()).days
+    if days == 0:
+        return f"Today at {clock}"
+    if days == 1:
+        return f"Yesterday at {clock}"
+    month = moment.strftime("%b")
+    if moment.year == now.year:
+        return f"{month} {moment.day} at {clock}"
+    return f"{month} {moment.day}, {moment.year}"
+
+
 class DocumentListModel(Observable):
     COLUMNS = (Column("number", "Number", 100), Column("title", "Title", 200, True),
                Column("latest_label", "Rev", 50), Column("latest_state", "State", 100),
@@ -362,6 +382,8 @@ class DocumentListModel(Observable):
         self.project_id: str | None = None
         self.project: dict | None = None
         self.text = ""
+        self.show = "all"  # all | mine | attention
+        self.counts: dict[str, int] = {"all": 0, "mine": 0, "attention": 0}
         self.rows: list[dict] = []
         self.error: str | None = None
 
@@ -379,11 +401,63 @@ class DocumentListModel(Observable):
         self.error = None
         try:
             rows = self.ctl.documents(self.project_id, self.text) if self.project_id else []
-            states = self.ctl.file_states([r["id"] for r in rows]) if rows else {}
-            self.rows = [{**r, "file_state": states.get(r["id"], "unavailable")} for r in rows]
+            ids = [r["id"] for r in rows]
+            states = self.ctl.file_states(ids) if rows else {}
+            mine = self.ctl.my_checkouts(ids) if rows else set()
+            names = self.ctl.state_names() if rows else {}
+            rows = [{**r, "file_state": states.get(r["id"], "unavailable"), "mine": r["id"] in mine,
+                     "state_name": names.get(r.get("latest_state"), r.get("latest_state") or "")} for r in rows]
+            self.counts = {"all": len(rows), "mine": sum(1 for r in rows if r["mine"]),
+                           "attention": sum(1 for r in rows if self._needs_attention(r))}
+            self.rows = [r for r in rows if self.show == "all" or (self.show == "mine" and r["mine"])
+                         or (self.show == "attention" and self._needs_attention(r))]
         except Exception as exc:
             self.rows, self.error = [], describe_error(exc)
+            self.counts = {"all": 0, "mine": 0, "attention": 0}
         self.changed()
+
+    @staticmethod
+    def _needs_attention(row: dict) -> bool:
+        return row.get("file_state") in ("missing", "unavailable", "modified-externally")
+
+    @property
+    def is_empty(self) -> bool:
+        """A project that could hold documents and has none yet: show how to start."""
+        return bool(self.can_add_ignoring_busy and not self.error and not self.counts["all"] and not self.text)
+
+    @property
+    def can_add_ignoring_busy(self) -> bool:
+        p = self.project
+        return bool(p and p.get("mode") == "managed" and p.get("status") == "active" and p.get("folder"))
+
+    @property
+    def no_match_text(self) -> str:
+        if self.rows or not self.project or self.error or self.is_empty:
+            return ""
+        if self.text:
+            return "No documents match that filter."
+        return {"mine": "Nothing is checked out by you in this project.",
+                "attention": "Nothing needs attention."}.get(self.show, "")
+
+    def row_tag(self, row: int) -> tuple[str, str] | None:
+        """The one thing worth saying about a row beside its title: text and tone."""
+        r = self.rows[row]
+        state = r.get("file_state")
+        if state == "missing":
+            return "File missing", "danger"
+        if state == "unavailable":
+            return "Unavailable", "danger"
+        if state == "modified-externally":
+            return "Changed", "warn"
+        if r.get("mine"):
+            return ("Edited" if state == "modified" else "Checked out"), "info"
+        if r.get("checked_out_by"):
+            return f"Checked out by {r['checked_out_by']}", "warn"
+        return None
+
+    @staticmethod
+    def state_tone(state: str | None) -> str:
+        return {"released": "ok", "approved": "info", "in_review": "warn"}.get(state or "", "neutral")
 
     def cell(self, row: int, col: int) -> str:
         key = self.COLUMNS[col].key
@@ -402,9 +476,7 @@ class DocumentListModel(Observable):
 
     @property
     def can_add(self) -> bool:
-        p = self.project
-        return bool(p and p.get("mode") == "managed" and p.get("status") == "active" and p.get("folder")
-                    and not self.ctl.busy and not self.ctl.read_only)
+        return self.can_add_ignoring_busy and not self.ctl.busy and not self.ctl.read_only
 
     @property
     def notice(self) -> str:
@@ -422,7 +494,7 @@ class DocumentListModel(Observable):
         if p.get("status") != "active":
             return "This project is archived. Restore it to add or change documents."
         if not self.rows and not self.text:
-            return "No documents yet. Use “Import file…” to copy a file into this project."
+            return "No documents yet. Use “Add files” to Import a file into this project."
         if self.problem_count:
             return (f"⚠ {self.problem_count} document(s) need attention: working file missing or changed "
                     "without a checkout. Select one for details.")
@@ -548,21 +620,144 @@ class DocumentPanel(Observable):
         return str(r.get(key, ""))
 
     @property
+    def file_edited(self) -> bool:
+        return bool(self.detail) and self.detail["status"]["state"] == "modified"
+
+    @property
+    def status_title(self) -> str:
+        """What is true, in a few words. ``status_text`` says what to do about it."""
+        if not self.detail:
+            return "That did not work" if self.message_level == "error" and self.message else ""
+        if self.message_level == "error" and self.message:
+            return "That did not work"
+        state, co = self.detail["status"]["state"], self.detail["checkout"]
+        if self.ctl.read_only:
+            return "Read-only for now"
+        if state == "missing":
+            return "File missing"
+        if state == "modified-externally":
+            return "Changed without a checkout"
+        if co and not self.detail["mine"]:
+            return f"Checked out by {co['owner'].get('user')}"
+        if self.detail["mine"]:
+            return "You changed this file" if state == "modified" else "Checked out by you"
+        if state == "unrevisioned":
+            return "No revision yet"
+        return "Available"
+
+    @property
     def status_text(self) -> str:
         if not self.detail:
             return ""
-        st = self.detail["status"]
-        co = self.detail["checkout"]
-        texts = {"unchanged": "Working file matches the latest revision.",
-                 "modified": "Working file has been edited (checked out).",
-                 "modified-externally": "⚠ Working file was changed WITHOUT a checkout.",
-                 "missing": "⚠ Working file is missing.",
-                 "unrevisioned": "No revision has been captured yet."}
-        text = texts.get(st["state"], st["state"])
-        if co:
-            who = "you" if self.detail["mine"] else f"{co['owner']['user']}@{co['owner']['host']}"
-            text += f"  Checked out by {who} since {co['acquired']}."
-        return text
+        state, co = self.detail["status"]["state"], self.detail["checkout"]
+        if self.ctl.read_only:
+            return "You can browse and export. Changes are paused for this workspace."
+        if state == "missing":
+            return ("It is missing from the project folder. It may have been moved, renamed or deleted outside "
+                    "RevisionWorx. Put it back, or restore the latest revision.")
+        if state == "modified-externally":
+            return ("The file no longer matches the latest revision. Check it out to keep the changes as a "
+                    "new revision.")
+        if co and not self.detail["mine"]:
+            return "You can read it, but only that session can check it in."
+        if self.detail["mine"]:
+            if state == "modified":
+                return "Check in to save your changes as a new revision."
+            return "Open the file, make your changes and save. Then check in."
+        if state == "unrevisioned":
+            return "Check it in to record its first revision."
+        return "Check it out before you change the file."
+
+    @property
+    def tone(self) -> str:
+        """Colour family of the status block."""
+        if self.message and self.message_level == "error":
+            return "danger"
+        if self.message and self.message_level == "warning":
+            return "warn"
+        if not self.detail:
+            return "neutral"
+        state = self.detail["status"]["state"]
+        if self.ctl.read_only:
+            return "neutral"
+        if state == "missing":
+            return "danger"
+        if state == "modified-externally":
+            return "warn"
+        if self.detail["checkout"] and not self.detail["mine"]:
+            return "warn"
+        if self.detail["mine"]:
+            return "info"
+        return "ok" if self.message else "neutral"
+
+    @property
+    def title_text(self) -> str:
+        if not self.detail:
+            return ""
+        d = self.detail["document"]
+        return d.get("title") or d["rel_path"]
+
+    @property
+    def meta_text(self) -> str:
+        if not self.detail:
+            return ""
+        d = self.detail["document"]
+        return "  ·  ".join(x for x in (d.get("number"), d["rel_path"]) if x)
+
+    @property
+    def latest_state_name(self) -> str:
+        latest = self.detail["latest"] if self.detail else None
+        if not latest:
+            return ""
+        from ..lifecycle import state_name
+        return state_name(self.detail["lifecycle"], latest["state"])
+
+    @property
+    def state_tone(self) -> str:
+        latest = self.detail["latest"] if self.detail else None
+        return DocumentListModel.state_tone(latest["state"] if latest else None)
+
+    @property
+    def latest_text(self) -> str:
+        latest = self.detail["latest"] if self.detail else None
+        return f"Latest revision  {latest['label']}" if latest else ""
+
+    @property
+    def released_text(self) -> str:
+        if not self.detail or not self.detail["latest"]:
+            return ""
+        released = self.detail["lifecycle"].get("released")
+        hits = [r for r in self.history if r["state"] == released]
+        if not hits or hits[0]["id"] == self.detail["latest"]["id"]:
+            return ""
+        return f"Released revision  {hits[0]['label']}"
+
+    def history_meta(self, row: int) -> str:
+        """Who, when and which state, in plain words. The exact time is in the revision's details."""
+        from ..lifecycle import state_name
+        from ..workspace import current_actor
+        r = self.history[row]
+        user = r["author"].get("user", "?")
+        who = "You" if user == current_actor().get("user") else user
+        parts = [who, friendly_time(r.get("created", "")), state_name(self.detail["lifecycle"], r["state"])]
+        if r.get("restored_from"):
+            parts.append("Restored")
+        return "  ·  ".join(parts)
+
+    @property
+    def can_checkin_visible(self) -> bool:
+        """Check in is this document's next step, even while a job briefly disables the button."""
+        return bool(self.detail) and self.detail["mine"]
+
+    @property
+    def can_restore_file(self) -> bool:
+        return self.file_missing and bool(self.detail["latest"]) and not self.ctl.busy and not self.ctl.read_only
+
+    def restore_file(self) -> None:
+        label = self.detail["latest"]["label"]
+        self.ctl.restore_missing_file(self.doc_id)
+        self.reload()
+        self.set_message(f"Restored revision {label} to the project folder. History has not changed.")
 
     @property
     def can_checkout(self) -> bool:
