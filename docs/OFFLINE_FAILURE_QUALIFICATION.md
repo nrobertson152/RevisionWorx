@@ -142,3 +142,9 @@ Windows Python-free VM, a true graphical UI interaction, or any actual
 migration from an older production schema. Phase 2 source remains pinned at
 `d656884b39401134149273dd0121ef620b76eb8e`; new safety changes must
 pass independent QA before integration is repinned.
+
+### Acceptance update — pinned relocation fixture (2026-11-02)
+
+The earlier pending [41563277330](https://github.com/nrobertson152/RevisionWorx/actions/runs/41563277330) finished **FAILURE** (Linux only) on the new relocated executable check. Follow-up [41564072455](https://github.com/nrobertson152/RevisionWorx/actions/runs/41564072455) reproduced `test -x` failure after successfully copying the shipped GUI and CLI trees into the container's disposable tmpfs. The corrected `--tmpfs /tmp:rw,exec,nosuid,size=768m` setting at packaging SHA `12dd4b1270991d67c8b89fd82ff2b749565ba09f` produced [run 41564388195](https://github.com/nrobertson152/RevisionWorx/actions/runs/41564388195), **SUCCESS on Ubuntu and Windows**. Ubuntu's runtime had no Python/pip and no reachable network; the relocated CLI performed the complete disposable history/permission-denial lifecycle and the relocated GUI remained alive using Qt offscreen. Original and second revision exports both passed the shell's SHA-256 assertions. The Windows path probes and both platforms' packaging/failure-injection unittests also passed.
+
+**Source remains `d656884b39401134149273dd0121ef620b76eb8e`, not `e5b38a6`.** Later source compatibility requires explicit independent QA and Distributed Systems acceptance first. This green test does not establish interactive GUI functionality, native installation, clean offline Windows VM, attempted-socket absence, two-host SMB, power-loss resistance or release readiness.
