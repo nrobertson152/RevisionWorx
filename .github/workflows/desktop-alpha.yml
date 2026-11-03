@@ -86,3 +86,29 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Full suite on the merged tree
         run: python -m pytest -q -ra
+
+  # Real process, real X display, real keystrokes (Linux only). Not a person, and not Windows.
+  real-display:
+    name: "ubuntu-latest / keyboard walkthrough on a real X display"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install X tools and Qt runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xdotool openbox imagemagick libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 libxcb-render-util0 libxcb-image0
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Walkthrough
+        run: xvfb-run -a -s "-screen 0 1366x768x24" python tests/e2e_x11_walkthrough.py --shots shots
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: walkthrough-screenshots
+          path: shots
+          retention-days: 14
