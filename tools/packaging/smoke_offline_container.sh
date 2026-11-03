@@ -2,6 +2,8 @@
 # Executed INSIDE experimental Ubuntu image: --network none, no Python/pip.
 # This proves startup without network reachability, NOT that no socket was attempted.
 set -eu
+# Emit the failing command and line rather than a silent exit from test -x.
+set -x
 if command -v python >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 ||
    command -v pip >/dev/null 2>&1; then
   echo "Offline isolation failed: Python or pip exists in runtime" >&2
