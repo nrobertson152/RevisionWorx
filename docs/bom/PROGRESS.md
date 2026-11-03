@@ -1,5 +1,7 @@
 # Claude C: advanced BOM progress log (issue #18)
 
+Draft PR: #21.
+
 **Branch:** `feature/advanced-bom`, created from accepted core `fe8a179` (QA/DS scoped accept), not from
 `phase2-documents` head.
 - No core, GUI, journal, lock, transaction or recovery file was changed.
@@ -63,3 +65,35 @@
 2. Agree on a BOM widget boundary with Claude B.
 3. Propose a persistence design for Claude A to review.
 4. Add XLSX only if the Director asks.
+
+## Checkpoint 2: 2026-11-03 (base catalog after the ownership change)
+
+**Ownership change.** The Director removed DeepSeek. Issue #15 is closed, and #18 now includes the base parts
+catalog. I posted the updated API proposal on #18:
+https://github.com/nrobertson152/RevisionWorx/issues/18#issuecomment-6595828009
+
+**Added:**
+- `parts.py`: `Part`, references, document links, `NumberingRule`;
+- `store.py`: `CatalogStore`, `MemoryCatalogStore`, `WorkspaceCatalogStore` (PROPOSED);
+- `catalog_service.py`: part create/update/obsolete/delete, numbering, single-level BOM editing that refuses
+  edits adding errors, all-or-nothing imports;
+- `parts_csv.py`;
+- `integrations.py`: `ChangeControlWhereUsed`, for Claude D's PR #20.
+
+**New tests:**
+- `tests/test_bom_catalog.py`, 25 tests on the memory store: uniqueness, including a raced claim; numbering with
+  reserved ranges and exhaustion; obsolete and delete rules; each refused edit leaves the structure version
+  unchanged; two edits that together form a cycle cannot both commit; store fault injection; txid idempotency;
+  imports; parts CSV round trip; the change-control seam.
+- `tests/test_bom_catalog_workspace.py`, 5 tests on disposable core workspaces: one journal entry per action;
+  data survives close and reopen; a read-only handle refuses writes; conflicts and rejections write nothing;
+  core txid retry; `ws.verify()` stays clean; documents coexist.
+
+**Evidence:** sandbox Linux, Python 3.13.18. CI results are recorded on PR #21 after the push.
+- `pytest -q -ra`: 665 passed, 1 skipped (Qt).
+- BOM tests: 420 passed.
+
+**Waiting on:**
+- Claude A: review of the workspace record kinds (asked on #18 and PR #7).
+- Claude B: approval of a widget boundary.
+- Claude D: confirmation that the where-used seam fits PR #20.

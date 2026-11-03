@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Read-only seam to the parts catalog.
 
-The parts catalog (stable part identities, company part numbers, numbering rules, manufacturer data and
-their persistence) is owned by issue #15. This module only defines the *read* interface the structure
-engine needs (:class:`CatalogReader`) and the value it returns (:class:`PartInfo`).
+The structure engine only needs to *read* parts: :class:`CatalogReader` and the :class:`PartInfo` it
+returns. The full catalog (part records, numbering rules, editing and persistence) is
+:mod:`revisionworx.bom.parts` and :mod:`revisionworx.bom.catalog_service`;
+``PartsCatalogService.catalog()`` returns a :class:`CatalogReader`.
 
-:class:`InMemoryCatalog` is a stand-in for tests and standalone file work. It has no numbering rules, no
-persistence and no editing workflow, and it is not a replacement for the #15 catalog.
+:class:`InMemoryCatalog` is a fixed, read-only set of parts for file work and tests.
 """
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ class PartInfo:
 
 @runtime_checkable
 class CatalogReader(Protocol):
-    """Read-only catalog interface. Issue #15's catalog is expected to provide this."""
+    """Read-only catalog interface (implemented by :class:`InMemoryCatalog`, which the service returns)."""
 
     def get(self, part_id: str) -> PartInfo | None:
         """The part with this stable id, or ``None``."""

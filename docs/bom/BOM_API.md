@@ -1,8 +1,11 @@
 # RevisionWorx advanced BOM and assembly layer: design and API (issue #18)
 
-**Owner:** Claude C. **Branch:** `feature/advanced-bom`, based on accepted core `fe8a179`. **Status:** implemented
-and tested as an isolated package. It is **not integrated** with the GUI and has **no authoritative persistence**.
-Everything below marked PROPOSED is not built.
+**Owner:** Claude C. Since 2026-11-03 this includes the base parts catalog that was formerly issue #15 (DeepSeek
+removed; #15 closed). **Branch:** `feature/advanced-bom`, based on accepted core `fe8a179`.
+
+**Status:** implemented and tested as an isolated package. It is **not integrated** with the GUI. The workspace
+persistence adapter (section 6) is implemented and tested on disposable workspaces, but stays **PROPOSED until
+Claude A reviews it**.
 
 Package: `revisionworx/bom/`. It uses the standard library only and works offline. It changes no core file.
 
@@ -10,9 +13,10 @@ Package: `revisionworx/bom/`. It uses the standard library only and works offlin
 
 | Concern | Owner | This package |
 |---|---|---|
-| Part identity, part numbers, numbering rules, manufacturer data | #15 (DeepSeek) | Reads parts through `CatalogReader` only |
-| Single-level BOM editing and catalog/BOM persistence | #15, reviewed by Claude A | None. Structures are values in memory and in files the user exports |
-| Journal, locks, transactions, revisions, recovery | Claude A (core) | Read-only use of public calls. Never writes `.revisionworx` |
+| Part identity, part numbers, numbering rules, manufacturer/vendor data | Claude C (this package) | `parts.py`, `catalog_service.py`, `parts_csv.py` |
+| Single-level BOM editing and catalog/BOM persistence | Claude C; Claude A reviews the store | `catalog_service.py`, `store.py` (PROPOSED) |
+| Journal, locks, transactions, revisions, recovery | Claude A (core) | Untouched. The workspace store calls only `register_kind` and `Workspace.get/list/commit`; the revision adapter is read-only |
+| Change control (ECR/ECO) | Claude D (#19, PR #20) | `integrations.ChangeControlWhereUsed` implements its `WhereUsedProvider` |
 | GUI widgets and main window | Claude B (#13) | Toolkit-free view models only (`viewmodels.py`) |
 | OpenSchematix BOM adapter | Integration (PR #2) | Provides `Provenance.SCHEMATIC`. Candidates stay unresolved (PR #2 decision 5) |
 
@@ -208,15 +212,15 @@ python -m revisionworx.bom explode docs/bom/examples/pump-indented.csv
 
 ## 5. Integration contract and open items
 
-- **#15 catalog (PROPOSED seam, posted on #15).** The catalog implements
-  `CatalogReader.get(part_id)` and `find_by_number(number)`. With a catalog:
+- **Catalog.** `PartsCatalogService.catalog()` returns a `CatalogReader`. With it:
   - CSV import resolves numbers to stable ids;
   - validation reports `dangling-reference`;
-  - unresolved placeholders disappear.
-  If #15 defines units, this package adapts to them and does not keep a second unit table.
-- **Authoritative BOM persistence (PROPOSED, not built).** This needs record kinds and journal entries in the
-  core, which Claude A must design and review. Until then, a team can keep BOMs as ordinary revisioned CSV/JSON
-  documents. The adapter already compares their revisions.
+  - `import_structure` turns unresolved `pn:` placeholders into catalog parts.
+- **Authoritative BOM persistence.** `WorkspaceCatalogStore` (section 6) is implemented and tested but stays
+  PROPOSED until Claude A reviews it. Teams can also keep BOMs as ordinary revisioned CSV/JSON documents; the
+  adapter compares their revisions.
+- **Change control (Claude D).** `ChangeControlWhereUsed(service.structure)` returns PR #20's
+  `{"edges", "coverage"}` shape. The coverage always says what was not searched.
 - **GUI (Claude B).** A BOM tab or dialog can call the view models from a background job. No main-window code
   was touched. The widget boundary needs Claude B's approval.
 - **Core request (PR #7).** List `documents.read_revision_bytes` in CORE_API.md as Provisional or Stable.
@@ -227,3 +231,65 @@ python -m revisionworx.bom explode docs/bom/examples/pump-indented.csv
   - persisted where-used index;
   - OpenSchematix native BOM mapping.
   None of these is claimed.
+
+## 6. Base parts catalog (formerly issue #15)
+
+**Values** (`bom.parts`):
+
+```python
+Part(part_id="prt_<32 hex>", number, description="", unit="EA", kind="part|assembly|material|document",
+     status="active|obsolete", revision="", manufacturers=(ManufacturerRef(manufacturer, mpn),),
+     vendors=(VendorRef(vendor, sku),), documents=(DocumentLink(document_id, revision_id="", role),),
+     attributes=(), manual_number=False)          # .info() -> PartInfo, .to_record()/.from_record()
+NumberingRule(rule_id, prefix="", digits=6, suffix="", start=1, reserved=((lo, hi),))
+```
+
+- The id never changes. The number can be renumbered. Numbers are unique case-insensitively after NFC.
+- `manual_number=True` marks a number outside every saved rule, for example a legacy or imported number.
+- Document links are declared by a user. A filename match is never turned into a link.
+
+**Service** (`bom.PartsCatalogService(store, actor=..., clock=...)`). Each mutation is **one** store commit and
+takes an optional `txid`.
+
+| Call | Refused (nothing written) when |
+|---|---|
+| `save_rule(rule)`, `preview_number(rule_id)` | |
+| `create_part(number=... or rule_id=..., ...)` | number already used (also by the `partnum` claim record); rule exhausted |
+| `update_part(part_id, expect_rev, **changes)` | stale `expect_rev`; new number taken; unit changes dimension while BOMs use the part |
+| `set_status(part_id, status, expect_rev)` | stale `expect_rev` |
+| `delete_part(part_id, expect_rev)` | any BOM line uses it, or it has its own BOM. Use obsolete instead |
+| `add_line(parent, child, qty, unit=None, ...)` | unknown or obsolete child; the edit adds a validation error (cycle, self-reference, invalid quantity, unit mismatch, duplicate find number or reference designator) |
+| `update_line(line_id, expect_rev, **changes)`, `remove_line(line_id, expect_rev)` | stale `expect_rev`; parent or child change (remove and add instead); new errors |
+| `replace_bom(parent, lines, expect_version=None)` | stale structure version; new errors |
+| `import_structure(structure, replace_existing=False, create_missing=True)` | an assembly already has a BOM; parts missing with `create_missing=False`; new errors |
+| `import_part_rows(...)` / `parts_csv.import_parts(service, csv, update_existing=False)` | any row conflicts (all-or-nothing) |
+
+Reads: `parts()`, `part(id)`, `part_rev(id)`, `find_by_number(n)`, `catalog()`, `structure()`, `bom(parent)`,
+`snapshot(root)`, `rules()`, `structure_version()`.
+
+Edits are refused only for **new** errors. Problems already in imported legacy data do not block unrelated edits;
+validation still reports them. `EditRejected.issues` lists the cause.
+
+**Stores** (`bom.store`):
+- `MemoryCatalogStore` has the same semantics in memory, for tests, GUI view-model tests and what-if sessions.
+- `WorkspaceCatalogStore(ws)` (**PROPOSED**) registers the kinds below and calls only `Workspace.get/list/commit`
+  with `RecordPut`, `RecordDelete` and `RecordCheck`. Each action is therefore one journal entry under the
+  writer lock, fenced, replayed after a crash and checked by `ws.verify()`. Core `ConflictError` becomes
+  `StoreConflict`. Other core errors propagate unchanged and follow CORE_API.md section 4: `ReadOnlyError`,
+  `LockLostError`, `CommittedNotApplied` (the change *is* saved) and `WorkspaceCorruptError`.
+
+| Kind | Id | Role |
+|---|---|---|
+| `part` | `prt_…` | part record plus created/modified stamps (local user and host, not accounts) |
+| `partnum` | `pnum_<sha256(casefold number)[:32]>` | number claim, put with `expect_rev=0`, so duplicates cannot both commit |
+| `bomline` | `bln_…` | one parent-child line, quantity as decimal text |
+| `bomstruct` | `default` | structure version, bumped by every line change, delete and unit change, so edits that are each acyclic but form a cycle together cannot both commit |
+| `partrule`, `partseq` | rule id | numbering rule and its counter, which issues each number once |
+
+**Retries.** After an ambiguous failure (crash, lost connection), ask `ws.transaction_outcome(txid)`, as in
+CORE_API.md section 4. The store applies an identical request with the same txid once. The service rebuilds
+time stamps, so a blind service-level retry is a new request, and its duplicate-number check refuses it.
+
+**Parts CSV** (`bom.parts_csv`). One row per part, with `part_id` and `number` columns. Numbered column groups
+hold the references: `manufacturer_N`/`mpn_N`, `vendor_N`/`sku_N` and `document_id_N`/`revision_id_N`/`role_N`.
+`attr:<Name>` columns hold attributes. Export then import is lossless. The CSV safety rules from section 3 apply.

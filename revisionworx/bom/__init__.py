@@ -5,8 +5,8 @@
 
 Standard library only, offline, deterministic. Nothing in this package writes to a ``.revisionworx``
 folder or calls the core's journal, locks or transactions; workspace access is read-only
-(:mod:`revisionworx.bom.workspace_adapter`). The parts catalog itself belongs to issue #15 and is reached
-through :class:`~revisionworx.bom.catalog.CatalogReader`.
+(:mod:`revisionworx.bom.workspace_adapter`). The base parts catalog (:mod:`~revisionworx.bom.parts`, :mod:`~revisionworx.bom.catalog_service`) is part
+of this package; other catalogs can still be plugged in through :class:`~revisionworx.bom.catalog.CatalogReader`.
 
 Public API (see docs/bom/BOM_API.md)::
 
@@ -17,6 +17,11 @@ Public API (see docs/bom/BOM_API.md)::
     totals = bom.rollup(s, "pn:frame-100", 5)              # summarized quantities for 5 frames
     diff = bom.compare(old, new)                           # line-level changes
     impact = bom.revision_impact(snapshots, "pn:bolt-m8")  # Before You Revise
+
+    svc = bom.PartsCatalogService(bom.MemoryCatalogStore())  # or WorkspaceCatalogStore(ws): PROPOSED
+    frame = svc.create_part("FRAME-100", kind="assembly")
+    bolt = svc.create_part("BOLT-M8")
+    svc.add_line(frame.part_id, bolt.part_id, "4")          # refused if it adds a cycle or other error
 """
 from .catalog import CatalogReader, InMemoryCatalog, PartInfo, unresolved_id
 from .csvio import (change_impact_to_csv, diff_to_csv, explosion_to_csv, issues_to_csv, quantity_deltas_to_csv,
@@ -34,6 +39,12 @@ from .snapshot import (BomSnapshot, SourceRef, load_any, snapshot_from_json, sna
                        structure_from_json, structure_to_json)
 from .units import DEFAULT_LIMITS, DEFAULT_UNITS, Limits, Unit, UnitRegistry, canonical_text, parse_quantity
 from .validate import Issue, ValidationReport, validate
+from .parts import (DocumentLink, ManufacturerRef, NumberingRule, Part, PartKind, PartStatus, VendorRef, new_line_id,
+                    new_part_id)
+from .store import CatalogStore, MemoryCatalogStore, StoreConflict, StoreError, WorkspaceCatalogStore
+from .catalog_service import CatalogError, EditRejected, PartsCatalogService
+from .parts_csv import export_parts, import_parts, parts_from_csv, parts_to_csv
+from .integrations import ChangeControlWhereUsed
 
 API_VERSION = 1
 
