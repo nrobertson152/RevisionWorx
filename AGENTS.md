@@ -2,12 +2,17 @@
 
 RevisionWorx is an offline, cross-platform, GPL-3.0 engineering PDM (product data management) application. The specification is `docs/REQUIREMENTS.md`; architecture, ADRs and open design gates are in `docs/ARCHITECTURE.md`. Read both before changing code.
 
-## Roles
+## Roles and current ownership
 
-- **Director (`nrobertson152`)** decides what to build, merges pull requests and approves releases. Only the Director merges, releases, tags, deletes branches or makes multi-user production claims.
-- **Claude** is the primary developer and architect. It implements issues, owns the architecture decisions, and opens pull requests.
-- **ChatGPT / Codex** does independent review and testing. Codex reviews every pull request automatically. Comment `@codex <request>` on a PR to ask it for a fix.
-- **GitHub** holds the record: issues, pull requests and CI.
+- **Director (`nrobertson152`)** sets priorities and exclusively authorizes merges, releases, tags, branch deletion and multi-user production claims.
+- **Claude A** owns core architecture, transaction/revision reliability, and Phase 1/2 implementation (PRs #6 and #7).
+- **Claude B** owns the PySide6 desktop GUI (PR #14).
+- **Claude C** owns advanced BOM/assembly engineering and parts integration (issue #18), including the base parts/BOM domain formerly assigned to DeepSeek in historical issue #15. No DeepSeek dependency or handoff is required.
+- **Claude D** owns engineering change control (issue #19), including any necessary project-workflow integration. No Qwen dependency or handoff is required.
+- **ChatGPT A** owns independent QA (PR #3); **ChatGPT B** owns distributed-systems verification (PR #4); **ChatGPT C** owns integration/packaging verification (PR #2). Separate scheduled ChatGPT core and GUI engineering tasks may work only on their own branches.
+- **GitHub** is the authoritative record of issues, draft PRs, exact-SHA test evidence, and handoffs.
+
+**Removed agents:** DeepSeek and Qwen are no longer participants in RevisionWorx. Historical issues #15 and #16 are superseded, not active ownership assignments. Do not ask either model for review, coordination, code, or an interface contract. Historical references may remain in old commits/comments for traceability but are not current instructions.
 
 ## How work flows
 
