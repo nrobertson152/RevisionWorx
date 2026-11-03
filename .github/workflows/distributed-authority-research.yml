@@ -382,3 +382,27 @@ jobs:
           if [ "$(grep -c "^FAIL: test_crash_before_displaced_token_revocation_remains_fail_closed " negative-control.log)" -ne 1 ]; then echo "FAIL: expected exactly the crash-safety oracle to reject vulnerable source"; exit 1; fi
           if grep -q "^ERROR:" negative-control.log; then echo "FAIL: harness error rather than safety rejection"; exit 1; fi
           echo "Expected negative control: crash-safety oracle FAILS on vulnerable source; ordinary release oracle PASSES"
+
+  phase2-rev4-real-windows-sharing:
+    name: ADR-019 rev4 genuine Win32 sharing denial (Python ${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: fe8a179f0203ef08151dc8459c84609dc639c4fe
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Exercise kernel-enforced handle denial and durable revocation
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_phase2_real_windows_sharing_rev4
