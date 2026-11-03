@@ -20,8 +20,10 @@ from revisionworx.content import ContentStore, SourceChangedError
 
 from test_documents import proj, reg  # noqa: F401  (fixture reuse)
 
-ORIGINAL = b"IPT revision one " * 64        # 1088 bytes
-SAME_SIZE = b"IPT revision TWO " * 64       # same length, different bytes
+# Far larger than io.BufferedReader's 8 KiB buffer, so a writer injected after the first read() really runs while
+# most of the file is still unread (CI 41678355325: a 1 KiB file was fully buffered by the first read on Windows).
+ORIGINAL = b"IPT revision one " * 16384      # 278528 bytes
+SAME_SIZE = b"IPT revision TWO " * 16384     # same length, different bytes
 
 
 @pytest.fixture
@@ -40,7 +42,7 @@ def _objects(ws) -> set[str]:
 
 def _inject(monkeypatch, path: Path, action, *, on_open: int = 1, after_reads: int = 1):
     """Run ``action`` once, during open number ``on_open`` of ``path``, after ``after_reads`` reads."""
-    monkeypatch.setattr(content_mod, "CHUNK", 64)
+    monkeypatch.setattr(content_mod, "CHUNK", 4096)
     real_open = atomicio._open_for_read
     opens = []
 
