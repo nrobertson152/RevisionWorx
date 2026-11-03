@@ -45,7 +45,7 @@ jobs:
             echo "RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}"
             echo "RUNNER_OS=${RUNNER_OS}"
             python --version
-            python -c "import unittest; suite=unittest.defaultTestLoader.discover('tests', pattern='test_offline_backup_rehearsal.py'); count=suite.countTestCases(); print('DISCOVERED_TESTS=' + str(count)); assert count == 15, 'Expected exactly 15 isolated backup regression tests'"
+            python -c "import unittest; suite=unittest.defaultTestLoader.discover('tests', pattern='test_offline_backup_rehearsal.py'); count=suite.countTestCases(); print('DISCOVERED_TESTS=' + str(count)); assert count == 17, 'Expected exactly 17 isolated backup regression tests'"
             python -m unittest discover -s tests -p test_offline_backup_rehearsal.py -v
           } 2>&1 | tee backup-rehearsal-test-results.txt
       - name: Preserve exact native regression log
