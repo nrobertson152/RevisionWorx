@@ -1,0 +1,49 @@
+name: QA rev4 independent fail-closed fault barriers
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-rev5-failclosed-faults-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ${{ matrix.os }}
+    name: "${{ matrix.os }} Python ${{ matrix.python-version }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fe8a179f0203ef08151dc8459c84609dc639c4fe
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: f9772d91d8b24854baf686a26e177e1fe58675a8
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Copy frozen QA fault tests
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dest = Path("app/tests/qa")
+          dest.mkdir(parents=True, exist_ok=True)
+          shutil.copy2("qa/tests/qa/test_rev5_failclosed_faults.py", dest)
+      - name: Install exact source
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Display exact source versions
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Test fail-closed fault barriers
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_rev5_failclosed_faults.py
