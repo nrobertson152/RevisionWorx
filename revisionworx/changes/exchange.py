@@ -246,6 +246,10 @@ def import_requests_csv(svc: ChangeService, text: str, find_document: Callable[[
     """Create one draft ECR per row, all in one commit. Any invalid row: :class:`ImportRejected`, nothing
     created. Rows are validated individually first so every problem is reported at once."""
     specs = parse_requests_csv(text, find_document)
+    if txid is not None and svc.store.outcome(txid)["state"] != "not-found":
+        # a retry of an import that may already have happened: the service returns the original requests
+        # (or refuses a fenced attempt) - validating again would find this import's own numbers taken
+        return svc.create_requests([spec for _, spec in specs], txid=txid)
     errors = []
     probe = ChangeService(svc.store, svc.catalog, clock=svc.clock, ids=svc.ids, actor=svc.actor)
     policy = probe.policy()

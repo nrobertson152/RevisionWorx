@@ -46,6 +46,28 @@ def _derived_id(prefix: str, txid: str, salt: str) -> str:
     return f"{prefix}_{hashlib.sha256(f'revisionworx/changes/{salt}/v1:{txid}'.encode()).hexdigest()[:32]}"
 
 
+_ACTION_WEIGHT = {ProposedAction.REFERENCE: 0, ProposedAction.REVIEW: 1}
+
+
+def _merge_item(prior: AffectedItem | None, item: AffectedItem) -> AffectedItem:
+    """Combine one item listed by several requests on one order without losing an obligation: a revise,
+    create or obsolete wins over review/reference; two different obligations are a conflict."""
+    if prior is None:
+        return item
+    if (prior.baseline_rev_id, number_key(prior.baseline_label)) != \
+            (item.baseline_rev_id, number_key(item.baseline_label)):
+        raise ValidationError(f"{item.label} has different baselines in the selected requests; "
+                              "re-baseline them first")
+    if prior.action is item.action:
+        return prior
+    if prior.action in NEEDS_IMPLEMENTATION and item.action in NEEDS_IMPLEMENTATION:
+        raise ValidationError(f"{item.label} has conflicting actions in the selected requests "
+                              f"({prior.action.value} and {item.action.value}); put them on separate orders "
+                              "or edit the requests")
+    rank = lambda a: 2 if a in NEEDS_IMPLEMENTATION else _ACTION_WEIGHT[a]  # noqa: E731
+    return item if rank(item.action) > rank(prior.action) else prior
+
+
 def reservation_id(number: str) -> str:
     return f"cnum_{hashlib.sha256(number_key(number).encode('utf-8')).hexdigest()[:32]}"
 
@@ -647,11 +669,7 @@ class ChangeService:
                                           "requests can go on a change order")
                 self._require_fresh(ecr, tx, policy, "create the change order")
                 for it in ecr.affected:
-                    prior = items.get(it.key)
-                    if prior is not None and prior.baseline_rev_id != it.baseline_rev_id:
-                        raise ValidationError(f"{it.label} has different baselines in the selected requests; "
-                                              "re-baseline them first")
-                    items.setdefault(it.key, it)
+                    items[it.key] = _merge_item(items.get(it.key), it)
                 for d in ecr.dependencies:
                     if d.change_id not in rids:
                         deps.setdefault(d.change_id, d)

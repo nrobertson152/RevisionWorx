@@ -265,3 +265,13 @@ def test_actions_explain_an_unreadable_dependency_instead_of_failing(sample):
     eco["dependencies"] = [{"change_id": ghost, "type": "requires"}]
     actions = {a["action"]: a for a in presentation.available_actions(svc, svc.get(ids["order"]))}
     assert not actions["mark_implemented"]["enabled"] and ghost in actions["mark_implemented"]["reason"]
+
+
+def test_csv_import_retry_with_same_txid_returns_the_original_requests(doc_ws):
+    """Codex P2 on PR #20: a retry was rejected because the first attempt's numbers already existed."""
+    svc = changes.service_for(doc_ws)
+    text = "title,reason,number\nA,r,CR-1\nB,r,\n"
+    tx = "ab" * 16
+    first = exchange.import_requests_csv(svc, text, exchange.document_lookup(doc_ws), txid=tx)
+    again = exchange.import_requests_csv(svc, text, exchange.document_lookup(doc_ws), txid=tx)
+    assert [c.id for c in again] == [c.id for c in first] and len(svc.scan()[0]) == 2

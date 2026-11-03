@@ -492,3 +492,34 @@ def test_policy_changes_are_audited_and_conflict_checked(env):
     svc.store.records["config"]["policy"]["ecr_approvals_required"] = "lots"
     with pytest.raises(MalformedRecord, match="policy"):
         svc.policy()
+
+
+def _approve_new(svc, title, items):
+    ecr = svc.create_request(title, "r", affected=items)
+    svc.submit(ecr.id)
+    svc.begin_review(ecr.id)
+    return svc.approve(ecr.id).id
+
+
+def test_merging_requests_keeps_the_strongest_action_on_a_shared_item(env):
+    """Codex P1 on PR #20: a 'reference' request merged before a 'revise' request lost the revision."""
+    svc, _, _ = env
+    ref = _approve_new(svc, "context", [doc_item(action="reference")])
+    rev = _approve_new(svc, "change", [doc_item(action="revise")])
+    eco = svc.create_order([ref, rev])
+    assert eco.affected[0].action.value == "revise"
+    svc.start_work(eco.id)
+    with pytest.raises(DependencyError, match="no implementation recorded"):
+        svc.mark_implemented(eco.id)
+
+
+def test_merging_requests_refuses_conflicting_actions_or_baselines(env):
+    svc, _, _ = env
+    a = _approve_new(svc, "a", [doc_item(action="revise"), {"item_type": "part", "label": "P-1",
+                                                             "baseline_label": "B"}])
+    b = _approve_new(svc, "b", [doc_item(action="obsolete")])
+    c = _approve_new(svc, "c", [{"item_type": "part", "label": "p-1", "baseline_label": "C"}])
+    with pytest.raises(ValidationError, match="conflicting actions"):
+        svc.create_order([a, b])
+    with pytest.raises(ValidationError, match="different baselines"):
+        svc.create_order([a, c])
