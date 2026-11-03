@@ -1,8 +1,8 @@
 # ADR-019 lock-namespace authority boundary — independent Distributed Systems review
 
 **Production source reviewed:** `d2b7a1cfead5b83acecce2252e70d0a155f146b7` (Phase 2).
-**Research safety suite:** `prototype/test_phase2_rev3_protocol_boundary.py`.
-**CI:** [41566000473](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566000473), Linux/Windows Python 3.11/3.13, each **4/4 PASS**; the 22-job research workflow finished **22/22 successful**. Research CI uses local native filesystems only.
+**Research safety suite:** `prototype/test_phase2_rev3_protocol_boundary.py`, source SHA `f74923b8af6cbb1ac44bdead74f82e428449ca2e`.
+**CI:** [41566000473](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566000473), Linux/Windows Python 3.11/3.13, each **6/6 PASS** (**24/24 independent positive tests**); the 22-job research workflow finished **22/22 successful**. Research CI uses local native filesystems only.
 
 ## Verdict by trust model
 
@@ -25,6 +25,8 @@ No test substitutes a live writer lock at a private custody pathname: that requi
 ## Recovery request identity
 
 The independent conflict tests force an interruption **after** the `workspace.orphan.clear` authorization is durably published but **before** custody acquisition. A second reason is rejected with `OrphanClearConflict(outcome="pending")`. The same reason but a different user/host is also rejected. The original administrator's identical retry completes, and another retry returns the same logical result. Exactly one authorization, one terminal result and one archived evidence file remain. A late different-reason request after completion raises `OrphanClearConflict(outcome="completed")`.
+
+Two additional exact-source tests verify **reincarnation identity** (recreated identical bytes at the same orphan pathname generate a different `clear_id` and two distinct authorized recoveries), and **post-archive forensic verification** (`Workspace.verify()` reports `orphan-evidence-altered` after changed bytes and `orphan-evidence-missing` after removal). This is detection, not tamper resistance.
 
 The `user@host` actor is **self-reported**, not cryptographically authenticated. Request identity prevents accidental conflation among cooperative clients, not malicious impersonation.
 
