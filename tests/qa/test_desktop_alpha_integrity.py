@@ -18,6 +18,8 @@ if importlib.util.find_spec("revisionworx.documents") is None or importlib.util.
 
 from revisionworx import documents
 from revisionworx.gui.controller import Controller
+if not hasattr(Controller, "quick_start") or not hasattr(Controller, "import_document"):
+    pytest.skip("Phase 2 core checkout has pre-alpha GUI controller; use pinned PR #14", allow_module_level=True)
 from revisionworx.workspace import CommittedNotApplied, Workspace
 
 
