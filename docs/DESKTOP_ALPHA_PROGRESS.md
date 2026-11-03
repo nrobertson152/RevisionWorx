@@ -156,8 +156,8 @@ Regressions: `tests/test_qt_desktop_alpha_rc.py`, `tests/test_qt_desktop_alpha_k
 Also run locally, not accepted evidence: the same code merged with `phase2-documents` `22a5273` (newer than the accepted
 core): 381 passed, 3 skipped, and the walkthrough passed (Linux, Python 3.13, as root).
 
-Known limit: while a recovery block is known only from a refused write, F5 clears the banner until the next write finds it
-again and fails closed. A read-only `Workspace.health()` (request A1) would close this.
+~~Known limit: while a recovery block is known only from a refused write, F5 clears the banner until the next write finds
+it again.~~ Fixed in checkpoint 5 below.
 
 ## Manual acceptance (installed GUI) — not yet performed
 1. `python -m pip install -e ".[gui]"` then `revisionworx-gui` (Windows: Start → run from venv).
@@ -171,10 +171,34 @@ again and fails closed. A read-only `Workspace.health()` (request A1) would clos
 
 ## Next
 - Screen-reader check and a keyboard walkthrough on Windows (needs an interactive session; the Linux one is automated).
-- A8: `verify` on a read-only handle reports unapplied journal entries as "missing", so a normal administrator clear
-  shows an inconsistency notice until the next write.
+- ~~A8~~: handled in the GUI in checkpoint 5 (committed-but-unapplied entries are reported as pending). A core
+  `Workspace.health()` (A1) would still be the cleaner home for this.
 - Visual redesign: see `UI_REDESIGN_PROPOSAL.md`.
 - Byte-level progress for very large files needs a core progress callback on `store_file` (A7).
 - A6 (requested in `controller.checkout`): return the checkout token with `CommittedNotApplied`, so a saved
   checkout does not need an administrator to release it.
 - Packaging coordination with PR #2 (Windows/Linux offline bundles).
+
+## Checkpoint 5 — workspace health re-check (Claude B, 2026-11-03)
+Base: `feature/desktop-alpha` `0773bde`. **Local commit only — not pushed** (this session had read-only GitHub access);
+delivered as a patch/bundle for the Coordinator to apply. GUI controller only; no core or protocol change.
+
+| Defect | Found by | Fix |
+|---|---|---|
+| F5 cleared a recovery block that only a refused write could see (unreadable orphaned `.releasing-*` lock file), so the GUI looked writable and invited the same refused change | Known limit above | Such a block is re-checked with the same writable open every change starts with (writer lock, journal check, roll-forward of already-committed entries), closed without committing. The GUI stays read-only until that succeeds, while a job holds the workspace, or if the lock cannot be taken (fail closed). Blocks the read-only `verify()` can see are handled as before. |
+| A8: committed-but-unapplied journal entries were reported as "inconsistencies" (after `lock clear-orphan`, or a crash between commit and apply) | `## Next` A8 | `health()` counts non-fenced entries above `applied_seq` (public `journal_seqs`/`applied_seq`/`read_entry`/`is_fenced`) as `pending` and leaves out `verify()` problems on records those entries write. Other problems are still reported. Never applies or repairs. |
+
+Regressions: `tests/test_gui_health_recheck.py` (11 tests; 7 fail on `0773bde`, 4 guard unchanged behaviour).
+
+| Where | Command | Result |
+|---|---|---|
+| Linux container, Python 3.13.18, **no PySide6** (PyPI unreachable from the session) | `pytest -q -ra` | 232 passed, 5 skipped (4 Qt modules skipped; 1 POSIX-permission test as root) |
+| same, on unchanged `0773bde` | `pytest -q -ra` | 221 passed, 5 skipped |
+| same | `pytest -q tests/test_gui_health_recheck.py` on `0773bde` | 7 failed, 4 passed (defects reproduced) |
+
+**Not run:** any Qt/offscreen test, Windows, the X11 walkthrough. Existing Qt tests were reviewed by reading for dependence
+on the changed behaviour (`test_recovery_block_found_while_writing…`, `test_recovery_blocked_makes_gui_read_only…`); none
+was found, but CI must confirm. No interactive desktop acceptance.
+
+Decision for the Coordinator: F5 now takes the writer lock briefly (and rolls forward committed entries) when, and only
+when, a change was already refused for a block the read-only check cannot see. Request A1 would make this a pure read.

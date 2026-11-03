@@ -567,7 +567,7 @@ def test_recovery_block_found_while_writing_makes_the_gui_read_only(qapp, ctl, t
     w.refresh_all()  # F5 after the administrator's repair
     qapp.processEvents()
     st = w.observable_state()
-    # The clear is journalled but not yet applied, so the read-only check notes it until the next write.
+    # F5 re-checks the write-found block with a writable open (no commit), which also applies the clear.
     assert not st["read_only"] and "RECOVERY BLOCKED" not in st["health_banner"] and st["actions"]["checkout"]
     tab.checkout()
     assert tab.panel.detail["checkout"] is not None and len(boxes) == 1

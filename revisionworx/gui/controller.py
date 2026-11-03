@@ -100,6 +100,9 @@ class Controller:
         self._cancel = threading.Event()
         self._busy = threading.Lock()
         self.blocked_reason: str | None = None  # set by health(); makes the GUI read-only
+        # True when the block was found by a refused change rather than by the read-only check. The
+        # read-only check cannot see such causes (e.g. the lock namespace), so it may not clear them.
+        self._block_found_by_write = False
 
     # ------------------------------------------------------------------ preferences
     def _prefs_path(self) -> Path:
@@ -132,14 +135,18 @@ class Controller:
             info = {"id": ws.id, "name": ws.name}
         self.location = location
         self.workspace_id = info["id"]
-        self.blocked_reason = None
+        self._set_block(None)
         self._remember(location)
         return info
 
     def close_workspace(self) -> None:
         self.location = None
         self.workspace_id = None
-        self.blocked_reason = None
+        self._set_block(None)
+
+    def _set_block(self, reason: str | None, found_by_write: bool = False) -> None:
+        self.blocked_reason = reason
+        self._block_found_by_write = reason is not None and found_by_write
 
     @property
     def read_only(self) -> bool:
@@ -180,31 +187,86 @@ class Controller:
                 root_id=root_id, rel_path=rel, mode="managed"))
 
     def health(self) -> dict:
-        """Read-only check using the public ``Workspace.verify()`` (CORE_API §5). Never repairs.
+        """Check the workspace using public core calls (CORE_API §5). Never repairs and never commits.
 
         ``blocked`` (WorkspaceCorruptError) makes the GUI read-only until checked again; other
-        problems are shown as a warning only."""
-        out = {"ok": True, "blocked": False, "problems": [], "message": ""}
+        problems are shown as a warning only. ``pending`` counts changes that are committed to the
+        journal but not yet applied; the next change applies them, so they are not inconsistencies.
+
+        A block found by a refused change is one the read-only ``verify()`` cannot see, so it is not
+        allowed to clear it. It is re-checked the only way that can see it: the same writable open
+        every change starts with (writer lock, journal check, roll-forward of entries that are
+        already committed), closed again without committing anything. Until that succeeds the GUI
+        stays read-only (fail closed). Core request A1 (read-only ``Workspace.health()``) would let
+        this be a pure read."""
+        out = {"ok": True, "blocked": False, "problems": [], "pending": 0, "message": ""}
         if self.location is None:
-            self.blocked_reason = None
+            self._set_block(None)
             return out
         from ..workspace import WorkspaceCorruptError
+        if self.blocked_reason is not None and self._block_found_by_write:
+            still = self._recheck_write_block()
+            if still is not None:
+                return {**out, "ok": False, "blocked": True, "message": still}
         try:
             with self._read() as ws:
                 report = ws.verify()
+                pending_keys, pending = self._pending_changes(ws)
         except WorkspaceCorruptError as exc:
-            self.blocked_reason = str(exc)
-            return {"ok": False, "blocked": True, "problems": [], "message": describe_error(exc)}
-        self.blocked_reason = None
-        problems = [p for p in report.get("problems", []) if p.get("problem") != "entry-without-digest"]
+            self._set_block(str(exc))
+            return {**out, "ok": False, "blocked": True, "message": describe_error(exc)}
+        self._set_block(None)
+        problems = [p for p in report.get("problems", []) if p.get("problem") != "entry-without-digest"
+                    and (p.get("kind"), p.get("id")) not in pending_keys]
+        parts = []
+        if pending:
+            parts.append(f"{pending} saved change{' is' if pending == 1 else 's are'} waiting to be applied "
+                         "(left by an interruption or an administrator command). Nothing is lost: your next "
+                         "change applies {0} first.".format("it" if pending == 1 else "them"))
         if problems:
             first = problems[0]
             what = ", ".join(f"{k}={v}" for k, v in first.items())
-            out.update(problems=problems, message=(
+            parts.append(
                 f"Workspace check found {len(problems)} inconsistenc{'y' if len(problems) == 1 else 'ies'} "
                 f"({what}{', …' if len(problems) > 1 else ''}). If RevisionWorx was interrupted, your next "
-                "change completes it automatically; otherwise run 'revisionworx verify' as an administrator."))
+                "change completes it automatically; otherwise run 'revisionworx verify' as an administrator.")
+        out.update(problems=problems, pending=pending, message="\n".join(parts))
         return out
+
+    def _recheck_write_block(self) -> str | None:
+        """Re-check a block found by a refused change. Returns None if it is gone (and clears it),
+        otherwise the message to show; the block is kept."""
+        from ..workspace import WorkspaceCorruptError
+        if self.busy:
+            return (describe_error(WorkspaceCorruptError(self.blocked_reason)) +
+                    "\n\nIt will be re-checked when the current operation finishes (press F5).")
+        try:
+            with Workspace.open(self.location, writable=True):
+                pass  # nothing is committed: open, check and close only
+        except WorkspaceCorruptError as exc:
+            self._set_block(str(exc), found_by_write=True)
+            return describe_error(exc)
+        except Exception as exc:  # e.g. another session holds the lock: not proven gone, stay closed
+            return (describe_error(WorkspaceCorruptError(self.blocked_reason)) +
+                    f"\n\nThe block could not be re-checked just now: {exc}")
+        self._set_block(None)
+        return None
+
+    @staticmethod
+    def _pending_changes(ws: Workspace) -> tuple[set, int]:
+        """Records written by journal entries that are committed but not yet applied (public journal
+        reads only). Fenced entries never take effect, so they are not pending."""
+        keys: set = set()
+        pending = 0
+        for seq in ws.journal_seqs():
+            if seq <= ws.applied_seq():
+                continue
+            entry = ws.read_entry(seq)
+            if ws.is_fenced(entry):
+                continue
+            pending += 1
+            keys.update((r["kind"], r["id"]) for r in entry.get("records", []))
+        return keys, pending
 
     def _read(self) -> Workspace:
         if self.location is None:
@@ -215,8 +277,8 @@ class Controller:
     def _write(self) -> Iterator[Workspace]:
         """A short writable handle. A refusal for safety (CORE_API §1) makes the GUI read-only: the
         read-only health check cannot see every cause, such as a blocked lock namespace, so this may
-        be the first anyone learns of it. F5 re-checks; if the cause remains, the next write finds it
-        again and fails closed."""
+        be the first anyone learns of it. F5 (``health()``) re-checks it with a writable open and keeps
+        the GUI read-only until that succeeds."""
         from ..workspace import WorkspaceCorruptError, WorkspaceLockedError
         if self.location is None:
             raise RuntimeError("no workspace is open")
@@ -226,7 +288,7 @@ class Controller:
             with Workspace.open(self.location, writable=True) as ws:
                 yield ws
         except WorkspaceCorruptError as exc:
-            self.blocked_reason = str(exc)
+            self._set_block(str(exc), found_by_write=True)
             raise
         except WorkspaceLockedError as exc:
             exc.workspace_location = self.location  # for the recovery command in describe_error
