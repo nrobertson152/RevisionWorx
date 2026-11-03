@@ -69,9 +69,19 @@ def safe_name(name: object) -> str:
     return name
 
 
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject ambiguous JSON objects rather than silently accepting the last key."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise BackupError("duplicate manifest JSON key: " + key)
+        result[key] = value
+    return result
+
+
 def load_manifest(root: Path) -> dict[str, tuple[int, str]]:
     try:
-        data = json.loads((root / MANIFEST).read_text(encoding="utf-8"))
+        data = json.loads((root / MANIFEST).read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
     except (OSError, ValueError) as exc:
         raise BackupError("manifest unreadable or malformed") from exc
     if not isinstance(data, dict) or set(data) != {"version", "files"} or data["version"] != VERSION:
