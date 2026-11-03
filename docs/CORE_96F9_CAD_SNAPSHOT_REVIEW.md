@@ -55,3 +55,29 @@ The existing historically accepted ADR-019 writer-lock protocol is unaffected by
 Controls include non-replaced identity consistency, same-metadata backup-then-rename file identity **detection by comparing stat+fstat**, changed-mtime rejection, old-content unsafe success, and (on Windows) genuine WinError 5 on one-step os.replace into an open target. The expected-failure source-provenance safety check means **new core is not accepted on this property**, despite green negative-control CI.
 
 Most importantly, the positive **file-identity probe** confirms that the portable tuple `(st_dev, st_ino)` from initial `Path.stat()`, `os.fstat(reader.fileno())`, and final `Path.stat()` is stable for an unchanged source and changes across the backup-and-rename swap on **both actual Windows CPython 3.11/3.13 and Ubuntu CPython 3.11/3.13**. This directly tests the minimum proposed correction on the same OS versions instead of relying on a platform assumption. It cannot by itself certify every possible filesystem or in-place modification; the stronger source snapshot contract should be documented.
+
+
+## November 3 P0 follow-up: exact 96f9 two-pass mitigation pilot and its residual race
+
+**Independent executable prototype:** `prototype/test_phase2_cad_two_pass_pilot.py` introduced at research commit `30315d450e093cde7902c96ad299cd26bfb14bf4`; standalone CI workflow `.github/workflows/distributed-cad-two-pass.yml` commit `3cef027eaf3e4742756c08a42af619afb8592a1f`. It pins the **unmodified Phase 2 production source `96f9c368a11fd43c0440d404c7258c7dfeacabf6`**, not a floating branch. [GitHub Actions run 41583080098](https://github.com/nrobertson152/RevisionWorx/actions/runs/41583080098) **COMPLETE SUCCESS, four native jobs**, raw logs inspected:
+
+| OS / Python | Ordinary positive/control | Strict atomic-snapshot requirement | Result |
+|---|---:|---:|---|
+| Ubuntu 3.11 | 4 PASS | 1 expected failure | Focused research green; strict guarantee not accepted |
+| Ubuntu 3.13 | 4 PASS | 1 expected failure | Same |
+| Windows 3.11 | 4 PASS | 1 expected failure | Same |
+| Windows 3.13 | 4 PASS | 1 expected failure | Same |
+
+**What was independently established:**
+
+1. The **test-only** `guarded_two_pass` candidate calls the current `ContentStore.store_file`, checks that the pathname still names the original `(st_dev, st_ino)`, then rereads the source, hashes the actual new bytes and compares digest and size with the captured SHA-256. An unchanged file succeeds and its stored content verifies.
+2. If a second *real OS file handle* rewrites the original inode **after the original read returns old bytes**, fsyncs and restores the same file size/mtime, the second digest catches the difference and a `SourceChangedError` is raised. Source identity alone would miss this.
+3. If an external CAD save moves the opened source to a backup and renames an equal-size/equal-mtime replacement into the same pathname, the candidate rejects the changed file identity/digest with `SourceChangedError`. Both cases refuse before the caller can commit a new journaled revision (`head_seq` unchanged); an unreferenced immutable content object may remain, which is not authority or a committed revision.
+4. **Residual counterexample:** another actual writer changes the *same inode after the second digest completes but before the candidate returns*. File ID, size and mtime are preserved, so the candidate returns success with the old digest despite the current pathname containing new bytes. This is a strict expected-failure test, not a successfully implemented requirement. No finite number of rereads can remove an arbitrary external writer's race window.
+
+**Engineering recommendation to Claude A:** distinguish two contracts explicitly.
+
+- **Practical Tier 1 consistency checking:** verify initial/open/final file identity plus stable metadata, and optionally an independent full reread/hash before returning or journal commit. This would close both *reproduced mid-capture interleavings* and is independently proven to work on native Linux and Windows. Budget for approximately two full file reads; an interrupted second read must never convert into a committed revision. Add **ordinary positive** tests on production corrected exact SHA (no XFAIL), including real OS writes/renames, and avoid deleting externally edited working files.
+- **Strict atomic/linearizable external CAD snapshot:** impossible to establish by metadata + finite repeated hashes when unrelated processes can rewrite in place at any time. Achieving that stronger claim requires an enforced exclusive source writer barrier, application cooperation, an OS/filesystem snapshot capability, or equivalent consistency protocol. Document this exclusion. RevisionWorx's **journal and stored object** can still be internally immutable and correctly hashed; this study concerns provenance between a changing working pathname and the committed revision.
+
+**Disposition:** **RESEARCH ACCEPT** for the reduced-risk mitigation proof; **NO PRODUCTION ACCEPTANCE** of the existing source semantics or strict atomicity. The existing P1 source-provenance and malformed-journal health blockers remain HOLD pending Claude A's source fix, independent positive QA/DS exact-SHA verification and Director merge authorization.
