@@ -87,6 +87,8 @@ d.cancel_checkout(ws, doc_id, token, revert=False) -> None
 - **Retries:** pass a `txid` (32 lowercase hex) that you generate once per user action. On an
   ambiguous failure (crash, lost connection), retry with the same txid. You get the original
   result, never a duplicate revision.
+- **A fenced txid is spent.** If the attempt lost the writer lock, the retry raises `LockLostError`
+  ("never took effect"). Nothing changed. Reopen and start a new attempt with a **new** txid.
 
 | Exception | Meaning | UI action |
 |---|---|---|
@@ -112,6 +114,16 @@ d.cancel_checkout(ws, doc_id, token, revert=False) -> None
 `revisionworx lock show | break | clear-orphan` (ADR-015/019). These are deliberately absent from
 the UI contract. The alpha shows the recovery-blocked message from §1 and stops there.
 
+## 7. Local search index (Provisional)
+
+`open_index(ws, cache_dir=None)` syncs and returns a `LocalIndex`. `IndexBusyError` (a `WorkspaceError`) means another
+RevisionWorx process is using it: nothing is wrong, so try again. A damaged cache replaces itself. `idx.coverage()`
+now includes `baselines_unavailable`, the projects whose file list could not be read.
+
 ## Change log
+- 2026-11-02 (`feffbcf`): `checkin(txid=...)` retries now return the original revision, as this page always said.
+  Before, a retry raised `NotCheckedOut` or `TxidReuseError`. `IndexBusyError` is new. `get`/`list` ignore record files
+  the journal never wrote. No signature changed. `CheckoutTokens` now stores one file per checkout; its API is unchanged,
+  and tokens in an existing `checkouts.json` still work.
 - 2026-11-02: first published (core `phase2-documents`, ADR-019 rev. 3). Nothing above changed
   between `366d435` and this commit. `OrphanClearConflict` is new, but admin-only (CLI).

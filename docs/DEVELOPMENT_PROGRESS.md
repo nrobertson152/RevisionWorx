@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-02 (session 11: ADR-022, issue #10 sharing gaps, integration plan)
+**Updated:** 2026-11-02 (session 12: Director MAX-effort reliability assignment, PR #7 comment 6594977622)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -181,6 +181,36 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 - Reproduced Agent D's procedure as `tests/test_issue8_fencing.py`. Both tests failed first: the stale commit succeeded.
 - Implemented journal-order fencing. The full suite gives **153 passed, 1 skipped**.
 - Multi-user use is still gated on the coordinator and on SMB verification.
+
+### 2026-11-02 (session 12) — adversarial core review (Director assignment, in progress)
+**Read this first if you are resuming.** Candidate work is on `phase2-documents`, not independently accepted.
+
+Done:
+- `22a5273` (Issue #10 reader share mode) passed Core CI 41574652418: ubuntu-latest Python 3.11, 274 passed, 3
+  skipped; windows-latest Python 3.13, 275 passed, 2 skipped, plus 5 trials of the 6- and 10-process contention.
+- 16 confirmed defects fixed with failing tests first: `tests/test_core_reliability.py` (30 of its then 40 tests
+  failed on `22a5273`). See the commit message of `feffbcf` for the list.
+- Real-process crash matrix: `tests/proc_actor.py`, `tests/proc_harness.py`, `tests/test_process_crash_matrix.py`.
+  A process dies with `os._exit` before every filesystem change of commit, check-in, register, checkout, cancel,
+  restore, lifecycle release, create/adopt project, GC, repair, release, revoked-lock clear, orphan fence, break,
+  clear-orphan and create. A new process recovers, then the state is checked against a journal replay.
+  23 tests pass on Linux. It found no new defect beyond a test assumption (see the ADR-022 limitation).
+
+Not done yet, in priority order:
+1. Deterministic real-process concurrent handoff: stale release, stale revoked cleanup and stale break with a
+   paused writer B, the real `lock break` CLI, and a kill at every step. The harness supports it: `pauses`,
+   `arm_after`, `Actor.wait_at/resume/kill`, `run_cli`, hooks `after_preflight` and `before_scan`.
+2. Reader-versus-writer and soak stress across real processes, run on real Windows.
+3. Systematic, preemption-bounded schedule exploration, with a negative control on `d2b7a1c`.
+4. `docs/CORE_INVARIANTS.md`: the state-machine and invariant map the assignment asks for.
+5. Sweep old `.<name>.rwx-*.tmp` leftovers next to a working file after a crash.
+6. Claude B's API requests A1-A7 (triage on PR #7).
+
+Known and watched:
+- One 21 s outlier among five Windows contention trials at `22a5273`; `--durations` is now on in CI to locate it.
+- QA tests that fail on the merged tree with the newest GUI also fail with `fe8a179` as core, so core did not
+  cause them: `test_real_postjournal_checkin_failure_survives_restart_once`,
+  `test_document_viewmodel_checkout_status_and_filter`, `test_document_viewmodel_rejects_empty_checkin_without_journal_mutation`.
 
 ### 2026-11-02 (session 11) — core integration readiness
 - `fe8a179` got a scoped ACCEPT from QA (41571153163) and Distributed Systems (41570591613, 41570924625,

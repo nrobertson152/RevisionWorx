@@ -709,8 +709,10 @@ are resolved against the journal:
   each immutable entry is read once. `latest` maps each record to the (seq, deleted) of its last
   *effective* write; going forward, an entry is fenced exactly when its token is already revoked, which
   matches `is_fenced`. Discarded if the journal is shorter or the last entry seen changed (a restore).
-- **`get` / `list`:** a file is used only if its `_rev` is at least the view's seq. Otherwise the answer
-  comes from the journal entry. `expect_rev` goes through `get`, so it is covered too.
+- **`get` / `list`:** a file is used only if its `_rev` equals the seq of the journal's last effective write of
+  that record. Otherwise the answer comes from the journal entry. A file newer than the view makes the view
+  refresh once, so a commit landing during a read is still seen. A file the journal never wrote, or one claiming an
+  entry the journal does not have, is not a record. `expect_rev` goes through `get`, so it is covered too.
 - **`_pending_overlay` is gone;** the view subsumes it. Revocations are served from the view as well.
 - **`commit`** checks its lock before replaying, so a writer that lost its lock writes nothing there.
 
@@ -736,8 +738,26 @@ costs O(n)**. Previously that cost landed on the first commit or the first pendi
 parked `perf-journal-index` branch (ADR-020) keeps the same "per-handle, in memory, never persisted" rule.
 Its txid index and head probe still apply on top of this and would need redoing against it.
 
-**Not claimed:** power loss, SMB/NFS, or outside actors. Threads stand in for processes in the schedule
-tests. Independent QA and Distributed Systems review is pending.
+**Limitation:** a file altered by an outside program while keeping the same `_rev` is served until `verify` reports
+it and `verify --repair` restores it. Outside actors are out of scope for Tier 1 (ADR-019), and comparing bytes
+on every read would make the files pointless.
+
+**Not claimed:** power loss, SMB/NFS, or outside actors. Independent QA and Distributed Systems review is pending.
+
+### ADR-023 The local index proves which journal it describes, and disposes of itself — IMPLEMENTED; awaiting review
+A cursor alone cannot tell which journal it belongs to. After a restore, a workspace can grow back to or past the
+cursor with different entries, and the cache kept serving records that exist in no journal (reproduced first).
+- **Anchor:** the cache stores the digest of the entry at its cursor. Entry digests cover the txid and time, so
+  they differ across timelines. `sync()` rebuilds if the anchor does not hold.
+- **Damaged journal:** the entry cannot answer, and the workspace is already recovery-blocked. Search stays
+  available, as reads do. A repair brings the check back.
+- **Busy is not damaged:** `database is locked` used to count as corruption, so opening deleted a database another
+  process was using. It now raises `IndexBusyError`, and nothing is deleted.
+- **Damage heals:** about 40% of single damaged pages raised `database disk image is malformed` on every later use.
+  Now `sync()` and the query methods replace the cache and retry once. Callers using `idx.db` directly are not
+  covered (Claude B's A5 asks for a public method).
+- **Creating is safe to race:** the schema is created in one transaction, and the second opener finds it done.
+- **Not detected:** a bit flip that still parses. SQLite has no page checksums here, and the cache is disposable.
 
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 
