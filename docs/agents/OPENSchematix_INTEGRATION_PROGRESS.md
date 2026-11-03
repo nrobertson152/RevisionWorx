@@ -840,3 +840,65 @@ clean Python-free disconnected Windows VM, hardware power-loss, real ACL/ENOSPC,
 socket-attempt audit, malicious external lock mutation or actual two-host SMB/NFS.
 Test-only `--alpha-acceptance` wrapper MUST NOT SHIP.
 PR #2 remains draft, no production packaging source repin or other branch edits.
+
+
+## 2026-11-02 P0 continuation — latest 96f9c36 + 0773bde integrated tree green, independent safety REJECT
+
+**Latest tested exact core `96f9c368a11fd43c0440d404c7258c7dfeacabf6`;
+latest tested GUI `0773bde599f39aee88a8a536c28673bc4a1e13f5`.**
+New separate test-only workflow
+`.github/workflows/revisionworx-live-head-merge-readiness.yml`
+at `7ac4f9a6b288055598b25ef9655070a2836c5193` constructed
+an actual local **never-pushed two-parent Git merge**
+`d2e4842b48566741daff4ab7202a403a37478995`.
+Full immutable Git core `atomicio.py`, `workspace.py`,
+`authority.py`, `documents.py` blobs preserved. **[CI
+41579981999](https://github.com/nrobertson152/RevisionWorx/actions/runs/41579981999)
+SUCCESS both Ubuntu + Windows Python 3.11**. Native full merged suite:
+Ubuntu **501 PASS / 2 SKIP**, Windows **500 PASS / 3 SKIP**.
+Frozen GUI + CLI actual offscreen Qt widget create/import/checkout/edit/checkin,
+two historic revision SHA-256 independent CLI exports, F5/restart,
+missing working-file and restore, Unicode relocated install and
+original workspace data preservation passed. Ubuntu passed Python/pip-free,
+nonroot/read-only-root `--network none` Docker including normal GUI
+launch. Windows passed 401-char and extended paths, localhost UNC and
+byte-range locked read refusal. **Not** an interactive or shippable build.
+
+**Additional actual safeguarding implementation:** nine
+`tools/packaging/test_stage_exact_git_merge.py` local real-Git fixture
+tests now run alongside nine prior overlay staging controls in
+`.github/workflows/revisionworx-merge-stager-tests.yml`.
+After documenting failed initial Win CRLF clone fixture and accidental
+Python indentation regression, test source `013c3a5`
+[CI 41580746150](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580746150)
+is **4/4 SUCCESS** on native Ubuntu/Windows × Python 3.11/3.13.
+Each platform runs **9+9 PASS / 0 FAIL**, including actual conflicting
+Git merges and refusal to change `revisionworx` authority files.
+The red historical runs [41580498901](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580498901)
+and [41580643954](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580643954)
+are preserved as honest test-harness failures, not production defect
+evidence.
+
+**P1 HOLD remains despite strong new functionality CI:** Independent QA
+[four-platform malformed-journal negative gates 41580089612](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580089612),
+[41580332225](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580332225)
+show root malformed JSON raw `AttributeError`, nested corrupt
+records falsely `health.ok=True` or raw `TypeError`; strict desired
+safety assertions still FAIL on exact core 96f9. Independently
+Distributed [four-platform CAD atomic replacement 41580498940](https://github.com/nrobertson152/RevisionWorx/actions/runs/41580498940)
+proves `ContentStore.store_file` can return old bytes after same-size
+same-mtime save-by-rename, a P1 source-to-revision provenance failure;
+strict desired `SourceChangedError` XFAIL remains open. Both issues
+are reported to Claude A. **No production merge** or release until
+actual positive fixes re-accepted on exact new SHA by QA/Distributed
+and rechecked in Integration's full two-OS real-Git candidate.
+`main` vs PR #6 still has modify/delete conflict on
+`docs/DEVELOPMENT_PROGRESS.md`; safe Director merge order remains
+#7 -> #6 -> #14 -> #3 -> discretionary #4 -> #2.
+Latest detailed exact case matrix:
+[docs/MERGE_READINESS_SPRINT.md](https://github.com/nrobertson152/RevisionWorx/blob/integration/openschematix/docs/MERGE_READINESS_SPRINT.md)
+updated `04a339c`.
+
+PR #2 stays draft. No core, GUI, QA, Distributed or upstream
+OpenSchematix branch edited; no retarget, rebase, force push, release
+or change to separate baseline production packaging source pin.
