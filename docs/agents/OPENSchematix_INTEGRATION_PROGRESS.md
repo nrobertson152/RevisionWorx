@@ -536,3 +536,69 @@ Do NOT merge, backport, release or repin baseline authority workflow;
 separate revisionworx-packaging-readiness.yml still pins d656884b. PR #2
 remains draft. New acceptance does not inherit safety approval for any core
 commit.
+
+
+## 2026-11-02 — current GUI 17651af acceptance + observable/F5 regression
+
+**Assignment:** independently accept newer Claude B desktop alpha from PR #14,
+without production-core repin, with real frozen Qt create/import/check-in/
+history/restart, SHA-256 export verification, Linux isolated runtime and
+Windows packaged-path validation. Exact tested GUI SHA
+17651af68128572c7c83429513044a5948dd07bd; its own native GUI
+[CI 41570211687](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570211687)
+completed SUCCESS Ubuntu and Windows Python 3.11. Claude B's subsequent
+3c11c774 commit changed documentation/screenshots only, not GUI code.
+
+**New integration commits:** ce699aac650d2493ff757ff8da1ccb3404be139d
+repinned ONLY the separate alpha test-workflow source to 17651af;
+3df2ad9a54a1980223021a557529efeb999cc365 added actual frozen widget
+assertions for GUI observable-state contract version 1, initial project and
+document selection, import/checkout/check-in action states, no false error
+for successful check-in, selected document/history retained by F5, and
+persistent observable state after separate-process reopen;
+b4866ec56e20af02f882699749feddd7cab23e0f made the host-side verifier
+REQUIRE these explicit JSON evidence fields and report them.
+
+**Verified exact [alpha CI run 41570682514](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570682514)
+at integration test SHA b4866ec56e20af02f882699749feddd7cab23e0f:
+BOTH Ubuntu and Windows Python 3.11 SUCCESS.** Each ran five packaging
+safeguard tests, built test-only frozen PyInstaller GUI and separate CLI,
+relocated both onedir distributions into Unicode/spaces paths, performed
+Qt widget create/project select, ImportDialog, checkout and CheckinDialog,
+generated two immutable revisions, used a new GUI process to reopen,
+verified persisted GUI and contract-v1 observable state, verified F5
+preserves selected project/document and history, independently exported
+and SHA-256 verified BOTH historical revisions through the frozen CLI,
+and confirmed authoritative read-only workspace hashes were unchanged.
+The log prints gui_observable_contract_v1=true,
+gui_f5_selection_preserved=true, revision_count=2,
+cli_independent_exports_sha256=true, separate_gui_process_reopen=true.
+Each job provenance confirms alpha_acceptance_test_wrapper=true and
+source_sha=17651af68128572c7c83429513044a5948dd07bd.
+
+**Ubuntu runtime:** Python/pip-free, nonroot/read-only-root Docker,
+network=none; relocated GUI/CLI Qt widget workflow, independent historical
+exports and normal non-probe GUI startup all passed. Log:
+OFFLINE_ALPHA_GUI_EVIDENCE python=absent network=none copied_bundle=pass
+qt_create_import_checkout_checkin=pass qt_reopen=pass cli_sha_exports=pass
+normal_gui_start=pass. **Windows:** 401-character local, extended-length,
+localhost UNC read and byte-range lock read-rejection tests passed, original
+SHA-256 files preserved. Windows had no Python on child PATH, not a clean
+Python-free OS or physically disconnected network.
+
+**Unmodified older baseline packaging workflow:** [run 41570682310](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570682310)
+at the same integration SHA b4866ec56e20af02f882699749feddd7cab23e0f
+passed Ubuntu/Windows, five builder tests and three disposable fault-injection
+tests per OS, frozen GUI/CLI and copied read-only workspace; Ubuntu Python-free
+network-none container lifecycle and both historical exports passed.
+Its provenance STILL pins production source
+d656884b39401134149273dd0121ef620b76eb8e and
+alpha_acceptance_test_wrapper=false.
+
+**Scope and blocker:** This accepts exact-source offscreen frozen-GUI
+functionality only, not manual user-operated UI, real Windows disconnected
+VM without Python, signing/installer/upgrades, power loss, socket audit or
+multiuser SMB. QA has demonstrated three genuinely protocol-only
+dual-effective-writer races on earlier Phase 2 d2b7a1c; Claude A owns a
+new correction and independent QA/Distributed safety decisions. No phase
+backport, core repin, merge, retarget or release. PR #2 remains draft.
