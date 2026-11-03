@@ -54,3 +54,30 @@ The GUI probe accepts only a newly created rw-alpha-fixture-* directory, refuses
 - Multiple-machine shared-filesystem certification.
 
 Only temporary single-user, local-filesystem workspaces are used. Neither green CI nor the alpha UI is suitable for irreplaceable production data. No merge or release is authorized.
+
+
+## Verified result and negative evidence
+
+[CI 41566749753](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566749753)
+at exact harness SHA 7fbd7b31135663f498bb15cc50dc80ba4919db9e,
+desktop alpha SHA f00aa31b6f66fbe0e78ff440aed7026e869138b3,
+**PASS on ubuntu-latest and windows-latest, Python 3.11 build runners**.
+Each ran 5/5 packaging safeguard unittests and completed the frozen
+GUI/CLI create, import, checkout/checkin, two-revision history, restart,
+historical SHA-256 exports and copied-workspace integrity checks.
+Ubuntu also **passed** the fully network-unreachable/Python-free container
+runtime for these operations. The separate older-source packaging run
+[41566749764](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566749764)
+passed both OS at the same harness SHA and unmodified d656884b source pin.
+
+The first alpha matrix [41566452430](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566452430)
+failed on both OS only during repeated test verification: the CLI correctly
+refused to overwrite its prior export target. Unique destination files were
+introduced in 7fbd7b3, with unchanged SHA-256 and exclusive-write assertions.
+
+The newer GUI branch e5725df17218b5bb9fb975389a0580aed63f2205 is
+NOT covered by this accepted test. Its own [CI 41566802123](https://github.com/nrobertson152/RevisionWorx/actions/runs/41566802123)
+failed 10 Qt tests on each OS due to an invalid relative import of
+CommittedNotApplied in the GUI document tab. Reported to Claude B. Keep the
+frozen-alpha source pinned until a fixed GUI SHA passes independently.
+No interactive/manual app acceptance or release authorization is implied.
