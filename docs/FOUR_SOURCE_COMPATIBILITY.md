@@ -51,3 +51,12 @@ Independent QA/Distributed Systems have already **rejected/halted** the exact `9
 4. Only after independent safety acceptance consider a separate frozen PyInstaller module-inclusion test; current source/wheel tests do not prove the application bundles BOM or ECR/ECO.
 
 **Permitted use:** exploratory native local-workspace integration testing. **Not permitted:** production use, installation/release claims, multiuser certification, unsupported auto migration, or manufacturing document safety claims.
+
+## Source movement after frozen candidate (not covered by this evidence)
+
+At the later GitHub check both feature branches advanced **by two commits each**. The source comparisons confirm these are **not merely documentation changes**, and their work is **not included in the tested synthetic SHA `6c9950b`**:
+
+- BOM PR #21: `59c0f7b` → `7775f4f` → **`8f67bfedcca2ea619035556fdeed52bf0c4ca30a`**. New standard-library XLSX and purchasing functionality and a correction for two P1 catalog transaction/import regressions, plus tests. The original 1,141-test composite predates these corrections. New BOM commit needs its own exact-SHA integration and QA checks.
+- Change-control PR #20: `cb68433` → `3038c9b` → **`724993c74bd7aa6f2c00ed38f8b44c39a42bdd08`**. New ECR rework semantics and corrected ECO dependency content binding, including changes to model/workflow and tests. A fresh independent review and actual combined merge test are necessary.
+
+The original four-source CI remains useful as historical baseline interoperability evidence, not latest-head certification. Never silently replace these pinned sources inside the existing workflow or retarget PRs. A new, clearly labeled, pinned candidate should follow owner API review and completion of P1 core fixes.
