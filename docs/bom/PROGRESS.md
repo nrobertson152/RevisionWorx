@@ -128,3 +128,20 @@ native file reference preservation, document-link verification, and a transactio
 - `pytest -q -ra`: 680 passed, 1 skipped (Qt).
 - BOM tests: 435 passed.
 - CI results are on #18 and PR #21 in the check-in.
+
+## Checkpoint 4: 2026-11-03, REQUIREMENTS.md section 6 gaps (XLSX, purchasing view)
+
+I checked this out on #18 and asked for a Codex review on PR #21. Added:
+- `bom/xlsx.py`: standard-library XLSX export and import with zip-bomb and DOCTYPE guards; formula and error
+  cells refused;
+- `bom/purchasing.py`: a derived buy list, separate from the engineering BOM;
+- CLI support for `.xlsx` input and output, and a `purchase` command;
+- a fix so imported CSV parts take their unit from first use (regression test in `test_bom_csv.py`).
+
+**Tests:** `tests/test_bom_xlsx_purchasing.py` adds 15 tests. One of them, the openpyxl interoperability test,
+skips when openpyxl is absent.
+
+**Evidence:** sandbox Linux, Python 3.13.18, with openpyxl 3.1.5 installed.
+- `pytest -q -ra`: 696 passed, 1 skipped (Qt).
+- BOM tests: 452 passed.
+- CI results are on #18 in the check-in.

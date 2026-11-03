@@ -225,8 +225,7 @@ python -m revisionworx.bom explode docs/bom/examples/pump-indented.csv
   was touched. The widget boundary needs Claude B's approval.
 - **Core request (PR #7).** List `documents.read_revision_bytes` in CORE_API.md as Provisional or Stable.
 - **Not done:**
-  - XLSX import/export;
-  - manufacturing/purchasing BOM views (REQUIREMENTS.md section 6 separates them from the engineering BOM);
+  - a full manufacturing BOM (routing, scrap, alternates); only a derived buy list exists (section 8);
   - cost and mass rollup;
   - persisted where-used index;
   - OpenSchematix native BOM mapping.
@@ -320,3 +319,52 @@ here is a claim about SMB, NFS or multiple hosts.
    is claimed beyond that.
 4. `WorkspaceCatalogStore` registers six record kinds at construction. A core that later reserves one of these
    names would need a rename, which would be a data contract change (DATA_CONTRACT.md).
+
+## 8. XLSX and the derived purchasing list (REQUIREMENTS.md section 6)
+
+**XLSX** (`bom.xlsx`, standard library only).
+
+| Function | Purpose |
+|---|---|
+| `structure_to_xlsx`, `parts_to_xlsx` | Write a structure or a parts list as a worksheet |
+| `csv_to_xlsx(report_csv)` | Turn any CSV report from this package into a worksheet |
+| `table_to_xlsx(header, rows)` | Write any table |
+| `structure_from_xlsx`, `structure_from_indented_xlsx`, `parts_from_xlsx` | Read a worksheet; `sheet=` picks one by name, default the first |
+| `read_rows` | The raw rows of a worksheet, with their real row numbers |
+
+- **Export.**
+  - Every cell is an inline string, so values stay exact and are never evaluated as formulas. The CSV formula
+    guard is therefore not applied.
+  - Member order and timestamps are fixed, so the same table always gives the same bytes in one Python build.
+    The bytes are not frozen as golden files, because deflate output depends on the zlib version.
+- **Import.**
+  - Worksheet rows go through the CSV importers, so columns, validation, errors (with real worksheet row and
+    column) and all-or-nothing behaviour are the same as for CSV.
+  - Excel numbers are read as the exact text stored in the file.
+  - **Refused, each with a reason:**
+    - formula cells (paste values only);
+    - error cells;
+    - broken shared-string references;
+    - non-ZIP and encrypted files;
+    - archives with too many parts, or members that expand past 256 MiB (or 512 MiB in total). The limit is
+      checked before full expansion.
+    - XML with a `DOCTYPE` or entity declaration;
+    - `.xls` files.
+- Shared strings and numeric cells written by other tools are tested with hand-built workbooks. Interoperability
+  with openpyxl is tested only where openpyxl is installed, which is not the case in CI.
+- **CLI.** An output file ending in `.xlsx` is written as a worksheet, and `.xlsx` input files are accepted.
+
+**Purchasing list** (`bom.purchasing_list(structure, root, quantity, parts=...)`, CLI `purchase`). This is a buy
+list derived from the engineering BOM, which it never changes.
+- **Included:** leaf items only. Items with their own BOM are made, not bought. `document` items are
+  reference-only and excluded.
+- **Quantities:** each row shows the exact `required` total and an `order_quantity`. For count units the order
+  quantity is rounded up, and the row is flagged `rounded-up`.
+- **Sources:** catalog manufacturer and vendor references.
+- **Flags:** `no-source`, `obsolete`, `unresolved` and `needs-verification`.
+- **Not modelled:** scrap, stock, lead times, prices and alternates. The export says so.
+
+**Import unit inference (behaviour change, with a regression test).** A part imported from CSV with no item row
+and no catalog match used to get the unit `EA`. A part first used as "2.5 m" therefore failed with a unit error.
+It now takes the unit of the first line that uses it. Units from item rows and from the catalog are never
+overridden.

@@ -43,6 +43,14 @@ def test_unicode_survives_and_bom_or_no_bom_both_read():
         assert structure_from_csv(structure_to_csv(s, excel=excel)) == s
 
 
+def test_unresolved_parts_take_their_unit_from_first_use():
+    s = structure_from_csv(b"parent_number,child_number,quantity,unit\nA,HOSE,2.5,m\nB,HOSE,500,mm\nA,BOLT,4,EA\n")
+    assert s.part("pn:hose").unit == "m" and s.part("pn:bolt").unit == "EA"
+    assert rollup(s, "pn:b").total("pn:hose") == D("0.5")
+    declared = structure_from_csv(b"parent_number,child_number,quantity,unit,part_unit\n,HOSE,,,mm\nA,HOSE,2,m,\n")
+    assert declared.part("pn:hose").unit == "mm"        # an item row's unit is never overridden
+
+
 def test_cp1252_files_need_the_encoding_named():
     data = "parent_number,child_number,quantity\nGehäuse,Schraube,2\n".encode("cp1252")
     with pytest.raises(CsvImportError, match="not valid utf-8-sig text"):

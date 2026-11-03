@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Command line for BOM files: ``python -m revisionworx.bom <command> ...``.
 
-Works on files only (CSV or RevisionWorx BOM JSON); it never opens a workspace. Exit status: 0 success,
+Works on files only (CSV, XLSX or RevisionWorx BOM JSON); it never opens a workspace. Output to a file
+ending in ``.xlsx`` is written as a worksheet. Exit status: 0 success,
 1 validation errors found, 2 the input could not be read or the command failed.
 """
 from __future__ import annotations
@@ -25,6 +26,15 @@ from .workspace_adapter import single_root, sniff_layout
 
 def _load(path: str, layout: str, root: str) -> BomSnapshot:
     p = Path(path)
+    if p.suffix.casefold() == ".xlsx":
+        from . import xlsx
+        rows = xlsx.read_rows(p)
+        header = " ".join(c.casefold() for c in rows[0][1]) if rows else ""
+        if layout == "indented" or (layout == "auto" and ("level" in header or header.startswith("item"))):
+            st, r = csvio.structure_from_indented_csv(rows, root_number=root, formula_guard=False)
+            return BomSnapshot(st, r, p.stem)
+        st = csvio.structure_from_csv(rows, formula_guard=False)
+        return BomSnapshot(st, single_root(st, root), p.stem)
     data = csvio.read_file(p, csvio.MAX_CSV_BYTES)
     if layout == "json" or (layout == "auto" and p.suffix.casefold() == ".json"):
         loaded = load_any(data)
@@ -39,6 +49,9 @@ def _load(path: str, layout: str, root: str) -> BomSnapshot:
 
 
 def _emit(data: bytes, out: str | None, overwrite: bool) -> None:
+    if out and out.casefold().endswith(".xlsx") and not data.startswith(b"PK"):
+        from .xlsx import csv_to_xlsx
+        data = csv_to_xlsx(data)
     if out:
         csvio.save(data, out, overwrite=overwrite)
         print(f"wrote {out}", file=sys.stderr)
@@ -84,7 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("before")
     c.add_argument("after")
     c.add_argument("context", nargs="*")
-    v = sub.add_parser("convert", help="convert to parent-child CSV or JSON (by output extension)")
+    pu = sub.add_parser("purchase", help="derived buy list (leaf items, count units rounded up)")
+    pu.add_argument("file")
+    pu.add_argument("--quantity", default="1")
+    v = sub.add_parser("convert", help="convert to parent-child CSV, XLSX or JSON (by output extension)")
     v.add_argument("file")
     args = ap.parse_args(argv)
     from .units import parse_quantity
@@ -123,6 +139,11 @@ def main(argv: list[str] | None = None) -> int:
             ctx = [_load(f, args.layout, "") for f in args.context]
             rep = change_impact(a, b, ctx)
             _emit(csvio.change_impact_to_csv(rep, excel=False), args.output, args.overwrite)
+        elif args.cmd == "purchase":
+            from .purchasing import purchasing_list, purchasing_to_csv
+            snap = _load(args.file, args.layout, args.root)
+            pl = purchasing_list(snap.structure, snap.root_id, parse_quantity(args.quantity))
+            _emit(purchasing_to_csv(pl, excel=False), args.output, args.overwrite)
         elif args.cmd == "convert":
             snap = _load(args.file, args.layout, args.root)
             if args.output and args.output.casefold().endswith(".json"):

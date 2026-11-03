@@ -101,34 +101,17 @@ def _canon_header(raw: str) -> str:
 class _Rows:
     """Decoded CSV rows with physical line numbers and canonical headers."""
 
-    def __init__(self, data: bytes, *, encoding: str, max_rows: int, formula_guard: bool):
+    def __init__(self, data, *, encoding: str, max_rows: int, formula_guard: bool):
+        """``data`` is CSV bytes, or already-parsed ``[(row number, [cells]), ...]`` (the XLSX reader)."""
         self.problems: list[CsvProblem] = []
         self.formula_guard = formula_guard
-        if b"\x00" in data:
-            line = data[:data.index(b"\x00")].count(b"\n") + 1
-            raise CsvImportError([CsvProblem(line, "", "file contains NUL bytes; it is not a text CSV file")])
-        try:
-            text = data.decode(encoding)
-        except UnicodeDecodeError as exc:
-            line = data[:exc.start].count(b"\n") + 1
-            raise CsvImportError([CsvProblem(line, "", f"not valid {encoding} text at byte {exc.start}; save the "
-                                             "file as UTF-8 or name its encoding")]) from None
-        except LookupError:
-            raise CsvImportError([CsvProblem(0, "", f"unknown encoding {encoding!r}")]) from None
-        if text.startswith("﻿"):
-            text = text[1:]
-        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
         self.rows: list[tuple[int, list[str]]] = []
-        start = 1
-        try:
-            for record in reader:
-                if len(self.rows) > max_rows:
-                    raise CsvImportError([CsvProblem(start, "", f"more than {max_rows} rows")])
-                if any(c.strip() for c in record):
-                    self.rows.append((start, record))
-                start = reader.line_num + 1
-        except csv.Error as exc:
-            raise CsvImportError([CsvProblem(reader.line_num or start, "", f"malformed CSV: {exc}")]) from None
+        if isinstance(data, list):
+            if len(data) > max_rows + 1:
+                raise CsvImportError([CsvProblem(data[max_rows + 1][0], "", f"more than {max_rows} rows")])
+            self.rows = [(n, list(r)) for n, r in data if any(c.strip() for c in r)]
+        else:
+            self._parse_csv(data, encoding, max_rows)
         if not self.rows:
             raise CsvImportError([CsvProblem(0, "", "the file is empty")])
         hline, header = self.rows.pop(0)
@@ -145,6 +128,32 @@ class _Rows:
         for line, record in self.rows:
             if len(record) > len(self.columns) and any(x.strip() for x in record[len(self.columns):]):
                 self.problem(line, "", f"{len(record)} values but only {len(self.columns)} column headers")
+
+    def _parse_csv(self, data: bytes, encoding: str, max_rows: int) -> None:
+        if b"\x00" in data:
+            line = data[:data.index(b"\x00")].count(b"\n") + 1
+            raise CsvImportError([CsvProblem(line, "", "file contains NUL bytes; it is not a text CSV file")])
+        try:
+            text = data.decode(encoding)
+        except UnicodeDecodeError as exc:
+            line = data[:exc.start].count(b"\n") + 1
+            raise CsvImportError([CsvProblem(line, "", f"not valid {encoding} text at byte {exc.start}; save the "
+                                             "file as UTF-8 or name its encoding")]) from None
+        except LookupError:
+            raise CsvImportError([CsvProblem(0, "", f"unknown encoding {encoding!r}")]) from None
+        if text.startswith("\ufeff"):
+            text = text[1:]
+        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+        start = 1
+        try:
+            for record in reader:
+                if len(self.rows) > max_rows:
+                    raise CsvImportError([CsvProblem(start, "", f"more than {max_rows} rows")])
+                if any(c.strip() for c in record):
+                    self.rows.append((start, record))
+                start = reader.line_num + 1
+        except csv.Error as exc:
+            raise CsvImportError([CsvProblem(reader.line_num or start, "", f"malformed CSV: {exc}")]) from None
 
     def problem(self, row: int, column: str, message: str) -> None:
         if len(self.problems) < MAX_PROBLEMS:
@@ -240,7 +249,9 @@ def _make_line(rows: _Rows, line: int, **kw) -> BomLine | None:
         return None
 
 
-def _read(source: bytes | str | Path, encoding: str, max_bytes: int) -> bytes:
+def _read(source, encoding: str, max_bytes: int):
+    if isinstance(source, list):   # pre-parsed rows from the XLSX reader
+        return source
     if isinstance(source, (str, Path)):
         return read_file(source, max_bytes)
     data = bytes(source)
@@ -325,6 +336,13 @@ def structure_from_csv(source: bytes | str | Path, *, catalog: CatalogReader | N
         if ln is not None:
             lines.append(ln)
     rows.fail_if_problems()
+    # An unresolved part with no item row only knows its number; take its unit from the first line that
+    # uses it, so "2.5 m of HOSE" does not turn HOSE into a count item. Declared or catalog parts keep theirs.
+    for ln in sorted(lines, key=BomLine.sort_key):
+        info = ids.parts.get(ln.child_id)
+        if info is not None and not info.resolved and info == PartInfo(info.part_id, number=info.number,
+                                                                      resolved=False):
+            ids.parts[ln.child_id] = PartInfo(info.part_id, number=info.number, unit=ln.unit, resolved=False)
     return _finish(rows, lines, ids)
 
 

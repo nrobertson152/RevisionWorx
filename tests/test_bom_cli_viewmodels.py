@@ -118,3 +118,18 @@ def test_examples_are_valid_and_consistent():
         assert validate(s, roots=s.top_level_ids).ok, name
     with pytest.raises(Exception):
         structure_from_csv(EXAMPLES / "pump-indented.csv")  # indented: needs the indented importer
+
+
+def test_cli_xlsx_and_purchase(capsysbinary, tmp_path):
+    a = EXAMPLES / "hpu-frame-rev-B.csv"
+    book = tmp_path / "frame.xlsx"
+    code, _, _ = run(capsysbinary, "-o", book, "convert", a)
+    assert code == 0 and book.read_bytes()[:2] == b"PK"
+    code, csv_out, _ = run(capsysbinary, "rollup", a)
+    code2, xlsx_out, _ = run(capsysbinary, "rollup", book)
+    assert code == code2 == 0 and csv_out == xlsx_out          # same answer from either file format
+    code, out, _ = run(capsysbinary, "purchase", book, "--quantity", "2")
+    assert code == 0 and "BOLT-M10-30,pn:bolt-m10-30,Hex bolt M10x30 8.8 zinc,40,40,EA" in out and "NOTE" in out
+    report = tmp_path / "rollup.xlsx"
+    code, _, _ = run(capsysbinary, "-o", report, "rollup", a)
+    assert code == 0 and report.read_bytes()[:2] == b"PK"

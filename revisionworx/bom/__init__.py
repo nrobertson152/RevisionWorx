@@ -45,6 +45,9 @@ from .store import CatalogStore, MemoryCatalogStore, StoreConflict, StoreError, 
 from .catalog_service import CatalogError, EditRejected, PartsCatalogService
 from .parts_csv import export_parts, import_parts, parts_from_csv, parts_to_csv
 from .integrations import ChangeControlWhereUsed
+from .purchasing import BuyLine, PurchasingList, purchasing_list, purchasing_to_csv
+from .xlsx import (csv_to_xlsx, parts_from_xlsx, parts_to_xlsx, structure_from_indented_xlsx, structure_from_xlsx,
+                   structure_to_xlsx, table_to_xlsx)
 
 API_VERSION = 1
 
