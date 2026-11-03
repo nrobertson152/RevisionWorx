@@ -7,6 +7,8 @@ on:
     paths:
       - 'tools/packaging/stage_corrected_core_gui.py'
       - 'tools/packaging/test_stage_corrected_core_gui.py'
+      - 'tools/packaging/alpha_frozen_probe.py'
+      - 'tools/packaging/smoke_alpha.py'
       - '.github/workflows/revisionworx-corrected-core-compatibility.yml'
   workflow_dispatch:
 
