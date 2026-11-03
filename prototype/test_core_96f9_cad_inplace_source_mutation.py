@@ -65,6 +65,8 @@ class InPlaceSourceRewrite(unittest.TestCase):
                         os.fsync(writer.fileno())
                     if preserve_mtime:
                         os.utime(target, ns=(initial.st_atime_ns, initial.st_mtime_ns))
+                    else:
+                        os.utime(target, ns=(initial.st_atime_ns, initial.st_mtime_ns + 10_000_000_000))
                     events.append(True)
                 return original_bytes
             def fileno(self):
