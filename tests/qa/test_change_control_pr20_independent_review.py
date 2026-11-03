@@ -144,15 +144,15 @@ def test_control_multi_request_merge_preserves_required_action_and_rejects_confl
         {"item_type": "document", "item_id": DOC, "action": "reference"}])
     rev = approve_request(svc, actors, title="Actual revision", affected=[
         {"item_type": "document", "item_id": DOC, "action": "revise"}])
+    obsolete = approve_request(svc, actors, title="Retire drawing", affected=[
+        {"item_type": "document", "item_id": DOC, "action": "obsolete"}])
+    with pytest.raises(ValidationError, match="conflicting actions"):
+        svc.create_order([rev.id, obsolete.id])
     merged = svc.create_order([ref.id, rev.id])
     assert merged.affected[0].action.value == "revise"
     svc.start_work(merged.id)
     with pytest.raises(DependencyError, match="implementation"):
         svc.mark_implemented(merged.id)
-    obsolete = approve_request(svc, actors, title="Retire drawing", affected=[
-        {"item_type": "document", "item_id": DOC, "action": "obsolete"}])
-    with pytest.raises(ValidationError, match="conflicting actions"):
-        svc.create_order([rev.id, obsolete.id])
 
 
 def test_control_identical_csv_import_retry_is_idempotent():
