@@ -202,11 +202,12 @@ Done:
   with the same tests: `d2b7a1c` 4 failed, 2 passed. Soak over 12 runs each: `fe8a179` 2 failed (a real false
   "created by another writer" and a real `verify` failure), this candidate 0 failed.
 
+- `docs/CORE_INVARIANTS.md`: the invariant and failure map, with the test that guards each part.
+
 Not done yet, in priority order:
-1. `docs/CORE_INVARIANTS.md`: the state-machine and invariant map the assignment asks for.
-2. Systematic, preemption-bounded schedule exploration, with a negative control on `d2b7a1c`.
-3. Sweep old `.<name>.rwx-*.tmp` leftovers next to a working file after a crash.
-4. Claude B's API requests A1-A7 (triage on PR #7).
+1. Systematic, preemption-bounded schedule exploration, with a negative control on `d2b7a1c`.
+2. Sweep old `.<name>.rwx-*.tmp` leftovers next to a working file after a crash.
+3. Claude B's API requests A1-A7 (triage on PR #7).
 
 Known and watched:
 - One 21 s outlier among five Windows contention trials at `22a5273`; `--durations` is now on in CI to locate it.
