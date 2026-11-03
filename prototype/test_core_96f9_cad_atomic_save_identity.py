@@ -76,6 +76,42 @@ class CadAtomicReplacement(unittest.TestCase):
                     b"OLD-CAD-DATA", "captured bytes are from old open handle, not current CAD pathname")
             return outcome
 
+
+    def test_file_identity_is_stable_when_source_is_not_replaced(self):
+        before = self.source.stat()
+        with self.atom._open_for_read(self.source) as handle:
+            opened = os.fstat(handle.fileno())
+            after = self.source.stat()
+            self.assertEqual(
+                (before.st_dev, before.st_ino),
+                (opened.st_dev, opened.st_ino),
+                "opened handle must refer to the same object as the initial pathname")
+            self.assertEqual(
+                (opened.st_dev, opened.st_ino),
+                (after.st_dev, after.st_ino),
+                "unchanged source pathname must still name the opened file")
+
+    def test_file_identity_detects_backup_then_rename_despite_same_size_and_mtime(self):
+        """Portable fstat/stat file IDs can detect the failing provenance interleaving."""
+        before = self.source.stat()
+        with self.atom._open_for_read(self.source) as handle:
+            opened = os.fstat(handle.fileno())
+            replacement = self.source.with_suffix(".tmp")
+            replacement.write_bytes(b"NEW-CAD-DATA")
+            os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+            os.replace(self.source, self.source.with_suffix(".previous"))
+            os.rename(replacement, self.source)
+            after = self.source.stat()
+            self.assertEqual((before.st_size, before.st_mtime_ns),
+                             (after.st_size, after.st_mtime_ns))
+            self.assertEqual((before.st_dev, before.st_ino),
+                             (opened.st_dev, opened.st_ino))
+            self.assertNotEqual((opened.st_dev, opened.st_ino),
+                                (after.st_dev, after.st_ino),
+                                "portable file identity must catch replacement missed by size+mtime")
+            self.assertEqual(handle.read(), b"OLD-CAD-DATA")
+            self.assertEqual(self.source.read_bytes(), b"NEW-CAD-DATA")
+
     def test_unsafe_same_size_same_mtime_backup_then_rename_is_not_detected(self):
         self.assertEqual(self._capture_after_replacement(preserve_mtime=True)[0], "stored")
 
