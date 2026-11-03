@@ -1,11 +1,11 @@
 """Exact-core content snapshot substitution regression; separate from .revisionworx threat model.
 
-A CAD editor may save by writing a temporary file and renaming over the
-working file. If the replacement has the SAME size and mtime, size+mtime
+A CAD editor may save by renaming the old working file to a backup,
+then renaming a temporary replacement to the original path. If the replacement has the SAME size and mtime, size+mtime
 alone do not prove that the open file still represents the current path.
 
-This test forces the replacement *after the original reader handle opens*
-but before content is copied. It uses actual native rename and file I/O.
+This test forces a two-rename save *after the original reader handle opens*
+but before content is copied; each rename is a native OS operation. It uses actual native rename and file I/O.
 On Windows this also exercises the new FILE_SHARE_DELETE reader path.
 
 Tests labeled UNSAFE explicitly document old behavior, not acceptance.
@@ -54,7 +54,8 @@ class CadAtomicReplacement(unittest.TestCase):
                 replacement.write_bytes(replacement_bytes)
                 if preserve_mtime:
                     os.utime(replacement, ns=(self.old_stat.st_atime_ns, self.old_stat.st_mtime_ns))
-                os.replace(replacement, source)
+                os.replace(source, source.with_suffix(".previous"))
+                os.rename(replacement, source)
                 happened.append(True)
             return fh
         with self.workspace.Workspace.create(self.root, "cad replace") as ws, \
@@ -75,15 +76,32 @@ class CadAtomicReplacement(unittest.TestCase):
                     b"OLD-CAD-DATA", "captured bytes are from old open handle, not current CAD pathname")
             return outcome
 
-    def test_unsafe_same_size_same_mtime_atomic_save_is_not_detected(self):
+    def test_unsafe_same_size_same_mtime_backup_then_rename_is_not_detected(self):
         self.assertEqual(self._capture_after_replacement(preserve_mtime=True)[0], "stored")
 
     @unittest.expectedFailure
-    def test_positive_safety_atomic_save_with_preserved_mtime_must_be_rejected(self):
+    def test_positive_safety_backup_then_rename_with_preserved_mtime_must_be_rejected(self):
         self.assertEqual(self._capture_after_replacement(preserve_mtime=True)[0], "changed",
                          "the pathname now points to a different file: SourceChangedError expected")
 
-    def test_control_changed_mtime_atomic_save_is_rejected(self):
+
+    @unittest.skipUnless(os.name == "nt", "Windows native overwrite semantics")
+    def test_native_windows_open_reader_blocks_one_step_replace_into_open_target(self):
+        """WinError 5 from os.replace(temp, opened source) even with FILE_SHARE_DELETE.
+
+        A direct rename of the *open source* to a backup is allowed instead.
+        This is an independent availability limitation, not journal corruption.
+        """
+        replacement = self.source.with_suffix(".tmp")
+        replacement.write_bytes(b"NEW-CAD-DATA")
+        with self.atom._open_for_read(self.source):
+            with self.assertRaises(PermissionError) as caught:
+                os.replace(replacement, self.source)
+            self.assertEqual(getattr(caught.exception, "winerror", None), 5)
+        os.replace(replacement, self.source)
+        self.assertEqual(self.source.read_bytes(), b"NEW-CAD-DATA")
+
+    def test_control_changed_mtime_backup_then_rename_is_rejected(self):
         # Ensure mtime differs even on a coarse-resolution filesystem.
         changed = []
         original = self.atom._open_for_read
@@ -93,7 +111,8 @@ class CadAtomicReplacement(unittest.TestCase):
                 replacement = self.source.with_suffix(".tmp")
                 replacement.write_bytes(b"NEW-CAD-DATA")
                 os.utime(replacement, ns=(self.old_stat.st_atime_ns, self.old_stat.st_mtime_ns + 10_000_000_000))
-                os.replace(replacement, self.source)
+                os.replace(self.source, self.source.with_suffix(".previous"))
+                os.rename(replacement, self.source)
                 changed.append(True)
             return fh
         with self.workspace.Workspace.create(self.root, "cad replace") as ws, \
