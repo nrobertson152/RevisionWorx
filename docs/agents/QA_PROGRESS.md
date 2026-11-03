@@ -409,3 +409,16 @@ The previously pending Windows jobs **COMPLETED SUCCESS**, making [CI 4157115316
 - Windows Python 3.13: 3 ordinary positive P1 PASS / 3 obsolete unsafe SKIP; 4 separate-process crash/restart PASS; full **255 PASS / 4 SKIP**.
 
 All four corresponding [old-source negative control jobs 41571222000](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571222000) completed SUCCESS as *demonstrations of three old defects*: each 3 deliberately UNSAFE PASS and 3 strict positive safety XFAIL. **Independent scoped ACCEPT** of the three rev.4 protocol-only local P1 corrections on fe8a179, not a global ADR-019 formal proof or release authorization. No production source edits by QA.
+
+
+## 2026-11-02 ET — additional ADR-019 rev.4 fail-closed fault gates (beyond accepted P1s)
+
+**Core remains unchanged:** `fe8a179f0203ef08151dc8459c84609dc639c4fe`. QA independently implemented three focused, production-API fault-barrier tests at `tests/qa/test_rev5_failclosed_faults.py` commit `f9772d91d8b24854baf686a26e177e1fe58675a8`; no production files or other branches edited:
+
+1. **Revocation journal publication failure:** an injected `PermissionError` immediately before publishing the actual token's revocation causes a real lock displacement to leave intact `.releasing-*/.fencing-*` scanner-visible custody with unrevoked token, not silent evidence disposal. A subsequent ordinary writer fences B durably and its journal-backed C record becomes effective.
+2. **Persistent simulated Windows sharing denial:** every attempted `writer.lock -> .releasing-*` move raises `PermissionError`, exercising bounded retries. The legitimate B writer lock remains untouched and unrevoked; C cannot open writable, and B can still commit effectively.
+3. **Unreadable `.fencing-*` orphan:** an invalid token-bearing custody file blocks new writable authority with `WorkspaceCorruptError`; the file remains intact and the attempted writer lock is cleaned up. No administrative clearance is invented or approved.
+
+**Pinned matrix:** `.github/workflows/qa-rev5-failclosed-faults-pinned.yml` commit `51014dc6bc33baea283ae5160537dd66000a7953` checks out immutable production `fe8a179` and frozen QA `f9772d9` on native Ubuntu/Windows Python 3.11/3.13. **[CI 41572264122](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572264122) COMPLETED SUCCESS, all four jobs**, each **3 PASS, zero failed/skipped**. All 12 new cross-platform executions passed. These complement, but do not replace, the prior [four-platform P1 positive acceptance 41571153163](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571153163) and [historic defective negative control 41571222000](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571222000).
+
+**QA decision unchanged:** scoped ACCEPT of the three specific rev.4 trusted-local cooperative-protocol P1 corrections, plus these additional three fail-closed cases, on exact source fe8a179. No general authority proof; real shared SMB/NFS, physical power loss, malicious external lock file modification, manual installed GUI, Phase 1 backport, production merge or release are not approved. Continue adversarial scheduling/Windows real handle tests and other independent work before expanding scope.
