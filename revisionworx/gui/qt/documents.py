@@ -141,8 +141,14 @@ class DocumentsTab(QWidget):
 
     # ------------------------------------------------------------------ binding
     def load_project(self, project_id: str | None) -> None:
-        self.list_vm.load(project_id)
+        """Show a project's documents. Reloading the SAME project keeps the selected document;
+        switching projects clears it."""
+        keep = self.panel.doc_id if project_id and project_id == self.list_vm.project_id else None
         self.panel.load(None)
+        self.table.clearSelection()
+        self.list_vm.load(project_id)
+        if keep:
+            self.select_document(keep)
 
     def apply_filter(self) -> None:
         self.list_vm.text = self.filter.text()
@@ -158,7 +164,11 @@ class DocumentsTab(QWidget):
     def select_document(self, doc_id: str) -> None:
         for i, r in enumerate(self.list_vm.rows):
             if r["id"] == doc_id:
-                self.table.selectRow(i)
+                if self.selected_doc_id() == doc_id:  # no selectionChanged will fire
+                    if self.panel.doc_id != doc_id:
+                        self.run(lambda: self.panel.load(doc_id), refresh=False)
+                else:
+                    self.table.selectRow(i)
                 return
 
     def render_list(self) -> None:

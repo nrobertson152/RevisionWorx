@@ -299,9 +299,9 @@ class MainWindow(QMainWindow):
         row = self.list_vm.index_of(project_id) if project_id else None
         if row is None and self.list_vm.rows:
             row = 0
-        if row is not None:
+        if row is not None and self.selected_project_id() != self.list_vm.row_id(row):
             self.table.selectRow(row)
-        else:
+        else:  # nothing to select, or already selected (no signal would fire): load explicitly
             self.selection_changed()
 
     def selected_project_id(self) -> str | None:
