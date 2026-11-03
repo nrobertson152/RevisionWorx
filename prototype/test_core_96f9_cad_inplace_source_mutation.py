@@ -105,6 +105,16 @@ class InPlaceSourceRewrite(unittest.TestCase):
         self.assertEqual(self._run(preserve_mtime=True)[0], "changed",
                          "a changed source must not be recorded as a clean snapshot")
 
+    def test_independent_second_read_detects_inplace_change_missed_by_file_identity(self):
+        """A second digest pass can detect this specific mutation; no atomicity claim."""
+        outcome, captured_digest = self._run(preserve_mtime=True)
+        self.assertEqual(outcome, "stored")
+        current_digest, current_size = self.content.hash_file(self.cad)
+        self.assertEqual(current_size, len(NEW))
+        self.assertEqual(current_digest, hashlib.sha256(NEW).hexdigest())
+        self.assertNotEqual(captured_digest, current_digest,
+                            "second source read exposes stale capture despite equal size/mtime/file ID")
+
     def test_control_changed_mtime_catches_in_place_rewrite(self):
         self.assertEqual(self._run(preserve_mtime=False)[0], "changed")
 
