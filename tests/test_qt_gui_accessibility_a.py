@@ -179,3 +179,36 @@ def test_checkin_dialog_large_font_keeps_controls_inside_layout(qapp):
             assert dialog.rect().contains(widget.mapTo(dialog, widget.rect().bottomRight()))
     finally:
         dialog.reject()
+
+
+
+def test_repeated_checkin_escape_preserves_checkout_and_revision_chain(qapp, desktop):
+    """Repeated cancellation cannot commit or strand the user in a disabled UI."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import CheckinDialog
+
+    win, _ctl, _home, _doc = desktop
+    win.show()
+    qapp.processEvents()
+    tab = win.documents_tab
+    tab.checkout()
+    qapp.processEvents()
+    before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
+    assert tab.checkin_btn.isEnabled()
+
+    for attempt in range(3):
+        dialog = CheckinDialog(f"Repeated cancellation {attempt}", win)
+        dialog.setModal(True)
+        dialog.show()
+        dialog.activateWindow()
+        dialog.description.setFocus()
+        qapp.processEvents()
+        assert dialog.description.hasFocus()
+        QTest.keyClick(dialog.description, Qt.Key.Key_Escape)
+        qapp.processEvents()
+        assert dialog.result() == QtWidgets.QDialog.DialogCode.Rejected
+        assert not dialog.isVisible()
+        assert win.isEnabled()
+        assert tab.checkin_btn.isEnabled()
+        assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
