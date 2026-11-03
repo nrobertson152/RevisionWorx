@@ -280,6 +280,13 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
     journal_at_checkout = {p.name: p.read_bytes() for p in journal.glob("*.json")}
     history_before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
     assert tab.checkin_btn.isEnabled()
+    # Pin the managed content tree as well as the external CAD source. A
+    # cancelled dialog must not replace immutable revision objects on disk.
+    managed = home / ".revisionworx" / "objects"
+    objects_at_checkout = {
+        str(p.relative_to(managed)): p.read_bytes()
+        for p in managed.rglob("*") if p.is_file()
+    } if managed.exists() else {}
 
     seen = []
 
@@ -314,8 +321,14 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
         state = reopened.observable_state()
         assert tuple((r["id"], r["sha256"]) for r in state["history"]) == history_before
         assert state["selected_document"] == doc["id"]
+        assert reopened.documents_tab.checkin_btn.isEnabled(), (
+            "The pre-cancellation checkout must remain usable after reopening"
+        )
         assert source.read_bytes() == source_before
         assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_at_checkout
+        assert ({str(p.relative_to(managed)): p.read_bytes()
+                 for p in managed.rglob("*") if p.is_file()}
+                if managed.exists() else {}) == objects_at_checkout
         # The initial import must remain represented in the journal.
         assert set(journal_before).issubset(set(journal_at_checkout))
     finally:
