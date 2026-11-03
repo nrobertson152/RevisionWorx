@@ -88,3 +88,34 @@ def test_recovery_blocked_disables_all_document_write_buttons(qapp, desktop):
     qapp.processEvents()
     assert win.observable_state()["read_only"] is False
     assert win.observable_state()["actions"]["checkout"] is True
+
+
+def test_checkin_dialog_tab_shift_tab_and_escape_do_not_commit(qapp, desktop):
+    """Real Qt keystrokes traverse the form and Escape cancels without a write."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import CheckinDialog
+
+    win, ctl, _home, doc = desktop
+    win.show()
+    qapp.processEvents()
+    win.documents_tab.checkout()
+    before = len(ctl.document_history(doc["id"]))
+    dialog = CheckinDialog("drawing", win)
+    dialog.show()
+    dialog.activateWindow()
+    dialog.description.setFocus()
+    qapp.processEvents()
+    assert dialog.description.hasFocus()
+    QTest.keyClick(dialog.description, Qt.Key.Key_Tab)
+    qapp.processEvents()
+    assert dialog.label.hasFocus(), "Tab must leave multiline description for revision label"
+    QTest.keyClick(dialog.label, Qt.Key.Key_Backtab)
+    qapp.processEvents()
+    assert dialog.description.hasFocus(), "Shift+Tab must return to change description"
+    QTest.keyClick(dialog.description, Qt.Key.Key_Escape)
+    qapp.processEvents()
+    assert dialog.result() == QtWidgets.QDialog.DialogCode.Rejected
+    assert not dialog.isVisible()
+    assert len(ctl.document_history(doc["id"])) == before
+    assert win.documents_tab.checkin_btn.isEnabled(), "Cancellation must retain checkout"
