@@ -1,0 +1,50 @@
+name: QA Claude D two corrected Codex P2s pinned 3038c9
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-claude-d-fixed-p2-3038c9-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    name: "${{ matrix.os }} / Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 3038c9b89e09f45b99bb3ae6a5d09a1d4066e823
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: c7e90e5936059d515699ac006d0e7797aad10eb0
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Overlay frozen independent QA positive tests
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dst=Path("app/tests/qa")
+          dst.mkdir(parents=True,exist_ok=True)
+          shutil.copy2("qa/tests/qa/test_change_control_pr20_independent_review.py",dst)
+      - name: Install exact corrected candidate
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Show exact source and frozen QA SHA
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Independently accept stale ECR rework, ECO release digest, and existing controls
+        working-directory: app
+        run: |
+          python -m pytest -q -ra tests/qa/test_change_control_pr20_independent_review.py::test_control_approved_ecr_is_blocked_after_document_revision_changes tests/qa/test_change_control_pr20_independent_review.py::test_stale_approved_ecr_can_rework_and_rebaseline_without_reusing_old_approval tests/qa/test_change_control_pr20_independent_review.py::test_control_signed_eco_requires_release_approval_before_start tests/qa/test_change_control_pr20_independent_review.py::test_order_dependency_edit_invalidates_signed_release_content_and_restart tests/qa/test_change_control_pr20_independent_review.py::test_control_multi_request_merge_preserves_required_action_and_rejects_conflict tests/qa/test_change_control_pr20_independent_review.py::test_control_identical_csv_import_retry_is_idempotent
