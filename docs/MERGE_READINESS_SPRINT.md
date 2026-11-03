@@ -63,3 +63,37 @@ This order follows the core architect's safety rationale: **#7 → #6 → #14**,
 - The full native suite executes using Python 3.11 with PySide6/Qt in `offscreen` mode. Ubuntu Python-free, network-none Docker runtime is automated; Windows frozen runner removes Python from child PATH but is **not** a physically disconnected Python-free VM. Source GUI keyboard X11 CI is automated, not a human-operated interactive desktop acceptance.
 
 **Disposition:** reviewable P0 test-only integration candidate and proposed merge plan; PR #2 stays DRAFT. No merge, force-push, retarget, rebase, release or source modification to other engineers' branches.
+
+
+## 6. Moving-head checkpoint after the verified matrix
+
+**This is a deliberately pinned historical candidate, not a claim that every
+current PR head has been tested.** After the exact-source
+[41577732526](https://github.com/nrobertson152/RevisionWorx/actions/runs/41577732526)
+two-platform SUCCESS:
+
+- PR #7 advanced beyond `22a5273` to
+  `a03f1f00ab58b815534c4282b20ffc6503119aea` (new separate-process
+  crash tests/workflow/docs) and subsequently
+  `77ce2cb1b5bc742909639c502e1af29050f625da` (new
+  `revisionworx/index.py` SQLite busy/locking logic and regression tests).
+  The [`a03f1f0` Core CI 41577700770](https://github.com/nrobertson152/RevisionWorx/actions/runs/41577700770)
+  FAILED on Windows Python 3.13, while Windows Python 3.11 and both
+  Ubuntu versions succeeded. Claude A's later `77ce2cb` commit claims
+  correction for the WAL-init/open race; its fresh
+  [Core CI 41578429442](https://github.com/nrobertson152/RevisionWorx/actions/runs/41578429442)
+  was queued at this checkpoint. **No automatic acceptance transfer.**
+- PR #14 advanced to `0773bde599f39aee88a8a536c28673bc4a1e13f5`
+  by **one documentation/mockup-only commit**, verified via GitHub compare
+  from the tested `bd52cdf`. No runtime GUI files in that single follow-on.
+  Nonetheless the tested input SHA remains `bd52cdf`, not the newer head.
+- QA #3 and Distributed #4 research branches also advanced; their
+  own exact-source acceptance reports must control any release gate.
+
+**Required before the Director executes step 1:** freeze the corrected new
+core at a SHA with green native CI (including Windows Python 3.13),
+QA and Distributed independently recheck the changed implementation, and
+re-run this real-merge Windows/Linux full-suite and frozen matrix against
+that frozen core plus the chosen GUI SHA. The commit
+`664e6887cf59b090a09e954554128a57be1ca22d` exists ONLY in
+the CI temporary Git store, not in any GitHub branch or pull request.
