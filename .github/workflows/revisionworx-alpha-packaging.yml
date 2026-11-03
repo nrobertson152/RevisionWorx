@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nrobertson152/RevisionWorx
-          ref: f00aa31b6f66fbe0e78ff440aed7026e869138b3
+          ref: b4c6d72664a65f1c51c665df8fd3aa30552b5f45
           path: external/desktop-alpha
           persist-credentials: false
       - name: Select Python 3.11 for BUILD ONLY
@@ -54,7 +54,7 @@ jobs:
           python tools/packaging/build.py
           --source external/desktop-alpha
           --output packaging-alpha-output
-          --expected-sha f00aa31b6f66fbe0e78ff440aed7026e869138b3
+          --expected-sha b4c6d72664a65f1c51c665df8fd3aa30552b5f45
           --alpha-acceptance
       - name: Linux copied frozen GUI widget acceptance without Python or network
         if: runner.os == 'Linux'
