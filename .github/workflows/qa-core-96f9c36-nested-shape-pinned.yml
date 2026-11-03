@@ -1,0 +1,49 @@
+name: QA P0 96f9c36 nested journal schema health contract (pinned)
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-core-96f9c36-nested-shape-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  nested-schema:
+    name: "${{ matrix.os }} Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 96f9c368a11fd43c0440d404c7258c7dfeacabf6
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: 115afb9627e038c955fc68bea52d1011354edaae
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Copy frozen QA-only nested shape tests
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dst = Path("app/tests/qa")
+          dst.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(Path("qa/tests/qa/test_core_96f9c36_nested_journal_shape.py"), dst)
+      - name: Install exact core
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Print source SHAs
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Strict structural journal safety, no xfail
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_core_96f9c36_nested_journal_shape.py
