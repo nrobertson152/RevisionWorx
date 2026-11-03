@@ -6,6 +6,14 @@ Scope: PySide6 GUI, UI adapters and UI tests only. No core files are modified on
 > **Alpha status:** single user, local disk only. Not suitable for irreplaceable production data.
 > The app shows this permanently in a banner.
 
+## Resume here (updated 2026-11-02)
+- **GUI code and tests:** `d4e3623` on `feature/desktop-alpha`, CI run 41575959230 green on Linux and Windows, including the GUI merged with accepted core `fe8a179` and the real-display walkthrough. Later commits change docs only.
+- **Current task:** visual redesign. The Director asked for a cleaner, very intuitive UI. The mockup is ready for review: see [`UI_REDESIGN_PROPOSAL.md`](UI_REDESIGN_PROPOSAL.md). **Do not change UI code for it until the Director has reviewed it.**
+- **Waiting on the Director:** mockup review and decisions D1 to D6, the logo file, and manual acceptance of the installed GUI.
+- **Waiting on others:** Integration has not run its frozen matrix on `d4e3623` (last accepted `17651af`); QA has not assessed anything newer than `f00aa31`.
+- **Core:** the accepted core is `fe8a179`, and the `accepted-core` CI job pins it. Change that pin only for a commit with independent acceptance. `phase2-documents` is at `22a5273`, which is under review; a local trial merge passed. `docs/INTEGRATION_PLAN.md` on that branch step 4 moves #14 onto the accepted core with a merge commit, with Director approval.
+- **Rules:** no merge, rebase, retarget, release or core edits. Report results on issue #13 and PR #14 with exact SHAs and counts.
+
 ## Checkpoint 1 — `df024e6` (2026-11-02)
 
 ### What exists and works (verified by tests below)
@@ -165,7 +173,7 @@ again and fails closed. A read-only `Workspace.health()` (request A1) would clos
 - Screen-reader check and a keyboard walkthrough on Windows (needs an interactive session; the Linux one is automated).
 - A8: `verify` on a read-only handle reports unapplied journal entries as "missing", so a normal administrator clear
   shows an inconsistency notice until the next write.
-- Visual redesign: mockup with the Director; no UI code changes until it is reviewed.
+- Visual redesign: see `UI_REDESIGN_PROPOSAL.md`.
 - Byte-level progress for very large files needs a core progress callback on `store_file` (A7).
 - A6 (requested in `controller.checkout`): return the checkout token with `CommittedNotApplied`, so a saved
   checkout does not need an administrator to release it.

@@ -1,0 +1,29 @@
+{
+  "v": 3,
+  "createdOnFiles": { "v": 1, "at": "2026-11-03T04:14:02Z" },
+  "title": "RevisionWorx main screen redesign",
+  "launch": { "view": "canvas" },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": { "x": 0, "y": 0, "w": 1280, "h": 800, "title": "Main screen (clickable)", "expand": "fill", "is_interactive": true },
+    "Dark.dc.html": { "x": 1360, "y": 0, "w": 1280, "h": 800, "title": "Dark mode", "expand": "fill", "is_interactive": true },
+    "CheckIn.dc.html": { "x": 0, "y": 920, "w": 1280, "h": 800, "title": "Checking in", "expand": "fill", "is_interactive": true },
+    "Attention.dc.html": { "x": 1360, "y": 920, "w": 1280, "h": 800, "title": "A file needs attention", "expand": "fill", "is_interactive": true },
+    "ReadOnly.dc.html": { "x": 0, "y": 1840, "w": 1280, "h": 800, "title": "Changes paused for safety", "expand": "fill", "is_interactive": true },
+    "EmptyProject.dc.html": { "x": 1360, "y": 1840, "w": 1280, "h": 800, "title": "New project, no files yet", "expand": "fill", "is_interactive": true },
+    "Welcome.dc.html": { "x": 0, "y": 2760, "w": 1280, "h": 800, "title": "First run", "expand": "fill", "is_interactive": true },
+    "OneAtATime.dc.html": { "x": 1360, "y": 2760, "w": 1280, "h": 800, "title": "Alternative layout: one document at a time", "expand": "fill", "is_interactive": true }
+  },
+  "order": [
+    "Main.dc.html",
+    "Dark.dc.html",
+    "CheckIn.dc.html",
+    "Attention.dc.html",
+    "ReadOnly.dc.html",
+    "EmptyProject.dc.html",
+    "Welcome.dc.html",
+    "OneAtATime.dc.html"
+  ],
+  "notes": {},
+  "designSystems": []
+}
