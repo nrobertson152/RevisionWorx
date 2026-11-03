@@ -1,0 +1,50 @@
+name: QA P0 CAD source provenance on exact 96f9c36
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-core-96f9-cad-provenance-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    name: "${{ matrix.os }} / Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 96f9c368a11fd43c0440d404c7258c7dfeacabf6
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: 6dcd902fdb7fdce8b725385293649c3f5d01f957
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Overlay only frozen QA independent CAD source tests
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dst = Path("app/tests/qa")
+          dst.mkdir(parents=True, exist_ok=True)
+          shutil.copy2("qa/tests/qa/test_core_96f9_cad_provenance.py", dst)
+      - name: Install exact candidate
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Record exact production and QA source
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: Strict SourceChangedError for simultaneous CAD saves (not xfail)
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_core_96f9_cad_provenance.py
