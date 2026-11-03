@@ -18,7 +18,7 @@ from .diff import compare, compare_rollups
 from .errors import BomError, CsvImportError
 from .graph import explode, rollup
 from .impact import change_impact, revision_impact
-from .snapshot import BomSnapshot, load_any, snapshot_to_json, structure_to_json
+from .snapshot import BomSnapshot, load_any, snapshot_to_json
 from .validate import validate
 from .workspace_adapter import single_root, sniff_layout
 
@@ -127,8 +127,6 @@ def main(argv: list[str] | None = None) -> int:
             snap = _load(args.file, args.layout, args.root)
             if args.output and args.output.casefold().endswith(".json"):
                 _emit(snapshot_to_json(snap), args.output, args.overwrite)
-            elif args.output and args.output.casefold().endswith(".structure.json"):  # pragma: no cover
-                _emit(structure_to_json(snap.structure), args.output, args.overwrite)
             else:
                 _emit(csvio.structure_to_csv(snap.structure, excel=False), args.output, args.overwrite)
         return 0
