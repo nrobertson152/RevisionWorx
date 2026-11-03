@@ -717,3 +717,54 @@ Normal baseline packaging still separately pins `d656884b`; standalone
 alpha GUI workflow still separately pins `17651af`. PR #2 stays draft,
 and no core branch, QA, Distributed, GUI branch, production source pin,
 release, tag, merge or backport was modified.
+
+## 2026-11-02 — final two-source compatibility with staging safeguards and Windows asynchronous regression
+
+Two-source staging test commit `516db2d` adds **nine** fail-closed
+synthetic local Git regression tests (wrong core/GUI SHA, dirty input,
+receipt overwrite, unsafe receipt location, overlapping checkouts,
+wrong GUI layout, successful isolated receipt and no core mutation).
+Workflow `d1daadf` ran them before composite staging on native Ubuntu
+and Windows. Initial [run 41572552095](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572552095)
+had Ubuntu success but **Windows FAILED** while checking the GUI
+immediately after second-history-row display. The UI history update
+can precede completion of asynchronous controller state/action enabling;
+the original probe did not wait for the visible postcheckin actions.
+This is an actual intermittent test failure and is preserved as negative
+evidence, not hidden.
+
+Harness commit `c18f4ac3d49e4d54d7c77e834ffcdc3a5ee0e6f6`
+now waits boundedly for `history==2`, `not ctl.busy`,
+`checkout action enabled`, `checkin disabled`; if missing, it
+emits the entire `MainWindow.observable_state()`, retaining all
+existing strict history, selection, authority/hash assertions.
+Workflow `955a5423bbdab3b4dd8e0b4a880077886753acab`
+triggers independent composite CI on future probe changes.
+
+**Definitive [run 41572811571](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572811571)
+on composite test workflow SHA `955a5423`: Windows and Ubuntu SUCCESS,
+nine staging safety tests each, exact core source
+`fe8a179f0203ef08151dc8459c84609dc639c4fe`,
+exact GUI source `17651af68128572c7c83429513044a5948dd07bd`,
+10 GUI files overlaid into intentionally dirty disposable source,
+Qt create/import/checkout/checkin with coherent visible state,
+two SHA-256-verified journal revisions, separate GUI-process reopen,
+F5 preservation, transient missing working-file alert and restore,
+independent frozen CLI exports. Ubuntu nonroot Python/pip-free network-none
+container PASSED full workflow and ordinary GUI launch. Windows paths
+and localhost UNC loopback PASS. Green run is a deterministic regression,
+not proof of absence of future timing races.
+
+**Other latest isolated CI also green:** normal older-source baseline
+[41572788046](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572788046),
+standalone GUI alpha
+[41572788094](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572788094).
+Reference [corrected-core composite acceptance
+matrix](https://github.com/nrobertson152/RevisionWorx/blob/integration/openschematix/docs/CORRECTED_CORE_GUI_COMPATIBILITY.md)
+updated at `05f4ca0`.
+
+**HOLD:** no modified production/core/GUI PR branch, no source
+authority pin change, no Phase 1 backport, merge, tag, signed installer,
+release or multihost SMB claim. Test-only wrapper MUST NOT SHIP.
+Actual interactive human GUI and untested physical offline failure
+conditions remain outstanding.
