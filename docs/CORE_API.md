@@ -28,7 +28,7 @@ ws.close()                                              # or: with Workspace.ope
 | Exception (all subclass `WorkspaceError`) | Meaning | UI action |
 |---|---|---|
 | `WorkspaceLockedError(holder)` | Another session holds the writer lock. `holder` has `user`, `host`, `pid`, `acquired`. | Show "in use by user@host since …"; offer read-only. |
-| `WorkspaceCorruptError` | Writes refused for safety. Includes "orphaned lock-release file … `lock clear-orphan`" and journal gaps. | **Recovery-blocked state.** Show the message verbatim and offer read-only. Never retry in a loop. Resolution is an administrator action (CLI). |
+| `WorkspaceCorruptError` | Writes refused for safety. Includes "orphaned lock-release file … `lock clear-orphan`" and journal gaps. | **Recovery-blocked state.** Show the message verbatim and offer read-only. Never retry in a loop. Resolution is an administrator action (CLI). **A journal gap also refuses read-only opens**, so there is no read-only to offer in that one case. |
 | `WorkspaceFormatError` | Not a workspace, or an unsupported format version. | "This folder is not a RevisionWorx workspace (or needs a newer version)." |
 | `OSError` (`PermissionError`, `FileNotFoundError`) | Filesystem refused. | Show the path and the OS message; do not retry automatically. |
 
@@ -108,7 +108,11 @@ d.cancel_checkout(ws, doc_id, token, revert=False) -> None
 
 ## 5. Health (Provisional)
 
-`ws.verify() -> {"problems": [...]}`: show problems read-only. Repair is an administrator action.
+`ws.health() -> {"ok", "reason", "head_seq", "applied_seq", "pending"}` is the quick check: it never raises for a damaged
+journal, `ok` is False when writes would be refused, and `pending` entries are saved and need no action.
+
+`ws.verify() -> {"problems": [...]}` is the full check: show problems read-only. Repair is an administrator action. A problem
+with `severity: "info"`, such as `fenced-entry`, needs no action and can never be cleared.
 
 ## 6. Administrator-only operations (CLI, not for the alpha UI)
 
@@ -117,11 +121,13 @@ the UI contract. The alpha shows the recovery-blocked message from §1 and stops
 
 ## 7. Local search index (Provisional)
 
-`open_index(ws, cache_dir=None)` syncs and returns a `LocalIndex`. `IndexBusyError` (a `WorkspaceError`) means another
+`open_index(ws, cache_dir=None)` syncs and returns a `LocalIndex`. Use its methods, including `project_files(project_id)`, rather
+than `idx.db`: only the methods replace a damaged cache and retry. `IndexBusyError` (a `WorkspaceError`) means another
 RevisionWorx process is using it: nothing is wrong, so try again. A damaged cache replaces itself. `idx.coverage()`
 now includes `baselines_unavailable`, the projects whose file list could not be read.
 
 ## Change log
+- 2026-11-02: `ws.health()`, `LocalIndex.project_files` and `documents.require_document` are new (Claude B's A1 and A5). All additive.
 - 2026-11-02: `MissingFileError` and `CommittedNotApplied.result` are new (Claude B's A4 and A6). `verify` marks `fenced-entry` with
   `severity: info`, and the CLI no longer exits 1 for it alone. `doc verify` also audits the journal for changed revisions.
   `read_writer_lock` reports an unreadable lock as `{"token": "?", "unreadable": True}` instead of raising `ValueError`.

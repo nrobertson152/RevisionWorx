@@ -216,9 +216,16 @@ Done:
 - Core CI 41578257430 at `12e4c49`: all four jobs passed. Ubuntu 3.11 and 3.13: 349 passed, 3 skipped. Windows 3.11 and 3.13:
   350 passed, 2 skipped, 5/5 contention trials each.
 
+- Also fixed with failing tests first: a damaged `state.json` costs a replay, not the workspace; a damaged `workspace.json`
+  is `WorkspaceFormatError`; a malformed entry is corruption, not a raw `KeyError`; a gap under a long-lived handle stops writes;
+  hashing and storing a working file no longer block a CAD program's rename on Windows; GC stops once it has lost the lock;
+  the CLI keeps a token and reports success when a change is saved but not materialised.
+- Differential test: incremental index equals a fresh rebuild across random histories. 6 seeds pass; it found no defect.
+- Negative controls for the explorer (budget 500): `d2b7a1c` 5 failed, 2 passed; `fe8a179` and `22a5273` 1 failed, 6 passed.
+
 Not done yet, in priority order:
-1. Exhaustive local run of the systematic explorer, plus its negative control on historical sources.
-2. Claude B's remaining API requests: A1, A2, A3, A5, A7 (A4 and A6 are done).
+1. Claude B's remaining API requests: A2, A3, A7 (A1, A4, A5 and A6 are done).
+2. Director question: same-host dead-process lock recovery (a stale lock is never stolen today, so every crash needs the CLI).
 
 Known and watched:
 - The 21 s outlier in Windows contention trial 3 is not the product: with `--durations` (run 41577700770) the tests took

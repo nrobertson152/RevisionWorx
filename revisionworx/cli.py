@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__, atomicio, documents, projects
 from .clientstate import CheckoutTokens
 from .index import open_index
-from .workspace import Workspace, WorkspaceError
+from .workspace import CommittedNotApplied, Workspace, WorkspaceError
 
 
 def _emit(args, obj, text: str | None = None) -> None:
@@ -259,10 +259,14 @@ def cmd_doc_show(args):
 
 def cmd_doc_checkout(args):
     with _open(args, True) as ws:
-        co = documents.checkout(ws, args.id, note=args.note)
+        note = ""
+        try:
+            co = documents.checkout(ws, args.id, note=args.note)
+        except CommittedNotApplied as exc:       # saved: the token must not be lost with the error
+            co, note = exc.result, f"\nNote: {exc}"
         _tokens(args).put(ws.id, args.id, co["token"])
         _emit(args, {k: v for k, v in co.items() if k != "token"},
-              f"Checked out {args.id}; edit the file in place, then run 'doc checkin'.")
+              f"Checked out {args.id}; edit the file in place, then run 'doc checkin'.{note}")
 
 
 def cmd_doc_checkin(args):
@@ -270,10 +274,14 @@ def cmd_doc_checkin(args):
         token = _tokens(args).get(ws.id, args.id)
         if not token:
             raise WorkspaceError("this machine holds no checkout token for that document")
-        rev = documents.checkin(ws, args.id, token, args.message, label=args.label,
-                                allow_unchanged=args.allow_unchanged)
+        note = ""
+        try:
+            rev = documents.checkin(ws, args.id, token, args.message, label=args.label,
+                                    allow_unchanged=args.allow_unchanged)
+        except CommittedNotApplied as exc:       # saved: reporting a failure here would invite a second check-in
+            rev, note = exc.result, f"\nNote: {exc}"
         _tokens(args).forget(ws.id, args.id)
-        _emit(args, rev, f"Checked in revision {rev['label']} ({rev['sha256'][:12]})")
+        _emit(args, rev, f"Checked in revision {rev['label']} ({rev['sha256'][:12]}){note}")
 
 
 def cmd_doc_cancel(args):

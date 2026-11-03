@@ -313,7 +313,12 @@ class Workspace:
         info_path = meta / "workspace.json"
         if not info_path.is_file():
             raise WorkspaceError(f"no RevisionWorx workspace at {meta}")
-        info = atomicio.read_json(info_path)
+        try:
+            info = atomicio.read_json(info_path)
+            if not isinstance(info, dict):
+                raise ValueError("not an object")
+        except ValueError as exc:
+            raise WorkspaceFormatError(f"{info_path} cannot be read: {exc}") from exc
         if info.get("format") != FORMAT_NAME:
             raise WorkspaceFormatError(f"{info_path} is not a RevisionWorx workspace")
         if int(info.get("format_version", 0)) > FORMAT_VERSION:
@@ -920,6 +925,9 @@ class Workspace:
             raise WorkspaceCorruptError(f"journal entry {path.name} claims seq {entry.get('seq')}")
         if "digest" in entry and entry["digest"] != entry_digest(entry):
             raise WorkspaceCorruptError(f"journal entry {seq} fails its SHA-256 digest check (altered?)")
+        records = entry.get("records")
+        if not isinstance(records, list) or not all(isinstance(r, dict) and "kind" in r and "id" in r for r in records):
+            raise WorkspaceCorruptError(f"journal entry {seq} is malformed")
         return entry
 
     def _journal_view(self) -> dict:
@@ -934,6 +942,8 @@ class Workspace:
         own successful retry, and the one that took effect is the answer."""
         with self._view_lock:
             seqs = self.journal_seqs()
+            if seqs and seqs[-1] != len(seqs):   # sorted, unique, starting at 1 or more: contiguous exactly then
+                self._check_journal()
             view = self._view
             if view is not None and view["seen"]:
                 try:
@@ -993,8 +1003,8 @@ class Workspace:
     def applied_seq(self) -> int:
         try:
             return int(atomicio.read_json(self.meta_dir / "state.json")["applied_seq"])
-        except FileNotFoundError:
-            return 0
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            return 0                                 # a cache: the cost of losing it is one replay
 
     def recover(self) -> int:
         """Finish any commit interrupted by a crash. Returns the number of entries replayed."""
@@ -1127,6 +1137,18 @@ class Workspace:
             raise CommittedNotApplied(seq, entry["txid"], exc) from exc
         return seq
 
+    def health(self) -> dict:
+        """Read-only summary for a UI (Claude B's A1). Never raises for a damaged journal: it reports it. ``ok`` is False
+        when writes would be refused; ``pending`` entries are saved but not materialised, and need no action."""
+        report = {"ok": True, "reason": None, "head_seq": self.head_seq(), "applied_seq": self.applied_seq(), "pending": 0}
+        report["pending"] = max(0, report["head_seq"] - report["applied_seq"])
+        try:
+            self._check_journal()
+            self._journal_view()
+        except WorkspaceCorruptError as exc:
+            report.update(ok=False, reason=str(exc))
+        return report
+
     def transaction_outcome(self, txid: str) -> dict:
         """Durable outcome of a transaction the caller tagged with ``txid``. If attempts with this txid both
         took effect and were fenced, the one that took effect is the outcome."""
@@ -1147,6 +1169,7 @@ class Workspace:
         if repair:
             self._require_writable()
             self.recover()
+        self._check_journal()
         expected: dict[tuple[str, str], dict | None] = {}
         pending: set[tuple[str, str]] = set()   # written by entries not materialised yet: lag, not damage
         applied = self.applied_seq()

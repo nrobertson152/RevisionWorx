@@ -152,6 +152,9 @@ def _require_doc(ws: Workspace, doc_id: str) -> dict:
     return doc
 
 
+require_document = _require_doc      # public name for callers outside this module (Claude B's A5)
+
+
 def _require_rev(ws: Workspace, rev_id: str) -> dict:
     rev = ws.get("revision", rev_id)
     if rev is None:
@@ -701,6 +704,7 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
         ws.commit("content.gc", [RecordPut("audit", new_id("aud"), {
             "event": "content-gc", "removed": orphans, "time": now_iso(), "by": current_actor()})])
         for o in orphans:  # audit first: a crash leaves a record of intent, never an unlogged deletion
+            ws._check_lock_still_held()   # a deletion cannot be fenced, but it can stop once authority is gone
             if o["sha256"] not in {r["sha256"] for r in ws.list("revision").values()}:
                 store.path_for(o["sha256"]).unlink(missing_ok=True)
         report["removed"] = True

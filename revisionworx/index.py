@@ -425,6 +425,11 @@ class LocalIndex:
             "FROM files_fts f JOIN files fl ON fl.project_id = f.project_id AND fl.path = f.path "
             f"WHERE files_fts MATCH ? {proj} ORDER BY fl.path LIMIT ? OFFSET ?", args)
 
+    def project_files(self, project_id: str, limit: int = 1000, offset: int = 0) -> list[dict]:
+        """A project's inventoried files (Claude B's A5), so callers need not query ``idx.db`` directly."""
+        return self._rows("SELECT project_id, path, size, category, sha256, verified_format FROM files "
+                          "WHERE project_id = ? ORDER BY path LIMIT ? OFFSET ?", (project_id, limit, offset))
+
     def documents(self, project_id: str | None = None, text: str = "", limit: int = 200,
                   offset: int = 0) -> list[dict]:
         """Documents with their latest/released revision labels and checkout owner."""

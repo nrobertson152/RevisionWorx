@@ -41,7 +41,7 @@ class StoredContent:
 def hash_file(path: Path) -> tuple[str, int]:
     h = hashlib.sha256()
     size = 0
-    with open(path, "rb") as fh:
+    with atomicio._open_for_read(path) as fh:    # a CAD program saving by rename must not fail because of us
         while True:
             block = fh.read(CHUNK)
             if not block:
@@ -85,7 +85,7 @@ class ContentStore:
         h = hashlib.sha256()
         size = 0
         try:
-            with open(source, "rb") as src, open(tmp, "xb") as dst:
+            with atomicio._open_for_read(source) as src, open(tmp, "xb") as dst:
                 while True:
                     block = src.read(CHUNK)
                     if not block:

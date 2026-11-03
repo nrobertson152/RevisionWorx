@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import random
 import sqlite3
 import time
 
@@ -235,3 +236,79 @@ def test_sync_stays_correct_across_a_fenced_entry(share, cache_dir):
         assert idx.db.execute("SELECT 1 FROM roots WHERE id=?", (late,)).fetchone() is None
     w._lock_token = None
     w.close()
+
+
+# ---------------------------------------------------------------- incremental equals rebuild equals journal
+def _tables(idx):
+    dump = {}
+    for table in ("roots", "projects", "files", "documents", "revisions", "checkouts"):
+        dump[table] = sorted(idx.db.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+    for table, cols in (("projects_fts", "id, name, number, customer, description"),
+                        ("files_fts", "project_id, path"), ("documents_fts", "id, number, title, rel_path")):
+        dump[table] = sorted(idx.db.execute(f"SELECT {cols} FROM {table}").fetchall(), key=repr)
+    return dump
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_incremental_sync_always_equals_a_fresh_rebuild(ws, share, tmp_path, seed):
+    """Differential: after each step of a random history the incremental cache must equal one built from nothing. Searching
+    through either must give the same results, whichever way the cache happened to be brought up to date."""
+    rng = random.Random(seed)
+    project = projects.create_project(ws, NewProject(name="HPU", number="J-1", customer="Acme"))
+    folder = projects.project_folder(ws, project)
+    incremental = LocalIndex(ws, tmp_path / "incremental")
+    incremental.sync()
+    docs, tokens, files = [], {}, 0
+
+    def register():
+        nonlocal files
+        files += 1
+        path = folder / "02 CAD" / "Parts" / f"part{files}.ipt"
+        path.write_bytes(b"v%d" % files)
+        docs.append(documents.register_document(ws, project["id"], path, title=f"part {files}",
+                                                capture=rng.random() < 0.8)[0]["id"])
+
+    def checkout():
+        free = [d for d in docs if d not in tokens and ws.get("document", d)["status"] == "active"]
+        if free:
+            d = rng.choice(free)
+            tokens[d] = documents.checkout(ws, d)["token"]
+
+    def checkin():
+        if tokens:
+            d = rng.choice(sorted(tokens))
+            doc = ws.get("document", d)
+            documents.working_path(ws, doc).write_bytes(os.urandom(8))
+            documents.checkin(ws, d, tokens.pop(d), "changed")
+
+    def cancel():
+        if tokens:
+            d = rng.choice(sorted(tokens))
+            documents.cancel_checkout(ws, d, tokens.pop(d))
+
+    def transition():
+        revs = [r for r in ws.list("revision").values()]
+        if revs:
+            rev = rng.choice(revs)
+            targets = {"wip": "in_review", "in_review": "approved", "approved": "released"}.get(rev["state"])
+            if targets and not (targets == "released" and any(
+                    r["number"] > rev["number"] and r["state"] == "released"
+                    for r in revs if r["document_id"] == rev["document_id"])):
+                documents.transition(ws, rev["id"], targets)
+
+    def retitle():
+        if docs:
+            documents.update_document(ws, rng.choice(docs), title=f"retitled {rng.random():.6f}", number="")
+
+    def archive_project():
+        projects.update_project(ws, project["id"], description=f"{rng.random():.6f}")
+    actions = [register, register, checkout, checkin, checkin, cancel, transition, transition, retitle, archive_project]
+    for step in range(40):
+        rng.choice(actions)()
+        if rng.random() < 0.4:
+            incremental.sync()
+            with LocalIndex(ws, tmp_path / f"fresh{step}") as fresh:
+                fresh.rebuild()
+                assert _tables(incremental) == _tables(fresh), f"seed {seed}, step {step}"
+                assert incremental.cursor_seq() == fresh.cursor_seq() == ws.head_seq()
+    incremental.close()

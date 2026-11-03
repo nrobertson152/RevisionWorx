@@ -926,3 +926,177 @@ def test_history_audit_finds_a_revision_deleted_through_the_journal(world):
     rid = doc["latest_rev_id"]
     ws.commit("bug", [RecordDelete("revision", rid, expect_rev=ws.get("revision", rid)[REV_FIELD])])
     assert "revision-deleted" in [p["problem"] for p in D.audit_history(ws)]
+
+
+# ------------------------------------------------------------------------ damage to caches and identity
+def test_a_damaged_state_file_costs_a_replay_not_the_workspace(share):
+    """state.json is a cache. Was a raw ValueError or KeyError on every open, though the journal was fine."""
+    with Workspace.create(share, "t") as ws:
+        ws.commit("t", [RecordPut("root", RID, {"name": "x"}, expect_rev=0)])
+    state = share / ".revisionworx" / "state.json"
+    for damage in (b"\x00not json", b'{"something": "else"}', b"[]"):
+        state.write_bytes(damage)
+        with Workspace.open(share) as reader:
+            assert reader.get("root", RID)["name"] == "x"
+        with Workspace.open(share, writable=True) as ws:
+            assert ws.applied_seq() == ws.head_seq()
+            assert ws.verify()["problems"] == []
+
+
+def test_a_damaged_identity_file_is_reported_as_such(share):
+    from revisionworx.workspace import WorkspaceFormatError
+    with Workspace.create(share, "t"):
+        pass
+    (share / ".revisionworx" / "workspace.json").write_bytes(b"\x00not json")
+    with pytest.raises(WorkspaceFormatError):
+        Workspace.open(share)
+
+
+def _lose_an_entry(share) -> None:
+    with Workspace.open(share, writable=True) as ws:
+        for name in "abc":
+            ws.commit("t", [RecordPut("root", "root_" + name * 32, {"name": name}, expect_rev=0)])
+        head = ws.head_seq()
+    (share / ".revisionworx" / "journal" / f"{head - 1:020d}.json").unlink()
+
+
+def test_a_gap_appearing_under_a_long_lived_handle_stops_writes_and_verify(share):
+    """Opening already refuses a journal with a gap, for reading too. A handle opened before the entry was lost has to
+    notice as well, rather than carry on as if the journal were whole."""
+    with Workspace.create(share, "t"):
+        pass
+    reader, writer = Workspace.open(share), None
+    reader.get("root", RID)
+    writer = Workspace.open(share, writable=True)
+    writer.get("root", RID)
+    writer.close()
+    _lose_an_entry(share)
+    with pytest.raises(WorkspaceCorruptError, match="gaps"):
+        Workspace.open(share)
+    with pytest.raises(WorkspaceCorruptError, match="gaps"):
+        reader.verify()
+    assert reader.get("root", "root_" + "a" * 32)["name"] == "a"   # applied already: reads stay available
+    reader.close()
+
+
+@pytest.mark.parametrize("entry", [
+    {"seq": 0, "op": "t"}, {"seq": 0, "op": "t", "records": "nope"}, {"seq": 0, "op": "t", "records": [{"id": "x"}]},
+    {"seq": 0, "op": "t", "records": [17]}], ids=["no-records", "not-a-list", "no-kind", "not-an-object"])
+def test_a_malformed_entry_is_corruption_not_a_crash(share, entry):
+    """Was a raw KeyError or TypeError from wherever it was first read."""
+    with Workspace.create(share, "t") as ws:
+        seq = ws.head_seq() + 1
+        atomicio.atomic_write_json(ws.meta_dir / "journal" / f"{seq:020d}.json", {**entry, "seq": seq})
+        with pytest.raises(WorkspaceCorruptError):
+            ws.read_entry(seq)
+        with pytest.raises(WorkspaceCorruptError):
+            ws.commit("t", [RecordPut("root", RID, {"name": "x"}, expect_rev=0)])
+
+
+# ------------------------------------------------------------------------ being a good neighbour on Windows
+def test_reading_working_files_goes_through_the_sharing_reader(world, monkeypatch):
+    """Python's open() blocks a rename while it reads. A CAD program saving by rename would fail because RevisionWorx was
+    hashing the file. What this asserts holds everywhere; what the reader does is proven on Windows in test_windows_sharing."""
+    _, ws, _, doc, path = world
+    real, opened = atomicio._open_for_read, []
+
+    def spy(p):
+        opened.append(Path(p))
+        return real(p)
+    monkeypatch.setattr(atomicio, "_open_for_read", spy)
+    content.hash_file(path)
+    assert opened == [path]
+    opened.clear()
+    path.write_bytes(b"new bytes")
+    content.ContentStore(ws).store_file(path)
+    assert path in opened
+
+
+def test_gc_stops_as_soon_as_it_has_lost_the_lock(world, monkeypatch):
+    """It cannot fence a file deletion, but it can stop at the next object rather than carry on for the whole list."""
+    share, ws, _, doc, path = world
+    store = content.ContentStore(ws)
+    orphans = []
+    for i in range(3):
+        f = path.with_name(f"orphan{i}.bin")
+        f.write_bytes(b"orphan %d" % i)
+        orphans.append(store.store_file(f).sha256)
+        f.unlink()
+    real, removed = store.path_for, []
+    original_unlink = Path.unlink
+
+    def unlink(self, missing_ok=False):
+        if self.name in orphans:
+            removed.append(self.name)
+            Workspace.break_writer_lock(share, ws._lock_token, "unresponsive")   # lost after the first deletion
+        return original_unlink(self, missing_ok=missing_ok)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    assert real
+    with pytest.raises(LockLostError):
+        D.gc_content(ws, apply=True, min_age_seconds=0.0)
+    assert len(removed) == 1
+    ws._lock_token = None
+
+
+# ------------------------------------------------------------------------ the command line, saved but not materialised
+def test_cli_checkout_keeps_the_token_when_the_change_is_saved_but_not_materialised(share, tmp_path, monkeypatch, capsys):
+    from revisionworx import cli
+    ws = Workspace.create(share, "t")
+    projects.add_root(ws, "Engineering", share / "Engineering")
+    project = projects.create_project(ws, NewProject(name="HPU", number="J-1", customer="Acme"))
+    path = projects.project_folder(ws, project) / "02 CAD" / "Parts" / "bracket.ipt"
+    path.write_bytes(b"v1")
+    doc, _ = D.register_document(ws, project["id"], path)
+    ws.close()
+    state = tmp_path / "state"
+    real = Workspace._apply
+
+    def fail(self, entry):
+        if entry["op"] == "document.checkout":
+            raise OSError("injected: disk full while materialising")
+        return real(self, entry)
+    monkeypatch.setattr(Workspace, "_apply", fail)
+    code = cli.main(["-w", str(share), "--state-dir", str(state), "doc", "checkout", doc["id"]])
+    monkeypatch.undo()
+    out = capsys.readouterr()
+    assert code in (0, None), out
+    assert "saved" in (out.out + out.err).lower()
+    token = CheckoutTokens(state).get(_workspace_id(share), doc["id"])
+    with Workspace.open(share, writable=True) as check:
+        assert check.get("checkout", doc["id"])["token"] == token
+
+
+def _workspace_id(share) -> str:
+    return atomicio.read_json(share / ".revisionworx" / "workspace.json")["workspace_id"]
+
+
+# ------------------------------------------------------------------------ small public names for the UI
+def test_health_reports_instead_of_raising(world):
+    share, ws, _, doc, path = world
+    report = ws.health()
+    assert report["ok"] and report["reason"] is None and report["pending"] == 0
+    assert report["head_seq"] == report["applied_seq"] == ws.head_seq()
+    entry = sorted((ws.meta_dir / "journal").glob("*.json"))[-1]
+    data = atomicio.read_json(entry)
+    data["op"] = "tampered"
+    original = entry.read_bytes()
+    atomicio.atomic_write_json(entry, data)
+    with Workspace.open(share) as reader:
+        damaged = reader.health()
+        assert damaged["ok"] is False and "digest" in damaged["reason"]
+    entry.write_bytes(original)
+    with Workspace.open(share) as reader:
+        assert reader.health()["ok"]
+
+
+def test_index_project_files_uses_the_healing_path(share, cache):
+    ws = Workspace.create(share, "t")
+    projects.add_root(ws, "Engineering", share / "Engineering")
+    folder = share / "Engineering" / "Old job"
+    folder.mkdir()
+    (folder / "a.txt").write_bytes(b"x")
+    project = projects.adopt_project(ws, folder, name="Old job")
+    with open_index(ws, cache) as idx:
+        assert [f["path"] for f in idx.project_files(project["id"])] == ["a.txt"]
+    assert D.require_document is D._require_doc
+    ws.close()

@@ -243,6 +243,7 @@ def test_no_schedule_within_two_interruptions_breaks_authority(tmp_path, monkeyp
     prepare, actors = LOCK_SCENARIOS[name]
     report = explore(Scenario(tmp_path, prepare, actors, check_invariants), monkeypatch, preemptions=2, kills=0,
                      budget=BUDGET)
+    print(f"SCHEDULES {name} preemptions=2 kills=0: {report['runs']} runs, sampled={report['sampled']}")
     assert report["problem"] is None, report
     assert report["runs"] > 1
 
@@ -252,6 +253,7 @@ def test_no_schedule_with_a_switch_and_a_death_breaks_authority(tmp_path, monkey
     prepare, actors = LOCK_SCENARIOS[name]
     report = explore(Scenario(tmp_path, prepare, actors, check_invariants), monkeypatch, preemptions=1, kills=1,
                      budget=BUDGET)
+    print(f"SCHEDULES {name} preemptions=1 kills=1: {report['runs']} runs, sampled={report['sampled']}")
     assert report["problem"] is None, report
     assert report["runs"] > 1
 
@@ -307,9 +309,11 @@ def test_no_schedule_makes_a_checkin_take_effect_twice_or_lie(tmp_path, monkeypa
 
     actors = {"First": attempt, "Admin": admin, "Retry": attempt}
     report = explore(Scenario(tmp_path, prepare, actors, check), monkeypatch, preemptions=2, kills=0, budget=BUDGET)
+    print(f"SCHEDULES checkin preemptions=2 kills=0: {report['runs']} runs, sampled={report['sampled']}")
     assert report["problem"] is None, report
     report = explore(Scenario(tmp_path / "k", lambda r: (r.parent.mkdir(exist_ok=True), prepare(r))[1], actors, check),
                      monkeypatch, preemptions=1, kills=1, budget=BUDGET)
+    print(f"SCHEDULES checkin preemptions=1 kills=1: {report['runs']} runs, sampled={report['sampled']}")
     assert report["problem"] is None, report
 
 
