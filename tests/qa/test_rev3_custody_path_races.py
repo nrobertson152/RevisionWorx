@@ -74,9 +74,9 @@ def _run_disposal_race(tmp_path, monkeypatch):
     """B passes genuine commit preflight; admin clears orphan; replaced custody deletes B's lock."""
     root, locks = _root(tmp_path)
     old = locks / (".releasing-" + "d" * 16)
-    old.write_bytes(UNREADABLE)
     b = Workspace.open(root, writable=True)
     b_token = b._lock_token
+    old.write_bytes(UNREADABLE)
     c_token = None
     injected = []
     original_check = b._check_lock_still_held
@@ -124,9 +124,9 @@ def _run_fencing_race(tmp_path, monkeypatch):
     root, locks = _root(tmp_path)
     first = locks / (".releasing-" + "1" * 16)
     second = locks / (".releasing-" + "2" * 16)
-    first.write_bytes(atomicio.dumps_json(_holder(A_TOKEN)))
     b = Workspace.open(root, writable=True)
     b_token = b._lock_token
+    first.write_bytes(atomicio.dumps_json(_holder(A_TOKEN)))
     original_check = b._check_lock_still_held
     real_replace = os.replace
     injected = []
