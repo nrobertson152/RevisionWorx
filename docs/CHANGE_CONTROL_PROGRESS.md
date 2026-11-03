@@ -29,6 +29,24 @@ Run 41580084986 on `081cc21` was cancelled by the newer push (concurrency group)
 Killed-process tests (`test_changes_workspace.py::test_killed_process_then_recovery_in_another_process`)
 are separate local processes on one machine. No SMB/NFS, multi-host or power-loss evidence exists.
 
+## Session 1b — Codex review fixes (2026-11-03)
+
+| Commit | What |
+|---|---|
+| `e171810` | exports work without hard links (FAT/exFAT, some shares); actions never crash on an unreadable dependency |
+| `cb68433` | Codex P1: merged order no longer drops a `revise` obligation behind `reference`; conflicting obligations/baselines refused. Codex P2: CSV import retry with same txid returns the original requests |
+| `3038c9b` | Codex P2: Approved (not yet ordered) ECRs can be returned for rework when stale; new round voids old approvals. Codex P2: ECO approved content (digest v2) includes dependencies. Contract test for PR #21 where-used shape |
+
+Every fix has a regression test that fails on the previous commit.
+
+| Where | Commit | Command | Result |
+|---|---|---|---|
+| Sandbox Linux, Py 3.13.18, root | `3038c9b` | `python -m pytest -q -ra` | 553 passed, 3 skipped |
+| [CI 41583059300](https://github.com/nrobertson152/RevisionWorx/actions/runs/41583059300) ubuntu-latest, CPython 3.11.17 | `3038c9b` | change-control step / full suite | 208 passed / 553 passed, 3 skipped |
+| same run, windows-latest, CPython 3.13.17 | `3038c9b` | same | 208 passed / 554 passed, 2 skipped |
+
+Independent QA has not yet confirmed any of these fixes.
+
 ### Decisions
 - Persist only through the subsystem interface `documents.py` uses; confined to `store.py`. Awaiting
   Claude A's confirmation (PR #7 / #20).
