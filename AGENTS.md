@@ -16,7 +16,7 @@ RevisionWorx is an offline, cross-platform, GPL-3.0 engineering PDM (product dat
 
 ## Mandatory assignment checkout/check-in
 
-**Before modifying code, pushing a branch, or changing an assignment issue/PR, every interactive and scheduled agent MUST acquire the exclusive GitHub ref lock defined in [docs/agents/ASSIGNMENT_CHECKOUT_PROTOCOL.md](docs/agents/ASSIGNMENT_CHECKOUT_PROTOCOL.md).** Never work on an assignment already checked out by another session. On completion or failure, push work, post a GitHub check-in with exact SHA and test evidence, conditionally release the lock, and verify its absence. If atomic acquisition or safe release is unavailable, fail closed and report the blocker; do not pretend that issue comments are locks. Do not automatically steal stale locks.
+All interactive and scheduled agents follow the **simple, trust-based GitHub issue/PR comment procedure** in [docs/agents/ASSIGNMENT_CHECKOUT_PROTOCOL.md](docs/agents/ASSIGNMENT_CHECKOUT_PROTOCOL.md). Before starting, check recent comments and post `CHECKED OUT`; if someone already owns the task, choose other work. Before ending, push your work and post `CHECKED IN` with exact SHA, tests and next steps, including if blocked. No atomic Git refs or extra infrastructure are required. This is cooperative coordination, not a hard lock.
 
 ## How work flows
 
