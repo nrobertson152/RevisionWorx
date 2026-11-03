@@ -400,44 +400,78 @@ class Workspace:
     def _fence_orphaned_releases(meta: Path, own_token: str) -> None:
         """A releaser that crashed after moving writer.lock aside (ADR-019 step 2) may have taken a
         successor's lock with it. Before the new holder writes anything, revoke every token found in
-        such orphaned files (fail closed) and keep them as evidence."""
+        such orphaned files (fail closed) and keep them as evidence.
+
+        Every file is first moved to a private custody name and only the moved file is inspected
+        (move-then-verify, ADR-019 rev. 3): a file swapped in at the pathname after inspection can
+        never be archived in place of the one whose token was revoked."""
         locks = meta / "locks"
-        revoked = None
-        for orphan in sorted(locks.glob(".releasing-*")):
-            try:
-                holder = atomicio.read_json(orphan)
-            except (OSError, ValueError):
-                holder = {}
-            tok = holder.get("token")
-            if not tok:
+        def fence_all() -> None:
+            for orphan in sorted(locks.glob(".fencing-*")) + sorted(locks.glob(".releasing-*")):
                 try:
-                    digest = hashlib.sha256(orphan.read_bytes()).hexdigest()
+                    holder = atomicio.read_json(orphan)
                 except FileNotFoundError:
                     continue
-                audit = next((x for x in Workspace._orphan_clear_audits(meta)
-                              if x["file"] == orphan.name and x["file_sha256"] == digest), None)
-                if audit is not None and Workspace._complete_orphan_clear(meta, audit):
-                    continue  # an administrator authorised this exact file; finish the disposition
-                # We cannot tell whose lock this was, so we cannot fence its holder: refuse to become
-                # a writer (fail closed) and give our just-acquired lock back.
-                Workspace(meta, {"workspace_id": "release"}, False, own_token)._unlink_own_lock(
-                    locks / "writer.lock")
+                except (OSError, ValueError):
+                    holder = {}
+                if not holder.get("token"):
+                    raise WorkspaceCorruptError(
+                        f"orphaned lock-release file {orphan.name} is unreadable, so its writer cannot "
+                        "be revoked; nobody may write until an administrator confirms that writer is "
+                        "stopped and runs 'revisionworx lock clear-orphan'")
+                Workspace._fence_token_orphan(meta, orphan)
+        try:
+            Workspace._settle_orphan_clears(meta)
+            # An orphan only ever moves .releasing -> .clearing -> (evidence | .releasing quarantine).
+            # Scanning releasing, clearing, releasing again therefore sees every such file at least
+            # once even while a concurrent administrator is moving it.
+            fence_all()
+            busy = sorted(locks.glob(".clearing-*"))
+            if busy:
                 raise WorkspaceCorruptError(
-                    f"orphaned lock-release file {orphan.name} is unreadable, so its writer cannot be "
-                    "revoked; nobody may write until an administrator confirms that writer is stopped and "
-                    "runs 'revisionworx lock clear-orphan'")
-            if tok != own_token:
-                if revoked is None:
-                    revoked = Workspace._revoked_tokens(meta)
-                if tok not in revoked:
-                    Workspace._publish_revocation(
-                        meta, holder, reason="lock orphaned by an interrupted release; revoked to fail "
-                        "closed (ADR-019)", evidence=orphan.name)
-                    revoked.add(tok)
+                    f"orphaned lock-release file {busy[0].name} is being cleared by an administrator; "
+                    "retry when 'revisionworx lock clear-orphan' has finished")
+            fence_all()
+        except BaseException:
+            # We cannot establish that every displaced lock is fenced: refuse to become a writer
+            # (fail closed) and give our just-acquired lock back.
+            Workspace(meta, {"workspace_id": "release"}, False, own_token)._unlink_own_lock(
+                locks / "writer.lock")
+            raise
+
+    @staticmethod
+    def _fence_token_orphan(meta: Path, orphan: Path) -> None:
+        locks = meta / "locks"
+        if orphan.name.startswith(".fencing-"):
+            custody = orphan                         # resumed after a crash in this very step
+        else:
+            custody = locks / f".fencing-{uuid.uuid4().hex}"
             try:
-                os.replace(orphan, locks / f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}")
+                os.replace(orphan, custody)
             except FileNotFoundError:
-                pass  # the releaser finished after all
+                return                               # the releaser finished, or another fencer has it
+        try:
+            holder = atomicio.read_json(custody)
+        except FileNotFoundError:
+            return                                   # a concurrent fencer finished it
+        except (OSError, ValueError):
+            holder = {}
+        tok = holder.get("token")
+        if not tok:
+            # What we took custody of is not what we inspected: keep it as a blocking orphan.
+            os.replace(custody, locks / f".releasing-{uuid.uuid4().hex}")
+            raise WorkspaceCorruptError(
+                f"orphaned lock-release file {orphan.name} changed while being fenced; nobody may write "
+                "until an administrator runs 'revisionworx lock clear-orphan'")
+        evidence = f"writer.lock.orphaned-{uuid.uuid4().hex[:8]}"
+        if tok not in Workspace._revoked_tokens(meta):
+            Workspace._publish_revocation(
+                meta, holder, reason="lock orphaned by an interrupted release; revoked to fail "
+                "closed (ADR-019)", evidence=evidence)
+        try:
+            os.replace(custody, locks / evidence)
+        except FileNotFoundError:
+            pass
 
     @staticmethod
     def _revoked_tokens(meta: Path) -> set[str]:
@@ -452,63 +486,237 @@ class Workspace:
         except FileNotFoundError:
             return None
 
+    # ADR-019 rev. 3: one administrative clear per orphan instance, bound to the bytes it archives.
+    ORPHAN_AUTH_OP = "workspace.orphan.clear"
+    ORPHAN_RESULT_OP = "workspace.orphan.clear.result"
+
     @classmethod
-    def clear_orphaned_release(cls, location: Path, name: str, reason: str) -> None:
-        """Administrative resolution of an unreadable orphaned ``.releasing-*`` file (ADR-019, rev. 2).
+    def clear_orphaned_release(cls, location: Path, name: str, reason: str) -> dict:
+        """Administrative resolution of an unreadable orphaned ``.releasing-*`` file (ADR-019, rev. 3).
 
         Use only after confirming the writer it may have belonged to is stopped: its token is unknown,
-        so it cannot be fenced. Audit-first and crash-resumable:
-          1. the audit (reason, file name, SHA-256 of its exact bytes, planned evidence name) is
-             published to the journal FIRST; it is the authorisation;
-          2. the file is then moved to that evidence name.
-        A crash before 1 leaves the orphan in place (acquisition stays refused). A crash between 1 and 2
-        is completed by the next acquisition or by re-running this command, which reuses the existing
-        audit (exactly once). Bytes that differ from the audited digest are never covered by it."""
+        so it cannot be fenced.
+
+          1. **Authorise** (serialized): publish ``workspace.orphan.clear`` with the reason, file name,
+             SHA-256 of the bytes the administrator inspected and the planned evidence name, as a
+             compare-and-swap on the journal head. If an unfinished authorisation for this file
+             already exists, it is adopted instead (whatever this caller's reason): there is never
+             more than one open authorisation per orphan.
+          2. **Take custody**: atomically rename the orphan to a private ``.clearing-<clear_id>-*``
+             name. Whatever is now there is exactly what was moved; it keeps blocking writers.
+          3. **Verify and archive**: read the custody file once; if its SHA-256 equals the audited
+             digest, publish the evidence file from *those verified bytes* (exclusive create), so the
+             archived evidence equals the audit by construction.
+          4. **Terminal result** (exactly once per clear): ``completed``, or ``refused`` with the
+             observed digest and a fresh quarantine name, to which mismatched bytes are moved. A
+             quarantined file is a new blocking orphan that needs its own audited decision.
+          5. Dispose of the custody file only if it still holds the audited bytes; otherwise it is
+             quarantined (blocking) rather than lost.
+
+        Every step is idempotent and is resumed by the next acquisition or by re-running this
+        command. Returns ``{clear_id, outcome, adopted, evidence, quarantine}``."""
         if not reason.strip():
             raise WorkspaceError("a reason is required")
         meta = cls.meta_dir_for(location)
         if not re.match(r"^\.releasing-[0-9a-f]{1,64}$", name):
             raise WorkspaceError(f"{name!r} is not an orphaned release file")
-        src = meta / "locks" / name
-        try:
-            digest = hashlib.sha256(src.read_bytes()).hexdigest()
-        except FileNotFoundError:
-            if any(a["file"] == name for a in cls._orphan_clear_audits(meta)):
-                return  # already cleared (idempotent retry after completion)
-            raise WorkspaceError(f"{name} does not exist") from None
-        audit = next((a for a in cls._orphan_clear_audits(meta)
-                      if a["file"] == name and a["file_sha256"] == digest), None)
-        if audit is None:
-            audit = {"event": "orphaned-release-cleared", "file": name, "file_sha256": digest,
-                     "evidence": f"writer.lock.orphaned-{uuid.uuid4().hex[:12]}", "reason": reason,
-                     "time": now_iso(), "by": current_actor()}
-            cls._publish_admin_entry(meta, "workspace.orphan.clear", audit)
-        cls._complete_orphan_clear(meta, audit)
-
-    @classmethod
-    def _orphan_clear_audits(cls, meta: Path) -> list[dict]:
-        probe = cls(meta, {"workspace_id": "probe"}, False, None)
-        return [a for a in probe.list("audit").values() if a.get("event") == "orphaned-release-cleared"]
+        auth, adopted = cls._authorise_orphan_clear(meta, name, reason)
+        result = cls._drive_orphan_clear(meta, auth)
+        return {"clear_id": auth["clear_id"], "adopted": adopted, "outcome": result["outcome"],
+                "evidence": auth["evidence"], "quarantine": result.get("quarantine")}
 
     @staticmethod
-    def _complete_orphan_clear(meta: Path, audit: dict) -> bool:
-        """Move an audited orphan to its evidence name if its bytes still match the audit."""
-        src = meta / "locks" / audit["file"]
-        try:
-            if hashlib.sha256(src.read_bytes()).hexdigest() != audit["file_sha256"]:
-                return False
-            os.replace(src, meta / "locks" / audit["evidence"])
-        except FileNotFoundError:
-            pass
-        return True
+    def _clear_id(auth: dict) -> str:
+        # rev. 2 audits have no clear_id; their evidence name carries a unique hex suffix
+        return auth.get("clear_id") or auth["evidence"].rsplit("-", 1)[1]
 
     @classmethod
-    def _publish_admin_entry(cls, meta: Path, op: str, audit_data: dict, revokes: str | None = None) -> int:
+    def _orphan_clear_state(cls, meta: Path, probe: "Workspace | None" = None,
+                            upto: int | None = None) -> tuple[list[dict], dict[str, dict]]:
+        """Authorisations (journal order) and first terminal result per clear_id, read straight from
+        the journal (authoritative), up to ``upto``."""
+        probe = probe or cls(meta, {"workspace_id": "probe"}, False, None)
+        auths: list[dict] = []
+        results: dict[str, dict] = {}
+        for s in probe.journal_seqs():
+            if upto is not None and s > upto:
+                break
+            e = probe.read_entry(s)
+            if e.get("op") not in (cls.ORPHAN_AUTH_OP, cls.ORPHAN_RESULT_OP):
+                continue
+            for item in e["records"]:
+                d = item.get("data") or {}
+                if d.get("event") == "orphaned-release-cleared":
+                    auths.append({**d, "clear_id": cls._clear_id(d), "seq": s})
+                elif d.get("event") == "orphaned-release-clear-result":
+                    results.setdefault(d["clear_id"], {**d, "seq": s})
+        return auths, results
+
+    @classmethod
+    def _authorise_orphan_clear(cls, meta: Path, name: str, reason: str) -> tuple[dict, bool]:
+        """Return the single open authorisation for ``name``, publishing one only if none exists.
+
+        Serialization: the decision is taken against journal head H and published exactly at H+1 by
+        exclusive create. If anyone published anything after H, the publish fails and the decision
+        is retaken, so two administrators can never both authorise the same orphan instance."""
+        probe = cls(meta, atomicio.read_json(meta / "workspace.json"), False, None)
+        src = meta / "locks" / name
+        for _attempt in range(1000):
+            probe._check_journal()
+            head = probe.head_seq()
+            auths, results = cls._orphan_clear_state(meta, probe, upto=head)
+            mine = [a for a in auths if a["file"] == name]
+            open_ = [a for a in mine if a["clear_id"] not in results]
+            if open_:
+                return open_[0], True
+            try:
+                data = src.read_bytes()
+            except FileNotFoundError:
+                if probe.head_seq() != head:
+                    continue                        # a competitor authorised and moved it: re-decide
+                if mine:
+                    last = mine[-1]
+                    res = results[last["clear_id"]]
+                    if res["outcome"] == "refused":
+                        raise WorkspaceError(
+                            f"{name} was not cleared: its bytes did not match the audited digest and it "
+                            f"was quarantined as {res['quarantine']}; inspect and clear that file") from None
+                    return last, True               # idempotent retry after completion
+                raise WorkspaceError(f"{name} does not exist") from None
+            clear_id = uuid.uuid4().hex
+            auth = {"event": "orphaned-release-cleared", "clear_id": clear_id, "file": name,
+                    "file_sha256": hashlib.sha256(data).hexdigest(),
+                    "evidence": f"writer.lock.orphaned-{clear_id}", "reason": reason,
+                    "time": now_iso(), "by": current_actor()}
+            try:
+                seq = cls._publish_admin_entry(meta, cls.ORPHAN_AUTH_OP, auth, expect_head=head)
+            except ExclusiveCreateError:
+                continue                            # someone published after our decision: retake it
+            return {**auth, "seq": seq}, False
+        raise WorkspaceError("could not authorise the orphan clear (journal contention)")
+
+    @classmethod
+    def _publish_result_once(cls, meta: Path, auth: dict, result: dict) -> dict:
+        """Publish the terminal result for ``auth`` unless one exists (CAS on the journal head).
+        Returns the result that is in force, which may be a competitor's."""
+        probe = cls(meta, atomicio.read_json(meta / "workspace.json"), False, None)
+        for _attempt in range(1000):
+            probe._check_journal()
+            head = probe.head_seq()
+            existing = cls._orphan_clear_state(meta, probe, upto=head)[1].get(auth["clear_id"])
+            if existing is not None:
+                return existing
+            data = {"event": "orphaned-release-clear-result", "clear_id": auth["clear_id"],
+                    "file": auth["file"], "evidence": auth["evidence"], **result,
+                    "time": now_iso(), "by": current_actor()}
+            try:
+                cls._publish_admin_entry(meta, cls.ORPHAN_RESULT_OP, data, expect_head=head)
+                return data
+            except ExclusiveCreateError:
+                continue
+        raise WorkspaceError("could not record the orphan clear result (journal contention)")
+
+    @classmethod
+    def _settle_orphan_clears(cls, meta: Path) -> None:
+        """Drive every open authorisation and every custody file to its terminal disposition.
+        Called by acquisition before the barrier check; idempotent and safe to run concurrently."""
+        locks = meta / "locks"
+        custody = sorted(locks.glob(".clearing-*"))
+        if not custody and not any(locks.glob(".releasing-*")):
+            return                                   # common case: nothing to settle, no journal scan
+        auths, results = cls._orphan_clear_state(meta)
+        by_id = {a["clear_id"]: a for a in auths}
+        for c in custody:
+            cid = c.name[len(".clearing-"):].rsplit("-", 1)[0]
+            if cid not in by_id:   # custody without an authorisation: never ours to archive
+                try:
+                    os.replace(c, locks / f".releasing-{uuid.uuid4().hex}")
+                except FileNotFoundError:
+                    pass
+        for a in auths:
+            in_custody = any(p.name.startswith(f".clearing-{a['clear_id']}-") for p in custody)
+            if in_custody or (a["clear_id"] not in results and (locks / a["file"]).exists()):
+                cls._drive_orphan_clear(meta, a)
+
+    @classmethod
+    def _drive_orphan_clear(cls, meta: Path, auth: dict) -> dict:
+        """Steps 2-5 of an authorised clear (see clear_orphaned_release). Idempotent."""
+        locks = meta / "locks"
+        cid, want = auth["clear_id"], auth["file_sha256"]
+        evidence = locks / auth["evidence"]
+        result = cls._orphan_clear_state(meta)[1].get(cid)
+        if result is None:                           # step 2: custody (never clobbers: fresh name)
+            try:
+                os.replace(locks / auth["file"], locks / f".clearing-{cid}-{uuid.uuid4().hex[:12]}")
+            except FileNotFoundError:
+                pass                                 # already in custody, or taken by a competitor
+        for c in sorted(locks.glob(f".clearing-{cid}-*")):
+            try:
+                data = c.read_bytes()                # step 3: the bytes we judge are the bytes we keep
+            except FileNotFoundError:
+                continue
+            got = hashlib.sha256(data).hexdigest()
+            if got == want and (result is None or result["outcome"] == "completed"):
+                try:
+                    atomicio.publish_exclusive(evidence, data)
+                except ExclusiveCreateError:
+                    if hashlib.sha256(evidence.read_bytes()).hexdigest() != want:
+                        raise WorkspaceCorruptError(
+                            f"evidence {evidence.name} exists with bytes that differ from its audit; "
+                            "writes refused") from None
+                if result is None:
+                    result = cls._publish_result_once(meta, auth, {"outcome": "completed"})
+                if result["outcome"] == "completed":
+                    cls._dispose_custody(c, want)
+                    continue
+            if result is None:
+                result = cls._publish_result_once(meta, auth, {
+                    "outcome": "refused", "observed_sha256": got,
+                    "quarantine": f".releasing-{uuid.uuid4().hex}"})
+            target = result.get("quarantine") if (result["outcome"] == "refused"
+                                                  and result.get("observed_sha256") == got) else None
+            cls._quarantine(c, locks / (target or f".releasing-{uuid.uuid4().hex}"))
+        if result is None and not (locks / auth["file"]).exists() and evidence.exists():
+            if hashlib.sha256(evidence.read_bytes()).hexdigest() == want:
+                result = cls._publish_result_once(meta, auth, {"outcome": "completed"})
+        return result or {"outcome": "pending"}
+
+    @staticmethod
+    def _dispose_custody(custody: Path, want: str) -> None:
+        """The custody file duplicates verified evidence. Remove it only while it still holds those
+        bytes; anything else found there is quarantined as a blocking orphan, never discarded."""
+        try:
+            same = hashlib.sha256(custody.read_bytes()).hexdigest() == want
+        except FileNotFoundError:
+            return
+        if same:
+            custody.unlink(missing_ok=True)
+        else:
+            Workspace._quarantine(custody, custody.with_name(f".releasing-{uuid.uuid4().hex}"))
+
+    @staticmethod
+    def _quarantine(src: Path, dst: Path) -> None:
+        try:
+            if os.name == "nt":
+                os.rename(src, dst)                  # refuses an existing destination
+            else:
+                os.link(src, dst)                    # EEXIST rather than clobber
+                src.unlink(missing_ok=True)
+        except FileNotFoundError:
+            return                                   # a concurrent completer moved it
+        except FileExistsError:
+            os.replace(src, dst.with_name(f".releasing-{uuid.uuid4().hex}"))
+
+    @classmethod
+    def _publish_admin_entry(cls, meta: Path, op: str, audit_data: dict, revokes: str | None = None,
+                             expect_head: int | None = None) -> int:
+        """Publish an administrative journal entry. With ``expect_head`` it is a compare-and-swap:
+        published exactly at expect_head + 1 or not at all (ExclusiveCreateError)."""
         probe = cls(meta, atomicio.read_json(meta / "workspace.json"), False, None)
         probe._check_journal()
         audit = RecordPut("audit", new_id("aud"), audit_data, expect_rev=0)
         for _attempt in range(1000):
-            seq = probe.head_seq() + 1
+            seq = probe.head_seq() + 1 if expect_head is None else expect_head + 1
             entry = {"seq": seq, "txid": uuid.uuid4().hex, "time": now_iso(), "actor": current_actor(),
                      "op": op, "records": [audit.as_json()], "blobs": [], "writer_token": None}
             if revokes:
@@ -518,6 +726,8 @@ class Workspace:
                 atomicio.publish_exclusive(meta / "journal" / f"{seq:020d}.json", atomicio.dumps_json(entry))
                 return seq
             except ExclusiveCreateError:
+                if expect_head is not None:
+                    raise
                 continue
         raise WorkspaceError("could not publish an administrative journal entry (journal contention)")
 

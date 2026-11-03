@@ -420,7 +420,7 @@ afterwards and is only evidence.
   remains an implementation detail.
 - The historical extension comes from `revision.source_rel_path`.
 
-### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED, awaiting QA
+### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED; rev. 3 awaiting independent review
 **Defect.** Reproduced by Distributed Systems (run 41387552435) and here
 (`tests/test_lock_release_race.py`, which failed on `d202b28`):
 1. Writer A verifies the token in `writer.lock`, then pauses before its pathname `unlink`.
@@ -479,6 +479,75 @@ exists. Adding more token re-checks only narrows the window.
 
   Changed bytes are never covered by an older audit; they need a new, separately audited decision.
   Documented; the same class as any manual override.
+
+- **Rev. 3: custody-bound, serialized clear** (Distributed Systems review of `366d435`, run
+  41393650443; both counterexamples reproduced first in `tests/test_orphan_clear_custody.py`, all
+  16 tests fail on `366d435`).
+  - *P1 (audit/bytes TOCTOU).* Rev. 2 hashed `locks/<name>` and then moved the **pathname**. A
+    file swapped in between was archived under the audit, the barrier vanished and a new writer
+    acquired. A second hash does not help: the race simply moves after it.
+  - *P2 (duplicate authorisation).* Two administrators could both pass the "no audit yet" lookup
+    and both publish `workspace.orphan.clear`, with different reasons and evidence names, for one
+    orphan.
+
+  Trust boundary: the audit authorises **bytes** (the SHA-256 the administrator inspected), not a
+  pathname. The name only locates candidates. A file may be archived under an audit only if
+  the archived bytes are, by construction, the audited bytes.
+
+  Protocol (`clear_orphaned_release`, `_drive_orphan_clear`):
+  1. **Authorise, serialized.** The decision ("is there an open authorisation for this file?") is
+     taken against journal head *H*, and the authorisation is published exactly at *H*+1 by
+     exclusive create (`_publish_admin_entry(expect_head=H)`). If anything was published after *H*,
+     the publish fails and the decision is retaken (also when the file vanished meanwhile). There
+     is therefore at most one open authorisation per orphan instance, and a competing request
+     **adopts** it (its own reason is not recorded; the CLI says so). Each authorisation carries a
+     `clear_id`; rev. 2 audits derive it from their evidence-name suffix.
+  2. **Take custody.** `os.replace(<name>, .clearing-<clear_id>-<rand>)`: a fresh name that never
+     clobbers. Whatever is now in custody is exactly what was moved, and custody files keep
+     blocking writers.
+  3. **Verify and archive from the verified buffer.** Read the custody file once. If
+     `sha256(bytes)` equals the audit, publish the evidence file *from those bytes* (exclusive
+     create). Later mutation of the custody file cannot reach the evidence. Existing evidence
+     with different bytes stops everything: `WorkspaceCorruptError`.
+  4. **One terminal result per clear** (`workspace.orphan.clear.result`, published by the same
+     compare-and-swap):
+     - `completed`; or
+     - `refused`, with the observed SHA-256 and a fresh quarantine name `.releasing-<new>`. The
+       mismatched bytes are moved there. A quarantined file is a new orphan instance: it still
+       blocks (it is unreadable, or carries a token and is fenced) and needs its own audited
+       decision. The old name can no longer be re-authorised.
+  5. **Dispose of custody** only while it still holds the audited bytes. Anything else found there
+     is quarantined, never deleted.
+
+  Acquisition first settles every open clear and custody file, then scans `.releasing-*`, then
+  `.clearing-*`, then `.releasing-*` again. Files only move `.releasing → .clearing → (evidence |
+  .releasing quarantine)`, so a concurrent administrator cannot slip one past the barrier. Any
+  custody file still present means a clear is in flight, and acquisition refuses ("retry").
+
+  Token-bearing orphans are fenced by the same move-then-verify rule: the file goes to
+  `.fencing-<rand>` first; the token is read from the moved file, revoked, then archived. An
+  unreadable custody file is re-quarantined as a blocking orphan.
+
+  Crash windows (each tested; "resume" means the next acquisition or a re-run of the command):
+
+  | Crash point | State | Result |
+  |---|---|---|
+  | Before or during authorisation | orphan at its name, no audit | acquisition refused |
+  | After authorisation, before custody | orphan at its name, open audit | resume takes custody under that audit |
+  | After custody, before evidence | `.clearing-*` | blocks; resume verifies and archives exactly once |
+  | After evidence, before terminal result | evidence + `.clearing-*` | blocks; resume publishes one `completed` |
+  | After `refused` result, before quarantine | `.clearing-*`, refused result | blocks; resume moves the bytes to the recorded quarantine name |
+  | After terminal result, before custody disposal | evidence + `.clearing-*` | resume disposes custody if the bytes still match |
+
+  **Threat-model boundary (explicit).** The protocol defends against *pathname* races: any
+  replacement, rename or re-creation at the orphan name, the custody name or the evidence name,
+  by any process. Bytes written *in place* through a handle opened **before** the custody move
+  cannot change the evidence (step 3), but can change the custody duplicate before disposal.
+  That duplicate is then quarantined rather than deleted. The one residual case: a write
+  landing between the final custody re-hash and its `unlink` loses only those injected bytes.
+  It can neither alter the evidence nor grant authority. An actor able to do that can also
+  write the journal directly, which is outside every file-journal guarantee (ADR-014 gates the
+  multi-host design).
 
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.

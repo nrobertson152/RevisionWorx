@@ -190,8 +190,18 @@ def cmd_lock_show(args):
 
 
 def cmd_lock_clear_orphan(args):
-    Workspace.clear_orphaned_release(_ws_location(args), args.file, args.reason)
-    _emit(args, {"cleared": args.file}, f"Cleared {args.file} (kept as evidence; recorded in the journal).")
+    r = Workspace.clear_orphaned_release(_ws_location(args), args.file, args.reason)
+    if r["outcome"] == "refused":
+        raise WorkspaceError(f"{args.file} was NOT cleared: its bytes changed after you inspected them. "
+                             f"They were kept as {r['quarantine']}, which still blocks writers; inspect "
+                             "that file and clear it separately (recorded in the journal).")
+    if r["outcome"] != "completed":
+        raise WorkspaceError(f"{args.file} is being cleared by another administrator; retry shortly.")
+    note = " (an existing authorisation for this file was completed; your reason was not recorded)" \
+        if r["adopted"] else ""
+    _emit(args, {"cleared": args.file, **r},
+          f"Cleared {args.file} as {r['evidence']} (verified against the audited SHA-256; recorded in "
+          f"the journal){note}.")
 
 
 def cmd_lock_break(args):

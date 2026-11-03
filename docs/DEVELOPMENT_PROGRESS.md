@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-01 (second session: Phase 1 review, PySide6 migration)
+**Updated:** 2026-11-02 (session 8: ADR-019 rev. 3)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -72,6 +72,29 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | GUI | `gui/viewmodels.py`, `gui/qt/documents.py` | View-models tested headless; Qt Documents tab **not executed** |
 
 ## Session log
+
+### 2026-11-02 (session 8) — ADR-019 rev. 3: custody-bound, serialized orphan clear (DS P1 + P2)
+- **Reproduced first.** `tests/test_orphan_clear_custody.py`: all 16 tests fail on `366d435`.
+  - P1: the evidence differs from the audited SHA-256, and a new writer acquires.
+  - P2: two authorisations are published for one orphan.
+- **Fix (ADR-019 rev. 3):**
+  - **Authorisation** is a compare-and-swap on the journal head; competitors adopt it.
+  - **Custody:** the orphan moves to a private `.clearing-*` name; evidence is written from the
+    verified in-memory bytes.
+  - **Terminal result:** exactly one per clear (`completed` / `refused`). Mismatched bytes are
+    quarantined under a fresh blocking name.
+  - **Acquisition** settles open clears, then scans releasing, clearing, releasing.
+  - **Fencing:** token-orphan fencing now also moves the file before reading it.
+- **Found under load and fixed:** a stale-view "does not exist" when a competitor authorised and
+  moved the file between our head read and our file read. Regression test added.
+- **Behaviour change.** An orphan whose bytes changed after authorisation is no longer re-cleared
+  by its old name. It is quarantined, and the administrator clears the quarantine name (the CLI
+  prints it). The rev. 2 test was updated accordingly.
+- **Tests:** `python -m pytest -q` → **207 passed, 1 skipped (Qt)**, 10 consecutive full runs
+  identical (Linux, Python 3.13.18). Windows **not executed here**; the Windows branch of
+  `_quarantine` (`os.rename`) is exercised only by CI.
+- **Independent review pending:** Distributed Systems' original counterexamples, then QA on
+  Linux and Windows. The Phase 1 backport and `perf-journal-index` stay on hold until acceptance.
 
 ### 2026-11-02 (session 7) — P0: successor-lock deletion race fixed (ADR-019), awaiting QA
 - **Reproduced first:** `tests/test_lock_release_race.py::test_paused_releaser_never_deletes_successor_lock`

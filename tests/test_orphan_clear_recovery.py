@@ -110,8 +110,14 @@ def test_orphan_changed_after_audit_is_refused(share, monkeypatch):
     (locks / NAME).write_text("{ different torn bytes")  # not what the administrator authorised
     with pytest.raises(WorkspaceError, match="orphaned"):
         Workspace.open(share, writable=True)
-    # the old authorisation does not cover new bytes: a fresh, separately audited decision is needed
-    Workspace.clear_orphaned_release(share, NAME, reason="re-inspected: still a dead writer's file")
+    # rev. 3: the old authorisation does not cover new bytes; they were quarantined under a fresh
+    # name (a new orphan instance), which needs a fresh, separately audited decision
+    with pytest.raises(WorkspaceError, match="quarantined as (\\.releasing-[0-9a-f]+)") as ei:
+        Workspace.clear_orphaned_release(share, NAME, reason="re-inspected")
+    import re
+    q = re.search(r"quarantined as (\.releasing-[0-9a-f]+)", str(ei.value)).group(1)
+    assert (locks / q).read_text() == "{ different torn bytes"
+    Workspace.clear_orphaned_release(share, q, reason="re-inspected: still a dead writer's file")
     audits = _audits(share)
     assert len(audits) == 2 and audits[0]["file_sha256"] != audits[1]["file_sha256"]
     with Workspace.open(share, writable=True):

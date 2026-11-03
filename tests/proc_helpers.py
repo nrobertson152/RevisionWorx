@@ -51,3 +51,10 @@ def race_checkout(location: str, doc_id: str, barrier, results) -> None:
         results.put(f"error: {type(exc).__name__}: {exc}")
     finally:
         ws.close()
+
+
+def clear_orphan(share: str, name: str, reason: str) -> None:
+    """Spawned administrator racing others on one orphan (ADR-019 rev. 3, DS P2)."""
+    from pathlib import Path
+    from revisionworx.workspace import Workspace
+    Workspace.clear_orphaned_release(Path(share), name, reason=reason)
