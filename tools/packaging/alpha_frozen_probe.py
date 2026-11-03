@@ -64,6 +64,11 @@ def create(root: Path, app: QApplication) -> dict:
     app.processEvents()
     require("single user" in w.alpha_banner.text().lower(), "alpha warning missing")
     require(w.stack.currentWidget() is w.start_page, "new profile not on start page")
+    initial = w.observable_state()
+    require(initial["contract"] == 1 and initial["page"] == "start",
+            "GUI start-page observable contract is missing")
+    require(not initial["read_only"] and initial["selected_document"] is None,
+            "fresh GUI profile should start without a selected document or blocked authority")
 
     ws = root / "Projects with spaces Ω"
     sp = w.start_page
@@ -75,6 +80,10 @@ def create(root: Path, app: QApplication) -> dict:
     require(w.stack.currentWidget() is w.workspace_page,
             "Create project did not open workspace: " + sp.error_label.text())
     selected_project(w, app)
+    started = w.observable_state()
+    require(started["page"] == "workspace"
+            and started["selected_project"] == w.documents_tab.list_vm.project_id
+            and not started["documents"], "GUI project-created observable state inconsistent")
 
     fixture = root / "external source Ω.txt"
     fixture.write_bytes(ORIGINAL)
@@ -96,10 +105,19 @@ def create(root: Path, app: QApplication) -> dict:
 
     doc_id = tab.selected_doc_id()
     require(bool(doc_id), "GUI has no selected document")
+    imported = w.observable_state()
+    require(imported["selected_document"] == doc_id and len(imported["history"]) == 1,
+            "GUI observable does not show imported revision")
+    require(imported["actions"]["checkout"] and not imported["actions"]["checkin"],
+            "GUI observable reports incorrect initial checkout actions")
     require(tab.checkout_btn.isEnabled(), "Checkout not enabled")
     tab.checkout_btn.click()
     app.processEvents()
     require(tab.checkin_btn.isEnabled(), "Checkout did not enable check-in")
+    checked_out = w.observable_state()
+    require(checked_out["selected_document"] == doc_id
+            and checked_out["actions"]["checkin"] and not checked_out["actions"]["checkout"],
+            "GUI observable does not represent checked-out ownership")
 
     working_file = Path(tab.panel.working_path)
     require(working_file.is_file(), "Checked-out working file absent")
@@ -124,6 +142,23 @@ def create(root: Path, app: QApplication) -> dict:
     pump(app, ctl, lambda: tab.history_model.rowCount() == 2)
     require(not tab.checkin_btn.isEnabled(), "Checkout not cleared after check-in")
     require(fixture.read_bytes() == ORIGINAL, "Import modified external source file")
+    after_checkin = w.observable_state()
+    require(after_checkin["selected_document"] == doc_id
+            and len(after_checkin["history"]) == 2
+            and after_checkin["actions"]["checkout"] and not after_checkin["actions"]["checkin"],
+            "GUI observable lost committed revisions or checkout controls")
+    require(after_checkin["message_level"] != "error" and not after_checkin["read_only"],
+            "successful checked-in content is incorrectly presented as a GUI error")
+
+    # This deliberately tests the UI's F5 selection-preservation contract on
+    # the installed frozen build, which previously regressed on Windows/Linux.
+    w.refresh_all()
+    app.processEvents()
+    refreshed = w.observable_state()
+    require(refreshed["selected_project"] == started["selected_project"]
+            and refreshed["selected_document"] == doc_id
+            and len(refreshed["history"]) == 2,
+            "F5 lost the project/document selection or committed history")
 
     history = list(tab.panel.history)
     actual_hashes = {row["sha256"] for row in history}
@@ -141,6 +176,8 @@ def create(root: Path, app: QApplication) -> dict:
         "gui_import": "passed",
         "gui_checkout_checkin": "passed",
         "gui_create_open": "passed",
+        "gui_observable_contract_v1": "passed",
+        "gui_f5_selection_preserved": "passed",
         "qt_mode": "offscreen automation; no human interactive test",
     }
     w.close()
@@ -169,6 +206,13 @@ def reopen(root: Path, app: QApplication) -> dict:
     expected = sorted(hashlib.sha256(blob).hexdigest() for blob in (ORIGINAL, REVISED))
     require(hashes == expected, "Reopened GUI revision hashes differ")
     require("single user" in w.alpha_banner.text().lower(), "Reopened alpha banner missing")
+    reopened_state = w.observable_state()
+    require(reopened_state["contract"] == 1
+            and reopened_state["selected_document"] == tab.selected_doc_id()
+            and len(reopened_state["history"]) == 2
+            and reopened_state["actions"]["checkout"]
+            and not reopened_state["actions"]["checkin"],
+            "GUI observable state after restart inconsistent with persisted history")
     result = {
         "phase": "reopen",
         "workspace": str(ws),
@@ -177,6 +221,7 @@ def reopen(root: Path, app: QApplication) -> dict:
         "revision_hashes": hashes,
         "history_rows": tab.history_model.rowCount(),
         "gui_reopen": "passed",
+        "gui_observable_after_reopen": "passed",
         "qt_mode": "offscreen automation; no human interactive test",
     }
     w.close()
