@@ -6,6 +6,7 @@ on:
       - integration/openschematix
     paths:
       - 'tools/packaging/stage_corrected_core_gui.py'
+      - 'tools/packaging/test_stage_corrected_core_gui.py'
       - '.github/workflows/revisionworx-corrected-core-compatibility.yml'
   workflow_dispatch:
 
@@ -55,6 +56,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xkb1 libxcb-icccm4 libxcb-shape0
       - name: Validate packaging safeguards
         run: python tools/packaging/test_builder.py
+      - name: Verify composite staging rejects dirty checkouts and bad SHAs
+        run: python tools/packaging/test_stage_corrected_core_gui.py
       - name: Stage exact two-SHA experimental composite and receipt
         run: >-
           python tools/packaging/stage_corrected_core_gui.py
