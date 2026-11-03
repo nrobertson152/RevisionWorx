@@ -212,3 +212,42 @@ def test_repeated_checkin_escape_preserves_checkout_and_revision_chain(qapp, des
         assert win.isEnabled()
         assert tab.checkin_btn.isEnabled()
         assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
+
+
+def test_production_checkin_button_escape_keeps_checkout(qapp, desktop):
+    """Exercise the real button/signal/modal path, not a standalone dialog."""
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import CheckinDialog
+
+    win, _ctl, home, _doc = desktop
+    tab = win.documents_tab
+    win.show()
+    qapp.processEvents()
+    tab.checkout()
+    qapp.processEvents()
+    before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
+    journal = home / ".revisionworx" / "journal"
+    journal_before = {p.name: p.read_bytes() for p in journal.glob("*.json")}
+    assert tab.checkin_btn.isEnabled()
+
+    observed = []
+
+    def cancel_real_modal():
+        modal = qapp.activeModalWidget()
+        observed.append(isinstance(modal, CheckinDialog))
+        if isinstance(modal, CheckinDialog):
+            QTest.keyClick(modal.description, Qt.Key.Key_Escape)
+        else:
+            # Never leave a test hung if the production wiring opens another dialog.
+            for widget in qapp.topLevelWidgets():
+                if isinstance(widget, QtWidgets.QDialog) and widget.isVisible():
+                    widget.reject()
+
+    QTimer.singleShot(0, cancel_real_modal)
+    QTest.mouseClick(tab.checkin_btn, Qt.MouseButton.LeftButton)
+    qapp.processEvents()
+    assert observed == [True], "The production check-in button must open CheckinDialog"
+    assert tab.checkin_btn.isEnabled(), "Escape must retain the checkout"
+    assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
+    assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_before
