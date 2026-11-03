@@ -661,3 +661,59 @@ authorization still required for any production integration/backport/merge.
 unchanged. Test-only wrapper MUST NOT ship. Actual manual interaction, clean
 physically disconnected Windows runtime, signed native installer and
 two-host SMB/NFS remain unexecuted.
+
+## 2026-11-02 — separately pinned corrected-core + GUI frozen compatibility PASS
+
+**New experimental integration work only:** staging script at
+`795abd231d8ce4d59ab6823b6222fa446763ddd7` and separate
+compatibility workflow at `393485e96385beded0f74693bb26644c129851eb`.
+They combine corrected Phase 2 core SHA
+`fe8a179f0203ef08151dc8459c84609dc639c4fe` with desktop alpha
+GUI SHA `17651af68128572c7c83429513044a5948dd07bd` in an
+intentionally dirty **disposable CI checkout only**, never on either
+branch or any actual engineering workspace. Provenance receipt records
+BOTH SHAs and individual SHA-256s for 10 overlaid GUI source files.
+
+**[Combined source CI 41572137880](https://github.com/nrobertson152/RevisionWorx/actions/runs/41572137880),
+workflow harness `393485e96385beded0f74693bb26644c129851eb`:
+Ubuntu and Windows Python 3.11 matrix BOTH SUCCESS.** The independent
+test-only frozen GUI and CLI built and exercised project create,
+external-file import, checkout, modified-file checkin, two immutable
+journal revisions, F5 state/selection preservation, fresh GUI process
+reopen, absent working-file detection and restoration, and separate
+frozen CLI exports with SHA-256 verification of both historic revision
+blobs. Both jobs print
+`TEST_ONLY_COMPOSITE_SOURCE_RECEIPT` core SHA `fe8a179`,
+GUI SHA `17651af`, 10 overlaid files, dirty-by-design true, and
+`FROZEN_ALPHA_GUI_EVIDENCE` with
+`gui_missing_file_alert_and_restore=true`,
+`gui_observable_contract_v1=true`,
+`gui_f5_selection_preserved=true`,
+`cli_independent_exports_sha256=true`. Original frozen data and
+read-only workspace checks remain passing.
+
+Ubuntu also passes the full relocated frozen Qt/CLI workflow and normal
+GUI launch under Python/pip-free, nonroot/read-only-root Docker
+`--network none`; Windows additionally passes long/extended local
+paths, localhost UNC loopback read, byte-range file-lock refusal and
+original SHA-256 preservation. This is deterministic **offscreen**
+automated UI and test-only frozen code, **NOT** interactive GUI,
+signed/native installer, real Windows Python-free disconnected VM,
+actual power cut/ACL, socket-attempt audit, or shared two-host SMB/NFS.
+
+**Independent core safety review:** QA and Distributed Systems each
+scoped-ACCEPT all three historically confirmed cooperative-protocol
+writer-lock P1 fixes at exactly `fe8a179` on native local OS;
+[QA 41571153163](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571153163)
+and [Distributed 41570591613](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570591613),
+[41570924625](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570924625),
+[41571231241](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571231241).
+Neither scoped verdict grants production merge, broad writer proof, Phase 1
+backport or release.
+
+New reference:
+[exact source composition and acceptance matrix](https://github.com/nrobertson152/RevisionWorx/blob/integration/openschematix/docs/CORRECTED_CORE_GUI_COMPATIBILITY.md).
+Normal baseline packaging still separately pins `d656884b`; standalone
+alpha GUI workflow still separately pins `17651af`. PR #2 stays draft,
+and no core branch, QA, Distributed, GUI branch, production source pin,
+release, tag, merge or backport was modified.
