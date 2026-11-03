@@ -105,3 +105,13 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Native jobs:** Ubuntu Python 3.13 job `126167676731` 22 PASS; Ubuntu Python 3.11 job `126167677370` 22 PASS; Windows Python 3.11 job `126167677113` 22 PASS; Windows Python 3.13 job `126167677581` 22 PASS. **Total 88 PASS, 0 FAIL, 0 SKIP, 0 XFAIL**.
 - **Scope:** positive acceptance for these 22 assertions on the pinned corrected source with immutable fixture identity. This closes the prior QA fixture-identity evidence gap; it does **not** establish malformed-journal precommit abort, external concurrent CAD rename/source replacement, Windows live `.releasing-*` PermissionError recovery, disk/power-loss durability, or multi-host SMB/NFS safety. Historical old-source negative-control workflows may remain red by design.
 - **Next:** independent adversarial precommit abort fixture and source-replacement race fixture, coordinated with QA and Claude A; no merge/release authority.
+
+
+## 2026-11-03 — Bounded verified-content corruption and no-output gates
+
+- **Checkout:** #29 simple GitHub CHECKED OUT/CHECKED IN; role-owned branch only.
+- **New fixture commit:** `b93c012d18783c24dde4da5273a53b98aa9cc4f7`; `tests/test_core_bounded_content_integrity.py`.
+- **Four deterministic tests:** healthy exact verified read; same-length damaged immutable object must raise typed `WorkspaceCorruptError` on read and export without creating destination; bounded read must raise `ContentTooLarge`; missing object must raise typed corruption. All snapshot every workspace file byte before/after read-only operations; only disposable closed-workspace objects are damaged.
+- **Implementation inspected:** `revisionworx/content.py` on `phase2-documents`, with `ContentStore.read_verified`, `export`, `ContentTooLarge`, and `WorkspaceCorruptError`. No production changes or shared format changes.
+- **Execution:** NOT RUN, no Linux/Windows/Python counts or new CI link. This commit is test-only; exact `python -m pytest -q -ra tests/test_core_bounded_content_integrity.py` must run on Ubuntu/Windows Python 3.11/3.13 against a pinned corrected production SHA before acceptance. Four test cases per environment planned; 0 observed pass/fail/skip/xfail.
+- **Remaining:** arrange immutable-fixture exact-SHA CI, inspect native logs, QA review; separately test concurrent CAD rename and malformed-journal precommit abort; Windows `.releasing-*` and multi-host gates remain open. Prior frozen corrected-source 88-pass run 41707814032 does NOT include these four new tests.
