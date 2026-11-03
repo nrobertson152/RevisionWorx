@@ -87,3 +87,10 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Workflow commit:** `6505d262c89721bebe802d87ca5f91b26f353123`; `.github/workflows/core-a-unicode-cad-provenance.yml`. Pinned Phase 2 production `f01b37d345c5208ab0fa520588a2abe8c66c894a`, separate test checkout, Ubuntu/Windows Python 3.11/3.13, `python -m pytest -q -ra tests/test_core_unicode_cad_provenance.py`, two tests per job (8 planned).
 - **Verification:** no tests executed or native job logs observed during authoring: **0 observed PASS/FAIL/SKIP/XFAIL**. CI is not accepted until per-job logs and exact test checkout SHA are inspected. No claim of CAD parser, filesystem race, or multi-host safety.
 - **Next:** inspect Actions native jobs, correct fixture assumptions if necessary; independent QA review. After Claude A checks in corrected SHA, run unchanged strict malformed-journal tests and CAD source-race acceptance separately.
+
+## 2026-11-03 — Frozen fixture provenance for corrected-source CI
+
+- **QA finding addressed:** independent test checkout previously floated with PR synthetic merge SHA, limiting exact fixture reproducibility (QA assertion audit `cab0da118698f391d99beaedba765180eb91feaa`).
+- **Workflow commit:** `e39e5b5439e8e0392d9560e7c595933013781e82`; corrected-source workflow now checks out independent fixtures at immutable `ba51686f0f0db77373c771ab17121668a8648e3b` and asserts `git rev-parse HEAD` equals that SHA before overlay. Production remains fixed at `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`, separately asserted. No test assertion or production changes.
+- **Previously verified positive matrix:** Actions 41689355302, Ubuntu/Windows Python 3.11/3.13 each 22 passed, 0 failed/skipped/xfailed; this evidence predates the fixture-pin workflow update. **New workflow CI not yet verified**; no new pass count claimed.
+- **Next:** inspect new native CI logs for both immutable checkout identities and 22 passes/job. QA to review fail-closed precommit and external rename adversarial tests; Windows `.releasing-*` and cross-host acceptance remain open.
