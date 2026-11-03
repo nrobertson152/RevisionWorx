@@ -50,3 +50,15 @@ From the exact GitHub compare API at this audit: `phase2-documents` is **25 ahea
 3. Verify and test the *merged tree* on native Linux and Windows; repeat after any GUI or docs conflict resolution. Obtain Director approval for the actual merge sequence. No automatic backport, merge, retarget, release or network-folder claim.
 
 **No production core, phase1, GUI, or branch target modified. Only research tests, workflow, documentation and PR comments are in scope.**
+
+
+## Superseding latest-core checkpoint: `a03f1f0` (same sprint)
+
+During the exact-`22a5273` investigation, Claude A advanced `phase2-documents` by two commits: `feffbcfd9a928c30771e2b42f7c920ccf8ed5675` (16 reliability corrections, including index and journal cache) and `a03f1f00ab58b815534c4282b20ffc6503119aea` (separate-process crash matrix and four-platform CI configuration). **Do not carry the old 22a liveness defect forward uncritically**:
+
+- I inspected the new `workspace.py`: `Workspace._read_lock_file` no longer exists, and `_check_lock_still_held`/`close` call `atomicio.read_json` directly. Therefore the original **250 × 250** nested read retries have been **removed by the new code** (pending independent CI). A new `RETRY_SHARING = IS_WINDOWS` flag governs the atomicio retry budget.
+- The new `atomicio.retry_sharing` still catches **every** `PermissionError` whenever `RETRY_SHARING` is true, without checking that `exc.winerror == 32`. Therefore a permanent **WinError 5** remains eligible for up to 250 retries and about five seconds of unnecessary delay. This is **P2 availability/diagnostics** unless evidence shows more severe effects, not a proven writer-safety failure.
+- New independent source-pinned tests `prototype/test_core_a03f_retry_semantics.py` (commit `5b9418a71829c2381f69a344aae71cca830d7bf5`) and four-platform CI (commit `849011948c25d549d1983d477b5a2d22a848210a`, [run 41577872734](https://github.com/nrobertson152/RevisionWorx/actions/runs/41577872734)) distinguish old fixed retry nesting, transient WinError 32 recovery, POSIX immediate failure, and WinError 5 repeated denial. **Queued at this writing; no new-SHA PASS/FAIL claim yet.**
+- The two new commits also change ADR-022 `_rev` validation, `CheckoutTokens`, content object publication, index cache/recovery and other core surfaces. **Independent exact-`a03f1f0` qualification is still required** before changing the merge hold. The user-requested `22a5273` findings remain valid historical negative controls only.
+
+**Unchanged merge blocker:** direct Phase 1 `412e69a` or rejected backport `36d1957` into `main` would reintroduce known unsafe writer-lock behavior. No merge authorization.
