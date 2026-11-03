@@ -128,3 +128,44 @@ these procedures at production data or an engineering share.
 Linux desktop launchers, executable permissions and XDG locations must additionally
 be tested on real X11/Wayland desktops; Windows long-path and localhost UNC checks
 remain single-host path checks, not authenticated multi-host share reliability.
+
+
+## Frozen 0.1.0 Alpha: interactive acceptance still required
+
+The **automated** frozen GUI test in
+[FROZEN_DESKTOP_ALPHA_ACCEPTANCE.md](FROZEN_DESKTOP_ALPHA_ACCEPTANCE.md)
+passed Ubuntu and Windows at GUI source f00aa31b in run 41566749753.
+It drives real Qt widgets in offscreen mode, not a human desktop session.
+The separate test-only wrapper accepts an alpha probe command; it must NOT
+be distributed as a normal application.
+
+A future manual sign-off for a standard GUI build must capture:
+
+1. Clean OS installation, normal unprivileged user, installed executable
+   checksum, source SHA, OS build, filesystem, and whether Python and
+   networking are actually absent. Test Windows and Linux X11/Wayland.
+2. Launch regular GUI **without the test probe**; confirm visible alpha
+   banner says single-user/local-only and unsuitable for valuable data.
+   Use only new disposable test files and a VM snapshot.
+3. Use mouse, native file picker and keyboard to create/open a project,
+   import a distinct source, check out, edit, check in with a meaningful
+   description, browse both revisions, export each to separate destinations,
+   close GUI and restart a fresh process.
+4. Independently verify original source, both revision SHA-256 exports,
+   journal/history, correct checkout ownership and user-visible status.
+   A read-only reopen must not mutate authority data.
+5. Exercise missing working file, denied file or directory, conflicting
+   checkout, recovery-blocked workspace and ambiguous commit outcomes.
+   Require an explicit refusal or saved-with-warning according to durable
+   journal evidence; no false success or destructive auto-repair.
+6. Verify keyboard shortcuts, focus order, scroll/table selection,
+   screen scaling, unicode+spaces installation path, and exception dialogs.
+   Capture screenshots/screens recording and fail/pass with deviations.
+7. With no network and no Python in a separate **clean Windows VM**, repeat
+   the same workflow. A proxy-disabled CI child is not equivalent.
+8. Upgrade and rollback only cloned test workspaces after installer and
+   compatibility policies are specified; keep pristine pre-upgrade backups.
+
+None of these human-operated steps has been executed or signed off.
+The trusted lock/journal namespace and single-user local filesystem are
+alpha scope constraints, not permission to ignore cooperative-writer safety.
