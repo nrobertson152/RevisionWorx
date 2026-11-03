@@ -4,7 +4,7 @@
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libegl1 libgl1 libopengl0 libxkbcommon-x11-0 \
+    jq libegl1 libgl1 libopengl0 libxkbcommon-x11-0 \
     libxcb-cursor0 libxcb-image0 libxcb-keysyms1 \
     libxcb-render-util0 libxcb-xkb1 libxcb-icccm4 \
     libxcb-shape0 libfontconfig1 libdbus-1-3 \

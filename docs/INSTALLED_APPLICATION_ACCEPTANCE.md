@@ -81,3 +81,50 @@ VM with Python uninstalled and outbound network blocked is still required.
 | Real two-host authenticated SMB coordinator with failure/recovery | **NOT EXECUTED** (localhost admin UNC read is not two-host certification) | Distributed Systems + QA |
 
 **Director approval is required** before PR retarget, merge, release or publication. PR #2 is a draft research/verification branch. No packaging smoke test authorizes production multi-user claims, migration, or destructive actions.
+
+## Offline frozen CLI lifecycle — additional automated Linux gate
+
+`tools/packaging/offline_lifecycle.sh ABSOLUTE_CLI` creates its own disposable
+workspace and engineering root, with spaces and Unicode. It accepts no workspace
+argument. Run as a non-root user. `jq`, `sha256sum` and ordinary shell tools are
+**test-harness** prerequisites, not product dependencies. No Python is used.
+The existing `smoke_offline_container.sh` now calls this gate before GUI startup;
+the CI container remains network-disabled, read-only with only `/tmp` writable,
+and mounts only frozen bundles and the harness. `jq` is installed at image-build
+time, never downloaded during acceptance.
+
+The gate asserts project creation, file registration with initial revision digest,
+checkout, editing and check-in from a new process using persisted local tokens,
+two-entry history on reopen, verified revision blobs, and historical revision
+export matching the original bytes. It removes write permissions from the
+engineering root and requires project creation to fail, without a created folder
+or a registered failed project; existing revisions must still verify. Cleanup
+restores test-directory permissions even when an assertion fails.
+
+Passing means frozen **CLI** workflow and normal process-restart persistence.
+It does not mean GUI-driven document import, unexpected-kill recovery, native
+installer acceptance, Windows ACL behavior, or suitability of the pinned source
+for production. A no-network container establishes unavailable connectivity,
+not absence of attempted socket calls. Local Linux runtime evidence must not
+be substituted for the Windows job or actual interactive GUI QA.
+
+### Failure and deployment evidence capture (disposable VM only)
+
+For each manual scenario below record old/new executable hashes and full source
+SHAs, OS/filesystem, baseline workspace file hashes and revision IDs, the exact
+fault boundary, exit codes, operator-visible error, and hashes after recovery.
+Use a separate immutable baseline, candidate and restore destination. Never point
+these procedures at production data or an engineering share.
+
+| Scenario | Procedure and pass condition |
+| --- | --- |
+| Termination during operation | On a VM snapshot, terminate the candidate at separately recorded document import, checkout and check-in boundaries. Restart with documented recovery; verify every previously committed revision by digest and reconcile any in-flight outcome before retry. Process survival alone is not a pass. |
+| Disk full / interrupted write | Use a dedicated size-limited test volume, verify it is actually full, then run each write. Require an actionable error and verify committed content after freeing space/restart. Injected ENOSPC tests remain separate evidence. Do not fill the system volume. |
+| Read-only / permissions | Run as a standard user against a disposable read-only project and metadata copy; record the denied operation, absence of false success and unchanged committed revision hashes. Test Windows ACLs independently of Unix mode bits. |
+| Interrupted upgrade | Snapshot both application directory and workspace before each supported version pair. Interrupt installation and first launch separately; require either the old or new complete application, explicit unsupported-format errors, and verified preserved content. No native installer currently exists, so this gate is unexecuted. |
+| Backup / restore | Stop all writers, copy the complete authority and blobs to a separate backup, restore into a new destination, verify all revision digests and workspace identity with the installed application. Do not restore over a working original. |
+| Rollback / compatibility | Keep both binaries and pristine old-version data; upgrade only a copy. Reopen with old and new versions only where the format policy permits. A format refusal is recorded as a limitation, never bypassed by editing a manifest version. Current-schema copies are not historical migration evidence. |
+
+Linux desktop launchers, executable permissions and XDG locations must additionally
+be tested on real X11/Wayland desktops; Windows long-path and localhost UNC checks
+remain single-host path checks, not authenticated multi-host share reliability.

@@ -9,6 +9,7 @@ if command -v python >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 ||
 fi
 test -x /bundles/RevisionWorx/RevisionWorx
 test -x /bundles/RevisionWorxCLI/RevisionWorxCLI
+/bin/sh /harness/offline_lifecycle.sh /bundles/RevisionWorxCLI/RevisionWorxCLI
 mkdir -p /tmp/config /tmp/cache /tmp/runtime
 chmod 700 /tmp/runtime
 /bundles/RevisionWorxCLI/RevisionWorxCLI --help >/tmp/cli.log 2>&1 || {
