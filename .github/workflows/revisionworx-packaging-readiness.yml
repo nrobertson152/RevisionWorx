@@ -61,7 +61,7 @@ jobs:
         run: |
           docker build -f tools/packaging/offline_container.Dockerfile -t revisionworx-offline-qt tools/packaging
           docker run --rm --network none --cap-drop ALL --read-only \
-            --tmpfs /tmp:rw,nosuid,size=768m \
+            --tmpfs /tmp:rw,exec,nosuid,size=768m \
             --mount "type=bind,src=${{ github.workspace }}/packaging-prototype-output/dist,dst=/bundles,readonly" \
             --mount "type=bind,src=${{ github.workspace }}/tools/packaging,dst=/harness,readonly" \
             revisionworx-offline-qt /bin/sh /harness/smoke_offline_container.sh
