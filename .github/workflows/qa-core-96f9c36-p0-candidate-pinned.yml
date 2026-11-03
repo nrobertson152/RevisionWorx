@@ -1,0 +1,96 @@
+name: QA P0 latest core 96f9c36 schema and full acceptance (immutable)
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths: ['.github/workflows/qa-core-96f9c36-p0-candidate-pinned.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  strict-schema-and-authority:
+    name: "Strict schema + authority | ${{ matrix.os }} Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 96f9c368a11fd43c0440d404c7258c7dfeacabf6
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          ref: 58633c56731c6eaa82c6d417e6605c3ccf299a11
+          path: qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Overlay independent QA source without production edits
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+          dest = Path("app/tests/qa")
+          dest.mkdir(parents=True, exist_ok=True)
+          for name in (
+              "test_core_96f9c36_malformed_journal.py",
+              "test_core_latest_win_retry_acceptance.py",
+              "test_rev4_protocol_only_p1.py",
+              "test_rev5_custody_crash_restart.py",
+              "test_rev5_failclosed_faults.py",
+          ):
+              shutil.copy2(Path("qa/tests/qa") / name, dest)
+      - name: Install exact candidate
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Print immutable source and test versions
+        shell: bash
+        run: |
+          git -C app rev-parse HEAD
+          git -C qa rev-parse HEAD
+          python --version
+      - name: P0 strict malformed-journal error and health contract
+        working-directory: app
+        run: python -m pytest -q -ra tests/qa/test_core_96f9c36_malformed_journal.py
+      - name: Independently verify writer authority, Windows fixes, crash/restart
+        working-directory: app
+        run: |
+          python -m pytest -q -ra tests/qa/test_core_latest_win_retry_acceptance.py tests/qa/test_rev4_protocol_only_p1.py tests/qa/test_rev5_custody_crash_restart.py tests/qa/test_rev5_failclosed_faults.py
+
+  entire-core:
+    name: "Full candidate regression | ${{ matrix.os }} Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 96f9c368a11fd43c0440d404c7258c7dfeacabf6
+          path: app
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Linux Qt runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install candidate editable
+        working-directory: app
+        run: python -m pip install -e ".[dev]"
+      - name: Show exact core version
+        shell: bash
+        run: git -C app rev-parse HEAD
+      - name: Run full source-pinned regression including native Qt and systematic protocol
+        working-directory: app
+        run: python -m pytest -q -ra
