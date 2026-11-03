@@ -320,3 +320,45 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
         assert set(journal_before).issubset(set(journal_at_checkout))
     finally:
         reopened.close()
+
+
+
+def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(qapp, desktop):
+    """Keyboard activation must reach the real check-in handler without committing."""
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import CheckinDialog
+
+    win, _ctl, home, _doc = desktop
+    tab = win.documents_tab
+    win.show()
+    qapp.processEvents()
+    tab.checkout()
+    qapp.processEvents()
+    assert tab.checkin_btn.isEnabled()
+    before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
+    journal = home / ".revisionworx" / "journal"
+    journal_before = {p.name: p.read_bytes() for p in journal.glob("*.json")}
+    tab.checkin_btn.setFocus()
+    qapp.processEvents()
+    assert tab.checkin_btn.hasFocus(), "Check-in button must accept keyboard focus"
+
+    seen = []
+
+    def cancel_modal():
+        modal = qapp.activeModalWidget()
+        seen.append(isinstance(modal, CheckinDialog))
+        if isinstance(modal, CheckinDialog):
+            QTest.keyClick(modal.description, Qt.Key.Key_Escape)
+        else:
+            for widget in qapp.topLevelWidgets():
+                if isinstance(widget, QtWidgets.QDialog) and widget.isVisible():
+                    widget.reject()
+
+    QTimer.singleShot(0, cancel_modal)
+    QTest.keyClick(tab.checkin_btn, Qt.Key.Key_Space)
+    qapp.processEvents()
+    assert seen == [True], "Space on focused production button must open CheckinDialog"
+    assert tab.checkin_btn.isEnabled(), "Escape must retain the checkout"
+    assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
+    assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_before
