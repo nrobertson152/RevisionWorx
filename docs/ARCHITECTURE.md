@@ -627,6 +627,13 @@ exists. Adding more token re-checks only narrows the window.
   **Not claimed:** SMB/NFS, power loss, Windows until run there, outside actors (unchanged from
   rev. 3), or a formal proof of the protocol. Independent QA and Distributed Systems review is pending.
 
+- **Lock file reads (issue #10, after rev. 4).** On Windows, opening a file while another process renames
+  it can fail with WinError 32. That says nothing about who holds the lock, but `close()` read it as "not
+  mine" and leaked the lock, a live handle read it as "lost" and went read-only for good, and the orphan
+  scan read a healthy orphan as "corrupt" and refused every writer. `_read_lock_file` now retries with a
+  bound. If `close()` still cannot look it releases anyway, since release is move-then-verify and cannot
+  take a successor's lock. A holder leaving mid-acquire is retried instead of reported as held by `?`.
+
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.
 - ADR-016 bounded retry on Windows sharing violations (`PermissionError` on the rename).
@@ -673,6 +680,56 @@ on PR #4).
   comes from `request`.
 - **Contract:** `RequestIdentityV2Contract` (reordering, check-only, key order, non-finite values)
   plus legacy-entry tests. The coordinator must implement the same identity bytes.
+
+### ADR-022 Record files are a cache of the journal — IMPLEMENTED; awaiting independent review
+**Defect** (found preparing core integration; `tests/test_materialisation_authority.py` failed on
+`fe8a179`). Production code and one crash are enough:
+1. Writer B publishes entry N, which is effective, and pauses before materialising it.
+2. An administrator revokes B. C takes over and updates the same record.
+3. B resumes and writes N's outdated data over C's record file, then dies before its `state.json` write.
+
+`applied_seq` still claims C's sequence, so nothing replays. `get()` returned B's data until
+someone ran `verify --repair`, and the next writer's `expect_rev` check passed against it: **a lost
+update**. The journal stayed correct throughout, but decisions were not being taken from it. The same
+late write could also resurrect a deleted record or remove a newer one. `commit()` made this easier by
+replaying before it checked its lock.
+
+**Decision.** No file primitive can stop the late write: the check and the write are never atomic, and
+fencing only governs journal entries. So record files stop being trusted. They are a cache, and reads
+are resolved against the journal:
+- **Journal view:** per handle, in memory, built only from digest-verified entries and read forward, so
+  each immutable entry is read once. `latest` maps each record to the (seq, deleted) of its last
+  *effective* write; going forward, an entry is fenced exactly when its token is already revoked, which
+  matches `is_fenced`. Discarded if the journal is shorter or the last entry seen changed (a restore).
+- **`get` / `list`:** a file is used only if its `_rev` is at least the view's seq. Otherwise the answer
+  comes from the journal entry. `expect_rev` goes through `get`, so it is covered too.
+- **`_pending_overlay` is gone;** the view subsumes it. Revocations are served from the view as well.
+- **`commit`** checks its lock before replaying, so a writer that lost its lock writes nothing there.
+
+The files can still be wrong on disk until the next write of that record. `verify` still reports it, and
+`verify --repair` still fixes it. That is deliberate: a damaged cache must stay visible.
+
+**Damaged journal.** A view that cannot be built must not remove read access to a fully applied workspace
+(CORE_API: recovery-blocked means read-only; this regression was caught by testing against the GUI branch).
+If everything is applied, reads serve the files. If entries are unapplied, reads raise, because the files
+would be behind. `commit` checks revocations first and raises either way, so no write decision sees this.
+
+**Cost** (Linux, Python 3.13.18, one run each, local disk):
+
+| N entries | | `fe8a179` | ADR-022 |
+|---|---|---|---|
+| 1,000 | 50 commits, open handle | 3,122 ms | 402 ms |
+| 1,000 | fresh read-only open + first `get` | 2.9 ms | 59 ms |
+| 3,000 | 50 commits, open handle | not run | 1,005 ms |
+| 3,000 | fresh read-only open + first `get` | not run | 196 ms |
+
+Commits get faster because revocations stop being rescanned, but **the first read on a fresh handle now
+costs O(n)**. Previously that cost landed on the first commit or the first pending read instead. The
+parked `perf-journal-index` branch (ADR-020) keeps the same "per-handle, in memory, never persisted" rule.
+Its txid index and head probe still apply on top of this and would need redoing against it.
+
+**Not claimed:** power loss, SMB/NFS, or outside actors. Threads stand in for processes in the schedule
+tests. Independent QA and Distributed Systems review is pending.
 
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 

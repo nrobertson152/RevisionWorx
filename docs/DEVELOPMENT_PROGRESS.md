@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-02 (session 10: ADR-019 rev. 4, protocol-only P1s; core owner handed over to a new session)
+**Updated:** 2026-11-02 (session 11: ADR-022, issue #10 sharing gaps, integration plan)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -181,6 +181,20 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 - Reproduced Agent D's procedure as `tests/test_issue8_fencing.py`. Both tests failed first: the stale commit succeeded.
 - Implemented journal-order fencing. The full suite gives **153 passed, 1 skipped**.
 - Multi-user use is still gated on the coordinator and on SMB verification.
+
+### 2026-11-02 (session 11) — core integration readiness
+- `fe8a179` got a scoped ACCEPT from QA (41571153163) and Distributed Systems (41570591613, 41570924625,
+  41571231241) for the three rev. 4 fixes only. That acceptance does not carry over to later SHAs.
+- New defect found and fixed: **ADR-022**, a late write by a stale writer could cause stale reads and a
+  lost update. Tests first failed on `fe8a179`.
+- Issue #10: three remaining ways a transient sharing violation cost availability; see ADR-019. Added
+  6- and 10-process contention with a reader polling the lock file.
+- Issue #9: reproduced nothing new. Added insert/update/delete during rebuild and sync across a fenced
+  entry, compared with a journal replay. Both pass, and the fix from `325b7a8` stands.
+- Added `.github/workflows/core-ci.yml`, so this branch now gets its own Linux and Windows runs.
+- New `docs/INTEGRATION_PLAN.md`: proposed order and remaining gates, for the Director.
+- Claude B's API requests A1-A7 are triaged on PR #7, not implemented. They would change the source under
+  review, so they follow acceptance of this SHA.
 
 ### 2026-11-02 (session 10) — ADR-019 rev. 4: three protocol-only P1s on `d2b7a1c`
 - Took over as core owner (Claude A) from the previous session. Rev. 3 claimed protocol-only

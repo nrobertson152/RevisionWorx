@@ -12,6 +12,9 @@ small and medium engineering departments, for Windows and Linux. Licensed GPL-3.
 >   extraction.
 > - **Desktop window:** written for PySide6 but not yet run. Multi-user writes on network shares are **not yet
 > verified**: use one writer at a time. See `docs/DEVELOPMENT_PROGRESS.md`.
+> - **Use only on one computer's local disk, with disposable test data.** This pre-alpha is single-user and
+>   local-only, and is not suitable for irreplaceable data. Other programs and people must not change files
+>   inside `.revisionworx/locks` or `.revisionworx/journal`; RevisionWorx cannot protect its data if they do.
 
 ## What works today
 - A shared `.revisionworx` metadata folder with a crash-safe ordered journal (your project folders are
