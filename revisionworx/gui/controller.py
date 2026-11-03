@@ -16,6 +16,7 @@ import queue
 import shutil
 import stat
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ class JobResult:
     error: BaseException | None = None
     on_done: Callable[["JobResult"], None] | None = None
     warning: str | None = None
+    holds_job_slot: bool = False  # set by the worker: delivering this result frees the slot
 
     @property
     def saved(self) -> bool:
@@ -538,15 +540,22 @@ class Controller:
     # ------------------------------------------------------------------ background jobs
     @property
     def busy(self) -> bool:
-        """A background write/scan is running (only one at a time)."""
+        """A background write/scan is running, or its result is not delivered yet (only one at a
+        time). False means the outcome has reached ``on_done``, so the job ends as one moment for
+        the UI: ``drain()`` frees the slot immediately before calling ``on_done``."""
         return self._busy.locked()
 
     def wait_idle(self, timeout: float) -> bool:
-        """Wait briefly for a background job to finish. True when nothing is running."""
-        if not self._busy.acquire(timeout=timeout):
-            return False
-        self._busy.release()
-        return True
+        """Wait briefly for a background job to finish, delivering its result. True when idle.
+        Call from the GUI thread, which is the one that runs ``on_done``."""
+        end = time.monotonic() + timeout
+        while True:
+            self.drain()
+            if not self.busy:
+                return True
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.01)
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -559,15 +568,15 @@ class Controller:
         def worker():
             from ..workspace import CommittedNotApplied
             try:
-                self.results.put(JobResult(name, value=fn(), on_done=on_done))
+                self.results.put(JobResult(name, value=fn(), on_done=on_done, holds_job_slot=True))
             except SavedWithWarning as exc:
-                self.results.put(JobResult(name, value=exc.value, warning=exc.warning, on_done=on_done))
+                self.results.put(JobResult(name, value=exc.value, warning=exc.warning, on_done=on_done,
+                                           holds_job_slot=True))
             except CommittedNotApplied as exc:  # the change IS saved (CORE_API §4)
-                self.results.put(JobResult(name, warning=describe_error(exc), on_done=on_done))
+                self.results.put(JobResult(name, warning=describe_error(exc), on_done=on_done,
+                                           holds_job_slot=True))
             except BaseException as exc:  # reported to the UI, never swallowed
-                self.results.put(JobResult(name, error=exc, on_done=on_done))
-            finally:
-                self._busy.release()
+                self.results.put(JobResult(name, error=exc, on_done=on_done, holds_job_slot=True))
 
         threading.Thread(target=worker, name=f"rwx-{name}", daemon=True).start()
         return True
@@ -606,8 +615,11 @@ class Controller:
             except queue.Empty:
                 return events
             events.append(ev)
-            if isinstance(ev, JobResult) and ev.on_done:
-                ev.on_done(ev)
+            if isinstance(ev, JobResult):
+                if ev.holds_job_slot:
+                    self._busy.release()
+                if ev.on_done:
+                    ev.on_done(ev)
 
 
 def describe_error(exc: BaseException) -> str:

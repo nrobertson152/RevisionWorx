@@ -497,6 +497,7 @@ class MainWindow(QMainWindow):
 
     def poll(self) -> None:
         """Deliver background results on the GUI thread (never block on slow disk I/O)."""
+        events = self.ctl.drain()  # first: a finished job's result and its actions arrive together
         if self.ctl.read_only and not self.status_vm.blocked:
             self.status_vm.note_write_refused()
         busy = self.ctl.busy
@@ -506,7 +507,7 @@ class MainWindow(QMainWindow):
             self.update_write_actions()
             self.documents_tab.render_list()
             self.documents_tab.render_panel()
-        for ev in self.ctl.drain():
+        for ev in events:
             if isinstance(ev, Progress):
                 for d in self.adopt_dialogs:
                     d.flow.on_progress(ev)

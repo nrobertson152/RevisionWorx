@@ -452,6 +452,7 @@ def running_job(ctl):
     yield start
     release.set()
     while ctl.busy:
+        ctl.drain()
         time.sleep(0.01)
 
 
@@ -617,3 +618,56 @@ def test_lock_left_by_a_crash_has_a_working_way_out(qapp, ctl, tmp_path, boxes):
     tab.checkout()
     assert tab.panel.detail["checkout"] is not None and len(boxes) == 1
     w.close()
+
+
+# ---------------------------------------------------------------------------- job completion is one moment
+def test_job_result_is_delivered_with_the_ui_already_settled(qapp, ctl, tmp_path, monkeypatch):
+    """Regression (Integration, PR #14, run 41572552095): the result arrived while the job still counted as
+    busy, so the history showed the new revision with Check out disabled. A caller draining results without
+    the window's timer could stay that way for good. The worker's finish is slowed here to make it certain."""
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    w.timer.stop()  # only ctl.drain() below, as documented for test harnesses
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    qapp.processEvents()
+    tab.checkout()
+    ctl.working_file(docs[0]["id"]).write_bytes(b"two")
+    real = ctl._busy
+
+    class SlowRelease:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def release(self):
+            time.sleep(0.3)
+            real.release()
+    monkeypatch.setattr(ctl, "_busy", SlowRelease())
+    seen = []
+    tab.panel.start_checkin("Settled at once", on_done=lambda _r: seen.append(ctl.busy))
+    pump(qapp, ctl, lambda: tab.history_model.rowCount() == 2)
+    st = w.observable_state()
+    assert seen == [False] and not st["busy"]
+    assert st["actions"]["checkout"] and not st["actions"]["checkin"], st["actions"]
+    w.timer.start(100)
+    w.close()
+
+
+def test_busy_stays_true_until_the_result_is_delivered(qapp, ctl):
+    """``busy`` false means the outcome is visible, so a harness can stop waiting there."""
+    release = threading.Event()
+    done = []
+    assert ctl._run("test", lambda: release.wait(30), lambda r: done.append(r))
+    release.set()
+    end = time.time() + 5
+    while ctl.results.empty() and time.time() < end:
+        time.sleep(0.01)
+    assert ctl.busy and not done
+    assert ctl._run("second", lambda: None, None) is False  # nothing overlaps an undelivered result
+    ctl.drain()
+    assert done and not ctl.busy
+
+
+def test_wait_idle_delivers_a_finished_job(qapp, ctl):
+    done = []
+    assert ctl._run("test", lambda: None, lambda r: done.append(r))
+    assert ctl.wait_idle(5) is True and done and not ctl.busy

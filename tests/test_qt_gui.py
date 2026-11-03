@@ -92,7 +92,7 @@ def test_documents_tab_checkout_checkin(qapp, tmp_path):
     f.write_bytes(b"1")
     c.start_register(prj["id"], f)
     end = time.time() + 30
-    while not c.documents(prj["id"]) and time.time() < end:
+    while c.busy and time.time() < end:  # busy ends when the result is delivered
         c.drain()
         time.sleep(0.02)
     tab = DocumentsTab(c, configure_table)

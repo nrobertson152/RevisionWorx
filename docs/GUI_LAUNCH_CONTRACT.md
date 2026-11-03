@@ -79,7 +79,7 @@ The method is read-only. It returns a JSON-serialisable dict and performs no I/O
 - **Unknown outcome** (an unexpected error, and the journal could not be read): `message_level == "error"` and the status says it could not confirm. Check the history; do not assume either outcome.
 - **Document unreadable:** `selected_document` is `None`, `message_level == "error"`, and the status starts with "⚠ Cannot read this document". No document actions are enabled. F5 retries.
 - **Recovery-blocked:** `read_only` is true, `health_banner` contains "RECOVERY BLOCKED" and "READ-ONLY", and every write action is disabled, including the menu items. Browsing, history and export still work. F5 clears this only after an administrator has repaired the workspace.
-- **Background jobs:** while `busy` is true, every write action is disabled. Poll `ctl.drain()` together with `app.processEvents()` until `busy` is false.
+- **Background jobs:** while `busy` is true, every write action is disabled. Poll `ctl.drain()` together with `app.processEvents()` until `busy` is false. **Changed after `2a6a7bd`: `busy` stays true until the result is delivered**, and `drain()` is what ends it, so a loop that waits on `busy` without draining (or without a running `MainWindow`) never finishes. When `busy` turns false, history, messages and actions have already settled; no further wait is needed.
 
 ## 5. What automated runs do NOT show
 
