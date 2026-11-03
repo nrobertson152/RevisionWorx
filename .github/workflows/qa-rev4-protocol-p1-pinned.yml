@@ -26,7 +26,7 @@ jobs:
           path: app
       - uses: actions/checkout@v4
         with:
-          ref: ecd64b66dfc2fb2f049b13f74356baa5cd07f603
+          ref: 0e2e95b4c3fd8de810298627e6dd6bdf00cd1929
           path: qa
       - uses: actions/setup-python@v5
         with:
@@ -48,6 +48,6 @@ jobs:
           git -C app rev-parse HEAD
           git -C qa rev-parse HEAD
           python --version
-      - name: Run two unsafe protocol-only counterexamples and two strict safety xfails
+      - name: Run three unsafe protocol-only counterexamples and three strict safety xfails
         working-directory: app
         run: python -m pytest -q -ra tests/qa/test_rev4_protocol_only_p1.py
