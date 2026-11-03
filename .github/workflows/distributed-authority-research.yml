@@ -226,3 +226,27 @@ jobs:
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m unittest -v prototype.test_phase2_rev3_protocol_boundary
+
+  phase2-protocol-only-new-p1:
+    name: Codex protocol-only P1 unsafe and strict safety gates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: d2b7a1cfead5b83acecce2252e70d0a155f146b7
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run exact-source P1 unsafe reproductions and unaccepted positive oracles
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_phase2_protocol_only_new_p1
