@@ -55,7 +55,7 @@ jobs:
         shell: bash
         run: |
           cd "$RUNNER_TEMP/replay-product"
-          python -m pytest -q -ra tests/test_qa_changed_csv_txid_independent.py -k control_identical_csv_import_retry_is_idempotent
+          python -m pytest -q -ra tests/test_qa_changed_csv_txid_independent.py -k control_identical_csv_import_retry_is_idempotent --override-ini "testpaths=tests/test_qa_changed_csv_txid_independent.py"
       - name: Evaluate strict changed-payload replay requirements
         shell: bash
         env:
@@ -63,7 +63,7 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/replay-product"
           set +e
-          python -m pytest -q -ra tests/test_qa_changed_csv_txid_independent.py -k "changed_csv_payload or csv_txid_replay" > "$RUNNER_TEMP/strict-replay.log" 2>&1
+          python -m pytest -q -ra tests/test_qa_changed_csv_txid_independent.py -k "changed_csv_payload or csv_txid_replay" --override-ini "testpaths=tests/test_qa_changed_csv_txid_independent.py" > "$RUNNER_TEMP/strict-replay.log" 2>&1
           result=$?
           set -e
           cat "$RUNNER_TEMP/strict-replay.log"
@@ -72,8 +72,16 @@ jobs:
               echo "::error::Historical negative control unexpectedly passed; check source pin and oracle sensitivity"
               exit 1
             fi
+            if grep -Eq '(^ERROR |[1-9][0-9]* errors?|no tests ran|collected 0 items)' "$RUNNER_TEMP/strict-replay.log"; then
+              echo "::error::Collection/setup failure is not a valid historical negative control"
+              exit 1
+            fi
             if ! grep -Eq '[1-9][0-9]* failed' "$RUNNER_TEMP/strict-replay.log"; then
               echo "::error::Expected strict assertion failures, not collection/setup errors"
+              exit 1
+            fi
+            if ! grep -q "test_changed_csv_payload_reusing_txid_must_not_be_reported_as_identical_retry" "$RUNNER_TEMP/strict-replay.log"; then
+              echo "::error::Required changed-payload oracle was not executed"
               exit 1
             fi
             echo "HISTORICAL UNSAFE SOURCE CONFIRMED: strict replay assertions failed as expected; this is NOT product acceptance."
