@@ -44,7 +44,7 @@ def test_native_assembly_reference_survives_part_revisions_and_readonly_restart(
     assert part.read_bytes() == updated_part
     assert ContentStore(ws).path_for(first["sha256"]).read_bytes() == original_part
     assert ContentStore(ws).path_for(second["sha256"]).read_bytes() == updated_part
-    workspace_root = ws.root
+    workspace_root = ws.meta_dir.parent
     ws.close()
     with Workspace.open(workspace_root, writable=False) as reopened:
         persisted = D.history(reopened, doc["id"])
@@ -76,7 +76,7 @@ def test_three_revision_chain_remains_linear_and_original_objects_immutable(ws):
         revisions[0]["id"], revisions[1]["id"]
     ]
     assert [r["sha256"] for r in revisions] == [_digest(p) for p in payloads]
-    root = ws.root
+    root = ws.meta_dir.parent
     ws.close()
     with Workspace.open(root, writable=False) as reopened:
         history = D.history(reopened, doc["id"])
