@@ -483,3 +483,28 @@ jobs:
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m unittest -v prototype.test_core_a03f_retry_semantics
+
+
+  phase2-a03f-native-win32-positive:
+    name: Core a03f genuine Win32 single-budget acceptance (Python ${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: a03f1f00ab58b815534c4282b20ffc6503119aea
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Actual Win32 CreateFileW denial; single retry budget must pass
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_core_a03f_real_windows_no_nesting
