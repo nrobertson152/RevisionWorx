@@ -6,6 +6,7 @@ on:
       - integration/openschematix
     paths:
       - 'tools/packaging/stage_product_stack.py'
+      - 'tools/packaging/test_product_stack_contract.py'
       - 'tools/packaging/test_stage_product_stack.py'
       - '.github/workflows/revisionworx-four-branch-compatibility.yml'
   workflow_dispatch:
