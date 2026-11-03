@@ -174,3 +174,30 @@ jobs:
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m pytest -v -q prototype/test_phase2_contract_adapter.py
+
+  phase2-rev3-independent-safety:
+    name: Independent ADR-019 rev3 custody and CAS (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - name: Checkout independent research
+        uses: actions/checkout@v4
+        with:
+          path: research
+      - name: Checkout exact corrected production source
+        uses: actions/checkout@v4
+        with:
+          ref: e5b38a69edd71eb580f5bae67a570d4def94eb8f
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Execute positive custody and serialization safety oracles
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_phase2_rev3_independent_acceptance
