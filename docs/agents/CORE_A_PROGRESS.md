@@ -126,3 +126,15 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Observed execution:** no associated PR workflow runs returned immediately after commit; this lookup is PR-only/first-page and does not prove no push workflow. **0 observed PASS/FAIL/SKIP/XFAIL; no positive acceptance claim.**
 - **Scope:** verified exact content bytes, same-size object corruption blocks read/export, bounded read fails typed, missing object fails closed, and no read-only workspace mutation. This does not exercise concurrent source replacement, Windows release permission transitions, journal precommit abort or cross-host filesystem behavior.
 - **Next:** inspect four native logs and both printed SHA values; classify actual pytest results, hand off to QA #31; if any fixture fails, repair only Core A branch and rerun. Continue adversarial source-replacement and journal-abort fixtures without duplicating Claude A production implementation.
+
+
+## 2026-11-03 — Native pinned bounded-content CI independently verified
+
+- **Workflow run:** https://github.com/nrobertson152/RevisionWorx/actions/runs/41736330254 (completed, success); role head before documentation `21be80705c4c5b3098226eef5d0e22505e68921f`.
+- **Both full SHAs asserted and printed in all four raw job logs:** production `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`; independent test fixture `b93c012d18783c24dde4da5273a53b98aa9cc4f7`.
+- **Exact command:** `python -m pytest -q -ra tests/test_core_bounded_content_integrity.py`.
+- **Ubuntu Python 3.11:** job `126266357795`, 4 PASS, 0 FAIL/SKIP/XFAIL. **Ubuntu Python 3.13:** job `126266357461`, 4 PASS, 0 FAIL/SKIP/XFAIL.
+- **Windows Python 3.11:** job `126266357926`, 4 PASS, 0 FAIL/SKIP/XFAIL. **Windows Python 3.13:** job `126266357884`, 4 PASS, 0 FAIL/SKIP/XFAIL.
+- **Total:** 16 PASS, 0 FAIL, 0 SKIP, 0 XFAIL, based on independently fetched native job logs, not just green workflow status. This is positive evidence for four bounded-content cases at the pinned corrected SHA, not broader release acceptance.
+- **Other workflow caution:** at this same role head, crash-integrity read-only run `41736330311` and historical independent regression evidence run `41736330220` report failure; those must be triaged independently, not counted as green. Phase 1 PR #6 malformed-journal P0 remains HOLD (QA run 41730782278).
+- **Next:** QA review of frozen fixtures; investigate failing workflows' exact production SHA and negative-control expectations; adversarial precommit-abort and concurrent source replacement gates; no SMB/NFS or release safety claim.
