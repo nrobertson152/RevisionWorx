@@ -352,3 +352,33 @@ jobs:
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m unittest -v prototype.test_phase2_release_displacement_rev4
+
+  phase2-rev4-release-displacement-old-control:
+    name: ADR-019 release displacement vulnerable source negative control (Ubuntu 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: d2b7a1cfead5b83acecce2252e70d0a155f146b7
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Both positive safety oracles must reject the old vulnerable source
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        shell: bash
+        run: |
+          set +e
+          python -m unittest -v prototype.test_phase2_release_displacement_rev4 > negative-control.log 2>&1
+          status=$?
+          set -e
+          cat negative-control.log
+          if [ "$status" -eq 0 ]; then echo "FAIL: vulnerable source unexpectedly passed"; exit 1; fi
+          if [ "$(grep -c "^FAIL: test_" negative-control.log)" -ne 2 ]; then echo "FAIL: expected both positive oracles to fail, not an unrelated error"; exit 1; fi
+          if grep -q "^ERROR:" negative-control.log; then echo "FAIL: harness error rather than safety rejection"; exit 1; fi
+          echo "Expected negative control: two explicit positive safety oracle failures on vulnerable source"
