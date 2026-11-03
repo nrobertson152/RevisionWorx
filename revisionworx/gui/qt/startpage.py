@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
 from ..controller import Controller, describe_error
 from ...workspace import CommittedNotApplied
 from ..viewmodels import QuickStartForm
+from .models import elastic
 
 
 def default_projects_folder() -> str:
@@ -60,13 +61,11 @@ class StartPage(QWidget):
         form.addRow("Project &name *", self.name_edit)
         form.addRow("Project n&umber", self.number_edit)
         form.addRow("&Customer", self.customer_edit)
-        self.preview = QLabel(box)
-        self.preview.setWordWrap(True)
+        self.preview = elastic(QLabel(box))
         self.preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addRow("Will create", self.preview)
-        self.error_label = QLabel(box)
+        self.error_label = elastic(QLabel(box))
         self.error_label.setStyleSheet("color: #b00020")
-        self.error_label.setWordWrap(True)
         form.addRow(self.error_label)
         self.create_btn = QPushButton("Create &project", box)
         self.create_btn.setDefault(True)
@@ -105,6 +104,7 @@ class StartPage(QWidget):
 
     def show_error(self, text: str) -> None:
         self.error_label.setText(text)
+        self.error_label.setToolTip(text)
 
     def sync(self) -> None:
         self.form.folder = self.folder_edit.text()
@@ -112,6 +112,7 @@ class StartPage(QWidget):
         self.form.number = self.number_edit.text()
         self.form.customer = self.customer_edit.text()
         self.preview.setText(self.form.project_path_preview or "—")
+        self.preview.setToolTip(self.form.project_path_preview)
 
     def browse(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Folder for your RevisionWorx projects", self.folder_edit.text())

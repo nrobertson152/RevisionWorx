@@ -111,6 +111,35 @@ def test_minimum_size_fits_a_small_laptop_screen(qapp, ctl, tmp_path):
     w.close()
 
 
+def test_long_paths_and_names_do_not_force_a_wide_window(qapp, ctl, tmp_path):
+    """Regression: a Windows path has no line-break opportunities, so in a word-wrapped label it set the
+    window's minimum width (1340 px on Windows CI, CI run 41569041782). Long text is now clipped, with the
+    full text in a tooltip. The path is written literally so this reproduces on every platform."""
+    path = "C:\\Users\\" + "engineer\\" * 30 + "bracket.ipt"
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.select_document(docs[0]["id"])
+    w.detail_vm.warnings = [path]
+    w.detail_vm.fields = [("Folder", path)]
+    w.detail_vm.project = {**w.detail_vm.project, "name": path}
+    w.render_details()
+    tab.list_vm.error = path
+    tab.render_list()  # reselects and re-reads the document, so its text is set after this
+    tab.panel.detail["document"]["title"] = path
+    tab.panel.set_message(path, "warning")
+    w.status_vm.health = {"ok": False, "blocked": False, "problems": [], "message": path}
+    w.health_banner.setText(path)
+    w.health_banner.show()
+    w.start_page.show_error(path)
+    w.start_page.preview.setText(path)
+    w.start_page.preview.setToolTip(path)
+    qapp.processEvents()
+    assert w.minimumSizeHint().width() <= 1000, w.minimumSizeHint()
+    assert path in tab.status.toolTip() and path in tab.summary.toolTip() and path in w.warning_label.toolTip()
+    assert path in w.start_page.error_label.toolTip() and path in w.start_page.preview.toolTip()
+    w.close()
+
+
 def test_project_warning_stays_visible_on_the_documents_tab(qapp, ctl, tmp_path):
     w, *_ = window(qapp, ctl, tmp_path)
     w.show()

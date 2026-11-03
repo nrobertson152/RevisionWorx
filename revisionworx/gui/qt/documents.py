@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QInputDialog
 from ..controller import Controller, SavedWithWarning, describe_error
 from ..viewmodels import DocumentListModel, DocumentPanel
 from .dialogs import CheckinDialog, ImportDialog
-from .models import ViewModelTable
+from .models import ViewModelTable, elastic
 
 SEVERITY_STYLE = {"ok": "", "warning": "color: #8a5300", "error": "color: #b00020; font-weight: bold"}
 
@@ -49,8 +49,7 @@ class DocumentsTab(QWidget):
         top.addWidget(self.import_btn)
         top.addWidget(self.register_btn)
         outer.addLayout(top)
-        self.notice = QLabel(self)
-        self.notice.setWordWrap(True)
+        self.notice = elastic(QLabel(self))
         outer.addWidget(self.notice)
 
         split = QSplitter(Qt.Orientation.Vertical, self)
@@ -68,18 +67,15 @@ class DocumentsTab(QWidget):
         detail = QWidget(split)
         dl = QVBoxLayout(detail)
         dl.setContentsMargins(0, 4, 0, 0)
-        self.summary = QLabel(detail)
+        self.summary = elastic(QLabel(detail))
         self.summary.setTextFormat(Qt.TextFormat.PlainText)  # file names are data, not markup
-        self.summary.setWordWrap(True)
         self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         dl.addWidget(self.summary)
-        self.ownership = QLabel(detail)
+        self.ownership = elastic(QLabel(detail))
         self.ownership.setObjectName("ownershipLabel")
-        self.ownership.setWordWrap(True)
         dl.addWidget(self.ownership)
-        self.status = QLabel(detail)
+        self.status = elastic(QLabel(detail))
         self.status.setObjectName("documentStatus")
-        self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         dl.addWidget(self.status)
         actions = QHBoxLayout()
@@ -195,6 +191,7 @@ class DocumentsTab(QWidget):
         keep = self.panel.doc_id or self.panel.failed_id
         self.table_model.reload()
         self.notice.setText(self.list_vm.notice)
+        self.notice.setToolTip(self.list_vm.notice)
         self.notice.setVisible(bool(self.list_vm.notice))
         self.import_btn.setEnabled(self.list_vm.can_add)
         self.register_btn.setEnabled(self.list_vm.can_add)
@@ -207,8 +204,10 @@ class DocumentsTab(QWidget):
     def render_panel(self) -> None:
         p = self.panel
         self.summary.setText("  ·  ".join(f"{label}: {value}" for label, value in p.summary_fields))
+        self.summary.setToolTip(self.summary.text())
         self.ownership.setText(p.ownership_text)
         self.status.setText(p.message + ("\n" if p.message else "") + p.status_text)
+        self.status.setToolTip(self.status.text())
         self.status.setStyleSheet(SEVERITY_STYLE[p.severity])
         self.checkout_btn.setEnabled(p.can_checkout)
         self.checkin_btn.setEnabled(p.can_checkin)

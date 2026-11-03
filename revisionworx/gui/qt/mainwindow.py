@@ -17,7 +17,7 @@ from ..controller import Controller, Progress, SavedWithWarning, describe_error
 from ..viewmodels import AppStatus, ProjectDetailsModel, ProjectListModel
 from .dialogs import AdoptDialog, NewProjectDialog
 from .documents import DocumentsTab
-from .models import ViewModelTable
+from .models import ViewModelTable, elastic
 from .startpage import StartPage
 
 SHORTCUTS_TEXT = """Ctrl+N\tNew project (start page when no workspace is open)
@@ -77,9 +77,8 @@ class MainWindow(QMainWindow):
         self.alpha_banner.setStyleSheet(ALPHA_STYLE)
         self.alpha_banner.setAccessibleName("Alpha warning")
         shell_layout.addWidget(self.alpha_banner)
-        self.health_banner = QLabel(shell)
+        self.health_banner = elastic(QLabel(shell))
         self.health_banner.setObjectName("healthBanner")
-        self.health_banner.setWordWrap(True)
         self.health_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.health_banner.hide()
         shell_layout.addWidget(self.health_banner)
@@ -137,11 +136,10 @@ class MainWindow(QMainWindow):
         dl = QVBoxLayout(detail)
         dl.setContentsMargins(0, 0, 0, 0)
         buttons = QHBoxLayout()
-        self.project_heading = QLabel(detail)
+        self.project_heading = elastic(QLabel(detail))
         self.project_heading.setObjectName("projectHeading")
         self.project_heading.setTextFormat(Qt.TextFormat.PlainText)
         self.project_heading.setStyleSheet("font-weight: bold")
-        self.project_heading.setWordWrap(True)
         self.open_btn = QPushButton("Open folder", detail)
         self.open_btn.clicked.connect(lambda *_: self.open_folder())
         self.archive_btn = QPushButton("Archive", detail)
@@ -150,8 +148,7 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.open_btn)
         buttons.addWidget(self.archive_btn)
         dl.addLayout(buttons)
-        self.warning_label = QLabel(detail)  # above the tabs: problems must not hide on another tab
-        self.warning_label.setWordWrap(True)
+        self.warning_label = elastic(QLabel(detail))  # above the tabs: must not hide on another tab
         self.warning_label.setStyleSheet("color: #8a5300")
         dl.addWidget(self.warning_label)
         tabs = QTabWidget(detail)
@@ -269,6 +266,7 @@ class MainWindow(QMainWindow):
         st = self.status_vm
         if st.health_text:
             self.health_banner.setText(st.health_text)
+            self.health_banner.setToolTip(st.health_text)
             self.health_banner.setStyleSheet(BLOCKED_STYLE if (st.blocked or not st.health.get("ok"))
                                              else PENDING_STYLE)
             self.health_banner.show()
@@ -308,8 +306,8 @@ class MainWindow(QMainWindow):
         while self.detail_form.rowCount():
             self.detail_form.removeRow(0)
         for label, value in self.detail_vm.fields:
-            v = QLabel(value)
-            v.setWordWrap(True)
+            v = elastic(QLabel(value))
+            v.setToolTip(value)
             v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.detail_form.addRow(label, v)
         p = self.detail_vm.project
@@ -317,6 +315,7 @@ class MainWindow(QMainWindow):
             " ".join(x for x in (p.get("number"), p.get("name")) if x)
             + f"  ({p.get('mode')}, {p.get('status')})" if p else "")
         self.warning_label.setText("\n".join(f"⚠ {w}" for w in self.detail_vm.warnings))
+        self.warning_label.setToolTip(self.warning_label.text())
         self.warning_label.setVisible(bool(self.detail_vm.warnings))
         self.open_btn.setEnabled(self.detail_vm.can_open_folder)
         self.update_write_actions()

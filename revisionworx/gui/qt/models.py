@@ -6,8 +6,17 @@ from typing import Callable, Sequence
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QLabel, QSizePolicy
 
 from ..viewmodels import Column
+
+
+def elastic(label: QLabel) -> QLabel:
+    """For labels holding paths or other data: wrap, and never let one long unbreakable word set the
+    window's minimum width. Such a word is clipped, so also put the full text in the tooltip."""
+    label.setWordWrap(True)
+    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    return label
 
 
 class ViewModelTable(QAbstractTableModel):
