@@ -44,7 +44,7 @@ def test_manual_orphan_clear_crash_must_not_silently_authorize_a_new_writer(tmp_
     """
     if not hasattr(Workspace, "clear_orphaned_release"):
         pytest.skip("Phase 2 ADR-019 manual orphan clearance unavailable")
-    if not hasattr(Workspace, "_orphan_clear_audits"):
+    if not hasattr(Workspace, "_orphan_clear_audits") and not hasattr(Workspace, "_authorise_orphan_clear"):
         request.node.add_marker(pytest.mark.xfail(
             strict=True, raises=AssertionError,
             reason="legacy ADR-019 moved orphan evidence before durable audit",
