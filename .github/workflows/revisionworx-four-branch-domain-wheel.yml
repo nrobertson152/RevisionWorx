@@ -5,6 +5,7 @@ on:
     branches:
       - integration/openschematix
     paths:
+      - 'tools/packaging/stage_product_stack.py'
       - 'tools/packaging/test_product_stack_contract.py'
       - 'tools/packaging/check_product_wheel.py'
       - '.github/workflows/revisionworx-four-branch-domain-wheel.yml'
