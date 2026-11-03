@@ -181,6 +181,65 @@ def entry_digest(entry: dict) -> str:
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
+_KIND_RE = re.compile(r"^[a-z]{2,16}$")              # register_kind's rule; KINDS itself is not consulted, so
+_BLOB_KIND_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")  # a reader that never imported a subsystem still validates
+
+
+def _optional(entry: dict, key: str, types: tuple) -> bool:
+    return key not in entry or entry[key] is None or (isinstance(entry[key], types)
+                                                       and not isinstance(entry[key], bool))
+
+
+def _entry_shape_problem(entry: dict) -> str | None:
+    """Describe why a parsed journal entry cannot be trusted structurally, or None if it can.
+
+    Every field a reader, replay, fence or verify dereferences is checked here, so damage surfaces as
+    WorkspaceCorruptError and never as AttributeError/TypeError deeper in. Optional fields stay optional
+    (digestless and pre-ADR-021 legacy entries are still accepted); only their types are enforced.
+    Purely structural: nothing is written."""
+    for key in ("txid", "writer_token", "op", "time", "revokes"):
+        if not _optional(entry, key, (str,)):
+            return f"{key} must be a string"
+    for key in ("actor", "request"):
+        if not _optional(entry, key, (dict,)):
+            return f"{key} must be an object"
+    records = entry.get("records")
+    if not isinstance(records, list):
+        return "records must be a list"
+    for i, r in enumerate(records):
+        if not isinstance(r, dict):
+            return f"record {i} is not an object"
+        kind, rid = r.get("kind"), r.get("id")
+        if not isinstance(kind, str) or not _KIND_RE.match(kind):
+            return f"record {i} has an invalid kind"
+        if not isinstance(rid, str) or not _ID_RE.match(rid):
+            return f"record {i} has an invalid id"
+        if "delete" in r and not isinstance(r["delete"], bool):
+            return f"record {i}: delete must be true or false"
+        if "expect_rev" in r and r["expect_rev"] is not None and (
+                type(r["expect_rev"]) is not int or r["expect_rev"] < 0):
+            return f"record {i}: expect_rev must be a non-negative integer"
+        if not r.get("delete") and not isinstance(r.get("data"), dict):
+            return f"record {i} is a put without an object of data"
+        if entry.get("op") == "workspace.lock.break" and isinstance(r.get("data"), dict):
+            holder = r["data"].get("previous_holder")
+            if holder is not None and (not isinstance(holder, dict) or not _optional(holder, "token", (str,))):
+                return f"record {i}: previous_holder must be an object with a string token"
+    blobs = entry.get("blobs", [])
+    if not isinstance(blobs, list):
+        return "blobs must be a list"
+    for ref in blobs:
+        if not isinstance(ref, str) or ref.count("/") != 1:
+            return "blob references must be 'kind/id' strings"
+        bkind, bid = ref.split("/")
+        if not _BLOB_KIND_RE.match(bkind) or not _ID_RE.match(bid) or bid in (".", ".."):
+            return f"blob reference {ref!r} is invalid"
+    checks = entry.get("checks", [])
+    if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
+        return "checks must be a list of objects"
+    return None
+
+
 def strip_rev(data: dict) -> dict:
     return {k: v for k, v in data.items() if k != REV_FIELD}
 
@@ -921,13 +980,19 @@ class Workspace:
             entry = atomicio.read_json(path)
         except ValueError as exc:
             raise WorkspaceCorruptError(f"journal entry {seq} is unreadable: {exc}") from exc
-        if entry.get("seq") != seq:
-            raise WorkspaceCorruptError(f"journal entry {path.name} claims seq {entry.get('seq')}")
-        if "digest" in entry and entry["digest"] != entry_digest(entry):
-            raise WorkspaceCorruptError(f"journal entry {seq} fails its SHA-256 digest check (altered?)")
-        records = entry.get("records")
-        if not isinstance(records, list) or not all(isinstance(r, dict) and "kind" in r and "id" in r for r in records):
-            raise WorkspaceCorruptError(f"journal entry {seq} is malformed")
+        if not isinstance(entry, dict):
+            raise WorkspaceCorruptError(f"journal entry {seq} is malformed: not a JSON object")
+        claimed = entry.get("seq")
+        if type(claimed) is not int or claimed != seq:   # bool is an int subclass: True must not pass as 1
+            raise WorkspaceCorruptError(f"journal entry {path.name} claims seq {claimed!r}")
+        if "digest" in entry:
+            if not isinstance(entry["digest"], str):
+                raise WorkspaceCorruptError(f"journal entry {seq} is malformed: digest is not a string")
+            if entry["digest"] != entry_digest(entry):
+                raise WorkspaceCorruptError(f"journal entry {seq} fails its SHA-256 digest check (altered?)")
+        problem = _entry_shape_problem(entry)
+        if problem:
+            raise WorkspaceCorruptError(f"journal entry {seq} is malformed: {problem}")
         return entry
 
     def _journal_view(self) -> dict:
@@ -1139,14 +1204,19 @@ class Workspace:
 
     def health(self) -> dict:
         """Read-only summary for a UI (Claude B's A1). Never raises for a damaged journal: it reports it. ``ok`` is False
-        when writes would be refused; ``pending`` entries are saved but not materialised, and need no action."""
-        report = {"ok": True, "reason": None, "head_seq": self.head_seq(), "applied_seq": self.applied_seq(), "pending": 0}
-        report["pending"] = max(0, report["head_seq"] - report["applied_seq"])
-        try:
+        when writes would be refused or the journal could not be fully checked (fail closed; ``head_seq`` is None if the
+        journal directory itself could not be listed); ``pending`` entries are saved but not materialised, and need no action."""
+        report = {"ok": False, "reason": None, "head_seq": None, "applied_seq": self.applied_seq(), "pending": 0}
+        try:   # fail closed: ok becomes True only after every check below has completed
+            report["head_seq"] = self.head_seq()
+            report["pending"] = max(0, report["head_seq"] - report["applied_seq"])
             self._check_journal()
             self._journal_view()
+            report["ok"] = True
         except WorkspaceCorruptError as exc:
-            report.update(ok=False, reason=str(exc))
+            report["reason"] = str(exc)
+        except OSError as exc:
+            report["reason"] = f"the journal could not be read: {exc}"
         return report
 
     def transaction_outcome(self, txid: str) -> dict:

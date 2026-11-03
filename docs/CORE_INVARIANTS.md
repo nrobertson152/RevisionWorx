@@ -121,6 +121,40 @@ and reopens. That is lost availability, never lost data.
 
 **Tests:** `test_process_crash_matrix.py` (each operation), `test_materialisation_authority.py`, `test_documents.py`.
 
+### 5a. Journal entry structure (J-S)
+
+| # | Invariant | Kept by |
+|---|---|---|
+| J-S1 | Every journal entry is structurally validated before any field is used: a non-object, a non-integer or boolean `seq`, wrong-typed optional fields, invalid record kinds or ids (also a path-traversal guard), non-boolean `delete`, a put without object `data`, malformed blob references or revocation holders all raise `WorkspaceCorruptError`, never `AttributeError`/`TypeError`. A consistent digest does not vouch for a bad structure. | `read_entry`, `_entry_shape_problem` |
+| J-S2 | Optional fields stay optional: digestless and pre-ADR-021 entries (no `txid`, `request`, `blobs`, `checks`; null optional fields) are accepted. Only types are enforced. | `_optional` |
+| J-S3 | `health()` fails closed: `ok` is True only after every check completed; corruption and I/O errors report `ok: False` with a reason. Inspection writes nothing. | `health` |
+
+**Tests:** `test_journal_entry_shape.py`; independent gates in PR #34 (`test_core_independent_journal_shape.py`, `test_core_crash_integrity_readonly.py`).
+
+### 5b. Source-content capture (C)
+
+What a revision's bytes are guaranteed to be. RevisionWorx cannot stop another program writing a working file, so capture
+**detects** change; it is not atomic and does not claim to be.
+
+| # | Invariant | Kept by |
+|---|---|---|
+| C1 | The stored bytes come from one regular file, pinned by its open handle. The path must name that same file (device + file ID where reported, size, mtime, POSIX ctime) before the copy, after it, and after the verification read. Save-by-rename and replacement by a link are detected even at equal size and mtime. | `store_file`, `_same_file` |
+| C2 | Same-inode writes during the copy are detected through the handle's size/mtime and, on POSIX, ctime, which `utime` cannot set back. | `_signature` |
+| C3 | A second, independent read must hash to the same SHA-256 as the stored copy. This catches writes inside one timestamp tick of a coarse filesystem and, on Windows (no ctime), in-place writes with mtime restored. | `_hash_pinned` |
+| C4 | Anything detected raises `SourceChangedError` before any content object is published or journal entry written; the checkout stays. A save after capture finished is not in the revision, and the working file then reads as modified. | `store_file` runs before `commit` (D1) |
+
+**Known limits (C)**
+- Not detectable: a writer that changes the file and restores identical bytes, size, mtime and ctime between the checks, or
+  one that writes the same bytes in both reads. On Windows and some network filesystems file IDs may be 0 and ctime is
+  unavailable, so C1 rests on size/mtime/path and C3 carries more of the weight.
+- The verification read doubles read I/O per capture (a 200 MB assembly is read twice). Accepted for integrity; revisit only
+  with measurements.
+- `document_status` without `verify_hash` is a metadata check (size + mtime) and can call a same-size, same-mtime
+  replacement "unchanged"; it says `method: metadata`. Check-in always hashes, so no revision depends on it.
+- Not yet run on native Windows or SMB/NFS.
+
+**Tests:** `test_source_capture_integrity.py` (writer injected during the first read and during the verification read).
+
 ## 6. Local index
 
 | # | Invariant | Kept by |
