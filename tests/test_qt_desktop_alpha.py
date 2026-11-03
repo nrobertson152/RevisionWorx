@@ -199,3 +199,47 @@ def test_close_workspace_returns_to_start_and_lists_recent(qapp, ctl, tmp_path):
     assert w.stack.currentWidget() is w.start_page and ctl.location is None
     assert w.start_page.recent.count() == 1
     w.close()
+
+
+def test_status_column_colours_and_restore_compare_buttons(qapp, ctl, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    home = tmp_path / "home"
+    p = ctl.quick_start(home, "X")
+    src = tmp_path / "a.txt"
+    src.write_bytes(b"one")
+    doc, _ = ctl.import_document(p["id"], src)
+    ctl.checkout(doc["id"])
+    ctl.working_file(doc["id"]).write_bytes(b"two!")
+    done = {}
+    ctl.start_checkin(doc["id"], "second", on_done=lambda r: done.setdefault("r", r))
+    pump(qapp, ctl, lambda: "r" in done)
+    w = MainWindow(ctl)
+    w.open_location(home, quiet=True)
+    w.table.selectRow(0)
+    qapp.processEvents()
+    tab = w.documents_tab
+    col = [c.key for c in tab.list_vm.COLUMNS].index("file_state")
+    idx = tab.table_model.index(0, col)
+    assert tab.table_model.data(idx) == "OK"
+    assert tab.table_model.data(idx, Qt.ItemDataRole.ForegroundRole) is None
+    tab.table.selectRow(0)
+    qapp.processEvents()
+    assert tab.compare_btn.isEnabled() and not tab.restore_btn.isEnabled()
+    tab.compare()
+    assert "different" in tab.revision_detail.toPlainText()
+    tab.checkout()
+    tab.history.selectRow(1)
+    qapp.processEvents()
+    assert tab.restore_btn.isEnabled()
+    tab.restore(confirmed=True)
+    assert ctl.working_file(doc["id"]).read_bytes() == b"one"
+    assert "not rewritten" in tab.status.text()
+    # an externally deleted file turns its row red
+    ctl.cancel_checkout(doc["id"])
+    ctl.working_file(doc["id"]).unlink()
+    tab.list_vm.refresh()
+    assert tab.table_model.data(tab.table_model.index(0, col)) == "⚠ Missing"
+    assert tab.table_model.data(tab.table_model.index(0, col), Qt.ItemDataRole.ForegroundRole) is not None
+    assert "need attention" in tab.notice.text()
+    w.close()

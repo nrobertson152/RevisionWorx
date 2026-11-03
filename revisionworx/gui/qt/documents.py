@@ -49,7 +49,7 @@ class DocumentsTab(QWidget):
         self.table = QTableView(split)
         self.table.setAccessibleName("Documents")
         self.table_model = ViewModelTable(DocumentListModel.COLUMNS, lambda: len(self.list_vm.rows),
-                                          self.list_vm.cell, self)
+                                          self.list_vm.cell, self, severity=self.list_vm.row_severity)
         self.table.setModel(self.table_model)
         configure_table(self.table, DocumentListModel.COLUMNS)
         self.table.selectionModel().selectionChanged.connect(lambda *_: self.selection_changed())
@@ -88,6 +88,19 @@ class DocumentsTab(QWidget):
         self.transition_btn.clicked.connect(lambda *_: self.change_state())
         self.export_btn.clicked.connect(lambda *_: self.export())
 
+        hist_actions = QHBoxLayout()
+        hist_actions.addWidget(QLabel("Revision history", detail))
+        hist_actions.addStretch(1)
+        self.compare_btn = QPushButton("Compare with &previous", detail)
+        self.compare_btn.setToolTip("Metadata comparison of the selected revision and the one before it")
+        self.restore_btn = QPushButton("Restore to &working file…", detail)
+        self.restore_btn.setToolTip("While checked out: replace the working file with the selected older "
+                                    "revision. History is never rewritten.")
+        hist_actions.addWidget(self.compare_btn)
+        hist_actions.addWidget(self.restore_btn)
+        dl.addLayout(hist_actions)
+        self.compare_btn.clicked.connect(lambda *_: self.compare())
+        self.restore_btn.clicked.connect(lambda *_: self.restore())
         hist_split = QSplitter(Qt.Orientation.Horizontal, detail)
         self.history = QTableView(hist_split)
         self.history.setAccessibleName("Revision history")
@@ -169,11 +182,42 @@ class DocumentsTab(QWidget):
         self.export_btn.setEnabled(bool(p.history))
         self.history_model.reload()
         self.revision_detail.setPlainText(p.revision_text(0) if p.history else "")
+        self._history_buttons()
+
+    def selected_history_row(self) -> int | None:
+        rows = self.history.selectionModel().selectedRows()
+        return rows[0].row() if rows and rows[0].row() < len(self.panel.history) else None
+
+    def _history_buttons(self) -> None:
+        row = self.selected_history_row()
+        self.compare_btn.setEnabled(self.panel.can_compare(0 if row is None else row))
+        self.restore_btn.setEnabled(self.panel.can_restore(row))
 
     def revision_selected(self) -> None:
-        rows = self.history.selectionModel().selectedRows()
-        if rows and rows[0].row() < len(self.panel.history):
-            self.revision_detail.setPlainText(self.panel.revision_text(rows[0].row()))
+        row = self.selected_history_row()
+        if row is not None:
+            self.revision_detail.setPlainText(self.panel.revision_text(row))
+        self._history_buttons()
+
+    def compare(self) -> None:
+        row = self.selected_history_row()
+        row = 0 if row is None else row
+        if self.panel.can_compare(row):
+            self.run(lambda: self.revision_detail.setPlainText(self.panel.compare_text(row)), refresh=False)
+
+    def restore(self, confirmed: bool = False) -> None:
+        row = self.selected_history_row()
+        if not self.panel.can_restore(row):
+            return
+        label = self.panel.history[row]["label"]
+        if not confirmed:
+            answer = QMessageBox.question(
+                self, "Restore earlier revision",
+                f"Replace the working file with revision {label}?\n\nAny unsaved or un-checked-in edits in "
+                "the working file will be overwritten. Revision history is not changed.")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.run(lambda: self.panel.restore(row))
 
     def run(self, fn, refresh: bool = True) -> bool:
         try:

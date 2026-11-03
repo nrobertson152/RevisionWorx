@@ -331,7 +331,9 @@ class DocumentListModel(Observable):
     COLUMNS = (Column("number", "Number", 100), Column("title", "Title", 200, True),
                Column("latest_label", "Rev", 50), Column("latest_state", "State", 100),
                Column("released_label", "Released", 70), Column("checked_out_by", "Checked out by", 120),
-               Column("rel_path", "File", 260, True))
+               Column("file_state", "Working file", 130), Column("rel_path", "File", 260, True))
+    FILE_STATE_TEXT = {"unchanged": "OK", "modified": "Edited", "modified-externally": "⚠ Changed, not checked out",
+                       "missing": "⚠ Missing", "unrevisioned": "No revision", "unavailable": "⚠ Unavailable"}
 
     def __init__(self, ctl: Controller):
         super().__init__()
@@ -355,10 +357,27 @@ class DocumentListModel(Observable):
     def refresh(self) -> None:
         self.error = None
         try:
-            self.rows = self.ctl.documents(self.project_id, self.text) if self.project_id else []
+            rows = self.ctl.documents(self.project_id, self.text) if self.project_id else []
+            states = self.ctl.file_states([r["id"] for r in rows]) if rows else {}
+            self.rows = [{**r, "file_state": states.get(r["id"], "unavailable")} for r in rows]
         except Exception as exc:
             self.rows, self.error = [], describe_error(exc)
         self.changed()
+
+    def cell(self, row: int, col: int) -> str:
+        key = self.COLUMNS[col].key
+        v = self.rows[row].get(key)
+        if key == "file_state":
+            return self.FILE_STATE_TEXT.get(v, v or "")
+        return "" if v is None else str(v)
+
+    def row_severity(self, row: int) -> str:
+        state = self.rows[row].get("file_state")
+        return {"missing": "error", "unavailable": "error", "modified-externally": "warning"}.get(state, "ok")
+
+    @property
+    def problem_count(self) -> int:
+        return sum(1 for i in range(len(self.rows)) if self.row_severity(i) != "ok")
 
     @property
     def can_add(self) -> bool:
@@ -382,11 +401,10 @@ class DocumentListModel(Observable):
             return "This project is archived. Restore it to add or change documents."
         if not self.rows and not self.text:
             return "No documents yet. Use “Import file…” to copy a file into this project."
+        if self.problem_count:
+            return (f"⚠ {self.problem_count} document(s) need attention: working file missing or changed "
+                    "without a checkout. Select one for details.")
         return ""
-
-    def cell(self, row: int, col: int) -> str:
-        v = self.rows[row].get(self.COLUMNS[col].key)
-        return "" if v is None else str(v)
 
     def row_id(self, row: int) -> str:
         return self.rows[row]["id"]
@@ -524,6 +542,42 @@ class DocumentPanel(Observable):
     def checkout(self) -> None:
         self.ctl.checkout(self.doc_id)
         self.reload()
+
+    def can_restore(self, row: int | None) -> bool:
+        """Restoring needs this session's checkout and an OLDER revision (row 0 is the latest)."""
+        return self.can_checkin and row is not None and 0 < row < len(self.history)
+
+    def restore(self, row: int) -> None:
+        if not self.can_restore(row):
+            raise ValueError("check the document out first, then choose an earlier revision")
+        rev = self.history[row]
+        self.ctl.restore_revision(self.doc_id, rev["id"])
+        self.message = (f"Working file replaced with revision {rev['label']}. Check in to record it as a "
+                        "new revision (history is not rewritten), or cancel and discard to undo.")
+        self.reload()
+
+    def can_compare(self, row: int | None) -> bool:
+        return row is not None and 0 <= row < len(self.history) - 1
+
+    def compare_text(self, row: int) -> str:
+        """Selected revision against the one before it (metadata only; CAD content is not diffed)."""
+        newer, older = self.history[row], self.history[row + 1]
+        c = self.ctl.compare(older["id"], newer["id"])
+        from ..lifecycle import state_name
+        lc = self.detail["lifecycle"]
+        lines = [f"Revision {c['from']} → {c['to']}",
+                 "Content: " + ("identical" if c["same_content"] else
+                                f"different ({'+' if c['size_delta'] >= 0 else '−'}"
+                                f"{format_bytes(abs(c['size_delta']))})"),
+                 f"State: {state_name(lc, c['states'][0])} → {state_name(lc, c['states'][1])}",
+                 f"Author: {c['authors'][0]} → {c['authors'][1]}",
+                 f"Date: {c['created'][0]} → {c['created'][1]}"]
+        if c["path_changed"]:
+            lines.append("⚠ The file path differs between these revisions.")
+        if c.get("restored_from"):
+            lines.append("The newer revision was restored from an earlier one.")
+        lines += ["", f"{c['from']}: {c['descriptions'][0]}", f"{c['to']}: {c['descriptions'][1]}", "", c["note"]]
+        return "\n".join(lines)
 
     def cancel(self, revert: bool) -> None:
         self.ctl.cancel_checkout(self.doc_id, revert)

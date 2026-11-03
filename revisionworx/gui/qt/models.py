@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable, Sequence
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QColor
 
 from ..viewmodels import Column
 
@@ -12,10 +13,14 @@ from ..viewmodels import Column
 class ViewModelTable(QAbstractTableModel):
     """Read-only table over any view-model exposing ``rows``-like data through callbacks."""
 
+    SEVERITY_COLORS = {"warning": "#8a5300", "error": "#b00020"}
+
     def __init__(self, columns: Sequence[Column], count: Callable[[], int],
-                 cell: Callable[[int, int], str], parent=None):
+                 cell: Callable[[int, int], str], parent=None,
+                 severity: Callable[[int], str] | None = None):
         super().__init__(parent)
         self._columns, self._count, self._cell = tuple(columns), count, cell
+        self._severity = severity
 
     def reload(self) -> None:
         self.beginResetModel()
@@ -32,6 +37,9 @@ class ViewModelTable(QAbstractTableModel):
             return None
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             return self._cell(index.row(), index.column())
+        if role == Qt.ItemDataRole.ForegroundRole and self._severity is not None:
+            color = self.SEVERITY_COLORS.get(self._severity(index.row()))
+            return QColor(color) if color else None
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802

@@ -366,6 +366,29 @@ class Controller:
     def start_import(self, project_id: str, source: Path, subfolder: str = "", on_done=None, **kw) -> bool:
         return self._run("import", lambda: self.import_document(project_id, source, subfolder, **kw), on_done)
 
+    def file_states(self, doc_ids: list[str]) -> dict[str, str]:
+        """Working-file state per document (``unchanged``/``modified``/``modified-externally``/
+        ``missing``/``unrevisioned``/``unavailable``) using the cheap metadata check (size+mtime,
+        hashing only when the size matches but the mtime moved)."""
+        out: dict[str, str] = {}
+        with self._read() as ws:
+            for did in doc_ids:
+                try:
+                    out[did] = documents.document_status(ws, did)["state"]
+                except Exception:  # unreachable root, path error, ... shown per row, never fatal
+                    out[did] = "unavailable"
+        return out
+
+    def restore_revision(self, doc_id: str, rev_id: str) -> None:
+        """While checked out by this session: overwrite the working file with an earlier revision.
+        History is not rewritten; the next check-in records a new revision marked as restored."""
+        with self._write() as ws:
+            documents.restore_to_working(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", rev_id)
+
+    def compare(self, rev_a: str, rev_b: str) -> dict:
+        with self._read() as ws:
+            return documents.compare_revisions(ws, rev_a, rev_b)
+
     def working_file(self, doc_id: str) -> Path:
         with self._read() as ws:
             return documents.working_path(ws, documents._require_doc(ws, doc_id))

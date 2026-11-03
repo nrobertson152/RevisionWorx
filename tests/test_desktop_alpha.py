@@ -331,3 +331,66 @@ def test_alpha_notice_is_explicit():
     s = AppStatus.__init__.__code__  # noqa: F841 - ensure class importable
     assert "single user" in ALPHA_NOTICE and "local" in ALPHA_NOTICE
     assert "irreplaceable production data" in ALPHA_NOTICE
+
+
+# ---------------------------------------------------------------------------- checkpoint 2
+def test_document_list_shows_working_file_state(started):
+    c, home, project, src = started
+    a, _ = c.import_document(project["id"], src, "")
+    other = src.with_name("b.ipt")
+    other.write_bytes(b"b")
+    b, _ = c.import_document(project["id"], other, "")
+    vm = DocumentListModel(c)
+    vm.load(project["id"])
+    col = [col.key for col in DocumentListModel.COLUMNS].index("file_state")
+    assert [vm.cell(i, col) for i in range(2)] == ["OK", "OK"] and vm.problem_count == 0
+    c.working_file(a["id"]).unlink()
+    c.working_file(b["id"]).write_bytes(b"changed outside")
+    vm.refresh()
+    states = {r["rel_path"]: r["file_state"] for r in vm.rows}
+    assert states == {"bracket.ipt": "missing", "b.ipt": "modified-externally"}
+    assert {vm.row_severity(i) for i in range(2)} == {"error", "warning"}
+    assert vm.problem_count == 2 and "need attention" in vm.notice
+
+
+def _two_revisions(c, project, src):
+    doc, _ = c.import_document(project["id"], src, "")
+    c.checkout(doc["id"])
+    c.working_file(doc["id"]).write_bytes(b"inventor part v2 - longer")
+    done = {}
+    c.start_checkin(doc["id"], "Second revision", on_done=lambda r: done.setdefault("r", r))
+    pump(c, lambda: "r" in done)
+    assert done["r"].error is None, done["r"].error
+    return doc
+
+
+def test_restore_earlier_revision_records_new_revision_without_rewriting_history(started):
+    c, home, project, src = started
+    doc = _two_revisions(c, project, src)
+    panel = DocumentPanel(c)
+    panel.load(doc["id"])
+    assert not panel.can_restore(1)  # not checked out
+    with pytest.raises(ValueError):
+        panel.restore(1)
+    panel.checkout()
+    assert not panel.can_restore(0) and panel.can_restore(1)  # only OLDER revisions
+    old_history = [dict(r) for r in panel.history]
+    panel.restore(1)
+    assert c.working_file(doc["id"]).read_bytes() == b"inventor part v1"
+    assert "not rewritten" in panel.message
+    assert [r["id"] for r in panel.history] == [r["id"] for r in old_history]  # unchanged history
+    assert panel.start_checkin("Back to v1 geometry")
+    pump(c, lambda: not panel.message.startswith("Checking in"))
+    newest = panel.history[0]
+    assert newest["number"] == 3 and newest["restored_from"] == old_history[1]["id"]
+    assert "Restored from" in panel.revision_text(0)
+
+
+def test_compare_with_previous_revision(started):
+    c, home, project, src = started
+    doc = _two_revisions(c, project, src)
+    panel = DocumentPanel(c)
+    panel.load(doc["id"])
+    assert panel.can_compare(0) and not panel.can_compare(1)
+    text = panel.compare_text(0)
+    assert "different" in text and "Second revision" in text and "not diffed" in text
