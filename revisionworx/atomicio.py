@@ -19,10 +19,55 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Callable, TypeVar
 
 IS_WINDOWS = os.name == "nt"
+SHARING_RETRIES = 250
+SHARING_DELAY = 0.02
+_T = TypeVar("_T")
+
+
+def retry_sharing(op: Callable[[], _T]) -> _T:
+    """Run ``op``, retrying transient Windows sharing violations with a bound (ADR-016, issue #10).
+
+    Another program that has a file open (a virus scanner, a backup tool, an editor preview) makes a rename
+    or delete fail with WinError 32 until it lets go. Elsewhere this never applies, and any other error, or
+    the last failure, is raised to the caller."""
+    for attempt in range(SHARING_RETRIES if IS_WINDOWS else 1):
+        try:
+            return op()
+        except PermissionError:
+            if attempt == SHARING_RETRIES - 1:
+                raise
+            time.sleep(SHARING_DELAY)
+    return op()
+
+
+def _open_sharing_delete(path: Path) -> BinaryIO:
+    """Open for reading on Windows without blocking a rename or delete of the file.
+
+    Python's open() does not grant FILE_SHARE_DELETE, so every reader of writer.lock made a concurrent
+    release fail with WinError 32. Under load that starved the release until it gave up (issue #10, seen on
+    real Windows in Core CI). The standard library has no other way to request this share mode."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel32.CreateFileW
+    create.restype = wintypes.HANDLE
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                       wintypes.DWORD, wintypes.HANDLE]
+    generic_read, share_all, open_existing, attribute_normal = 0x80000000, 0x7, 3, 0x80
+    handle = create(str(path), generic_read, share_all, None, open_existing, attribute_normal, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY), "rb")
+
+
+def _open_for_read(path: Path) -> BinaryIO:
+    return _open_sharing_delete(path) if IS_WINDOWS else open(path, "rb")
 
 
 class ExclusiveCreateError(FileExistsError):
@@ -61,7 +106,7 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     path = Path(path)
     tmp = _write_temp(path.parent, data, path.name)
     try:
-        os.replace(tmp, path)
+        retry_sharing(lambda: os.replace(tmp, path))
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -100,8 +145,10 @@ def atomic_write_json(path: Path, obj: Any) -> None:
 
 
 def read_json(path: Path) -> Any:
-    with open(path, "rb") as fh:
-        return json.loads(fh.read().decode("utf-8"))
+    def read() -> bytes:
+        with _open_for_read(path) as fh:
+            return fh.read()
+    return json.loads(retry_sharing(read).decode("utf-8"))
 
 
 ORPHAN_TEMP_MIN_AGE_SECONDS = 3600

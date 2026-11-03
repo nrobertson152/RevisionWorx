@@ -323,7 +323,7 @@ class Workspace:
                 self._unlink_own_lock(lock)
             self._lock_token = None
 
-    LOCK_RELEASE_ATTEMPTS = 50
+    LOCK_RELEASE_ATTEMPTS = 250      # about 5 s: long enough for a scanner to let go of the file
     LOCK_RELEASE_DELAY = 0.02
 
     @staticmethod
@@ -376,7 +376,10 @@ class Workspace:
             except (OSError, ValueError):
                 holder = {}
             if holder.get("token") == self._lock_token:
-                private.unlink(missing_ok=True)
+                try:
+                    atomicio.retry_sharing(lambda: private.unlink(missing_ok=True))
+                except PermissionError:
+                    pass  # released all the same: writer.lock is free, and the next scan clears this file
                 return
             self._restore_foreign_lock(private, lock, holder)
             return
@@ -997,7 +1000,7 @@ class Workspace:
             kind_dir.mkdir(exist_ok=True)
             target = kind_dir / f"{op['id']}.json"
             if op.get("delete"):
-                target.unlink(missing_ok=True)
+                atomicio.retry_sharing(lambda: target.unlink(missing_ok=True))
             else:
                 atomicio.atomic_write_json(target, {**op["data"], REV_FIELD: entry["seq"]})
         atomicio.atomic_write_json(self.meta_dir / "state.json", {"applied_seq": entry["seq"]})

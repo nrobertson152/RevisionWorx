@@ -140,6 +140,75 @@ def test_lock_stays_held_when_release_cannot_finish(root, monkeypatch):
     assert Workspace.read_writer_lock(root)["token"] == token
 
 
+def test_retry_sharing_rides_out_a_transient_violation_on_windows(monkeypatch, tmp_path):
+    """Was: a reader of state.json made the writer's replace fail, so a saved change looked unapplied."""
+    monkeypatch.setattr(atomicio, "IS_WINDOWS", True)
+    monkeypatch.setattr(atomicio, "SHARING_DELAY", 0)
+    target = tmp_path / "state.json"
+    real, denied = os.replace, []
+
+    def replace(src, dst):
+        if len(denied) < 3:
+            denied.append(1)
+            raise PermissionError(13, "injected WinError 32")
+        return real(src, dst)
+    monkeypatch.setattr(os, "replace", replace)
+    atomicio.atomic_write_json(target, {"applied_seq": 7})
+    assert len(denied) == 3
+    monkeypatch.undo()
+    assert atomicio.read_json(target) == {"applied_seq": 7}
+
+
+def test_retry_sharing_gives_up_and_reports(monkeypatch):
+    monkeypatch.setattr(atomicio, "IS_WINDOWS", True)
+    monkeypatch.setattr(atomicio, "SHARING_DELAY", 0)
+    calls = []
+
+    def always_busy():
+        calls.append(1)
+        raise PermissionError(13, "injected WinError 32")
+    with pytest.raises(PermissionError):
+        atomicio.retry_sharing(always_busy)
+    assert len(calls) == atomicio.SHARING_RETRIES
+
+
+def test_retry_sharing_does_not_retry_elsewhere(monkeypatch):
+    monkeypatch.setattr(atomicio, "IS_WINDOWS", False)
+    calls = []
+
+    def denied():
+        calls.append(1)
+        raise PermissionError(13, "a real permissions problem")
+    with pytest.raises(PermissionError):
+        atomicio.retry_sharing(denied)
+    assert len(calls) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows share modes")
+def test_our_reader_does_not_block_rename_or_delete_on_windows(tmp_path):
+    """The actual fix: with the file open through atomicio, renaming and deleting it still work."""
+    path = tmp_path / "writer.lock"
+    path.write_bytes(b'{"token": "t"}')
+    with atomicio._open_for_read(path) as fh:
+        moved = tmp_path / ".releasing-x"
+        os.replace(path, moved)
+        assert fh.read() == b'{"token": "t"}'
+        moved.unlink()
+    assert not moved.exists()
+    with pytest.raises(FileNotFoundError):
+        atomicio.read_json(path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows share modes")
+def test_control_python_open_does_block_rename_on_windows(tmp_path):
+    """Why the fix was needed, and proof the sharing tests would notice if this stopped being true."""
+    path = tmp_path / "writer.lock"
+    path.write_bytes(b"x")
+    with open(path, "rb"):
+        with pytest.raises(PermissionError):
+            os.replace(path, tmp_path / ".releasing-x")
+
+
 # --- real processes; on Windows these produce genuine sharing violations -----------------------------
 @pytest.mark.parametrize("n", [6, 10])
 def test_process_contention_with_a_reader_polling_the_lock(tmp_path, n):
@@ -152,16 +221,25 @@ def test_process_contention_with_a_reader_polling_the_lock(tmp_path, n):
     stop = threading.Event()
     lock = root / ".revisionworx" / "locks" / "writer.lock"
 
-    def poll():
+    def status_poller():
+        """RevisionWorx itself asking who holds the lock, as fast as it can. Must never block a release."""
+        while not stop.is_set():
+            Workspace.read_writer_lock(root)
+
+    def outside_program():
+        """Something like a virus scanner: Python's open() does not share delete, so while this has the file
+        open, a rename really does fail with WinError 32 on Windows. It lets go, and release has to wait."""
         while not stop.is_set():
             try:
                 with open(lock, "rb") as fh:
                     fh.read()
-                    time.sleep(0.001)
+                    time.sleep(0.005)
             except OSError:
-                time.sleep(0.0005)
-    reader = threading.Thread(target=poll, daemon=True)
-    reader.start()
+                pass
+            time.sleep(0.02)
+    readers = [threading.Thread(target=fn, daemon=True) for fn in (status_poller, outside_program)]
+    for reader in readers:
+        reader.start()
     procs = [ctx.Process(target=proc_helpers.race_checkout, args=(str(root), doc_id, barrier, results))
              for _ in range(n)]
     try:
@@ -172,7 +250,8 @@ def test_process_contention_with_a_reader_polling_the_lock(tmp_path, n):
             p.join(60)
     finally:
         stop.set()
-        reader.join(5)
+        for reader in readers:
+            reader.join(5)
     assert outcomes.count("won") == 1, outcomes
     assert outcomes.count("conflict") == n - 1, outcomes
     assert Workspace.read_writer_lock(root) is None

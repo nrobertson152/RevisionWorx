@@ -634,6 +634,14 @@ exists. Adding more token re-checks only narrows the window.
   bound. If `close()` still cannot look it releases anyway, since release is move-then-verify and cannot
   take a successor's lock. A holder leaving mid-acquire is retried instead of reported as held by `?`.
 
+  Retries alone were not enough. New 6- and 10-process tests on real Windows (Core CI run 41573956298, at
+  `3cb2764`) showed the winner's release starved after 1 s, leaving every other process waiting 60 s and
+  timing out. The cause is that Python's `open()` does not grant `FILE_SHARE_DELETE`, so every reader blocks
+  a rename. `atomicio.read_json` now opens through `CreateFileW` with all share modes on Windows, so
+  RevisionWorx's own readers never block a release. Outside programs can still hold a file open, so
+  `atomic_write_bytes`, record deletes and the release wait up to about 5 s, and a release that still cannot
+  finish keeps the lock and reports it. This uses `ctypes` from the standard library.
+
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.
 - ADR-016 bounded retry on Windows sharing violations (`PermissionError` on the rename).

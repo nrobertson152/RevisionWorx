@@ -189,6 +189,8 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
   lost update. Tests first failed on `fe8a179`.
 - Issue #10: three remaining ways a transient sharing violation cost availability; see ADR-019. Added
   6- and 10-process contention with a reader polling the lock file.
+- Those tests **failed on real Windows at `3cb2764`** (run 41573956298): readers starved the release.
+  Fixed by reading with `FILE_SHARE_DELETE` and waiting longer; see ADR-019.
 - Issue #9: reproduced nothing new. Added insert/update/delete during rebuild and sync across a fenced
   entry, compared with a journal replay. Both pass, and the fix from `325b7a8` stands.
 - Added `.github/workflows/core-ci.yml`, so this branch now gets its own Linux and Windows runs.
