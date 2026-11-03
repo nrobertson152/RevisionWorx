@@ -1,0 +1,52 @@
+# Distributed Systems P0 Merge-Readiness Audit — 22a5273
+
+**Audited production SHA:** `22a5273d4740b3a7af8e8cb5cc3565e4336b763b` (`phase2-documents`).  
+**Prior scoped accepted core:** `fe8a179f0203ef08151dc8459c84609dc639c4fe`.  
+**Phase 1 base:** `412e69ab90bb1d8b74c1a3cf5519f581e4420e63`.  
+**Main at review:** `3b2d75ad36790c9308f73d3b5e22c002a9d117fb`.  
+**Scope:** native local filesystems and cooperating RevisionWorx processes; no SMB/NFS, hostile namespace mutation, real power-loss durability, release or merge authorization.
+
+## Executive disposition
+
+**HOLD both the standalone Phase 1 merge and the unqualified Phase 2→Phase 1→main sequence.**
+
+- **P0, confirmed old-source integrity risk:** `phase1-foundation` still performs `read_json(writer.lock)` then `lock.unlink()` in `Workspace.close()`, allowing a paused old releaser to delete a new writer's lock. This is the historical independently proven ADR-019 successor-lock race. The isolated backport `36d1957` also retains a check-then-unlink race and was already rejected. Neither old head should land on `main` as a standalone deliverable.
+- **P1 availability/liveness risk in new core:** `22a5273` newly combines `atomicio.retry_sharing` (250 attempts × 20 ms on Windows) with a *second* 250-attempt PermissionError loop in `Workspace._read_lock_file`, potentially **62,500 attempted file reads and roughly 1,250 seconds** in one call when Windows continues to deny a read. On Linux, the outer loop still retries PermissionError even though the atomicio helper is one-shot. On Windows, neither layer restricts retry to transient **WinError 32**, so permanent **WinError 5** ACL denials are repeatedly retried too. The code comment saying a bounded ~5 seconds applies to each loop separately, not their composition. No journal-corruption or dual-writer outcome has been established from this defect; classify **availability P1 pending owner triage**, not an unsupported integrity P0.
+- **Additional changed core:** four commits after accepted `fe8a179` introduce ADR-022 journal-backed record reads/materialisation, new `atomicio.py` read/share-delete and retry behavior, and Windows contention changes. The prior acceptance cannot be inherited. The owner's Linux/Windows core CI on `22a5273` is [41574652418](https://github.com/nrobertson152/RevisionWorx/actions/runs/41574652418) green, but cannot override new independent failing safety predicates.
+
+## Source-level filesystem audit
+
+| Component / new code | Intended safety property | Independent finding / limitation |
+|---|---|---|
+| `atomicio._open_sharing_delete` | Windows readers grant FILE_SHARE_DELETE to avoid blocking rename | Appropriate design on local Win32, but does not itself cover all third-party handles |
+| `atomicio.retry_sharing` | Bounded retry of WinError 32 rename/open failures | Catches **all** `PermissionError` on Windows; WinError 5 and nonsharing ACL failures are delayed |
+| `Workspace._read_lock_file` | Transient reader sharing denial must not permanently mark a lock lost | Duplicates retry budget; nested 250 × 250 upper bound; retries POSIX EACCES |
+| `atomicio.atomic_write_bytes` | Fully-fsynced temp and atomic replace; directory fsync POSIX | Windows directory durability intentionally unverified; no claim about power loss or network shares |
+| `atomicio.publish_exclusive` | One winner for a published journal name or lock | Uses POSIX hard-link vs Windows non-overwriting rename; this commit does not change its algorithm |
+| ADR-022 journal-backed read cache | A late stale writer's record-file materialisation cannot override the authoritative effective journal | Correct architectural direction. Materialisation/read-view behavior changed since accepted SHA and still needs independent exact-source regression qualification |
+
+### Independent deterministic executable evidence
+
+Research test `prototype/test_core_22a5273_retry_composition.py`, introduced at `5310ce3d7a876479797e741663f59f4f261e29cf`, uses the *real exact-source* `Workspace._read_lock_file → atomicio.read_json → retry_sharing` chain. Accelerated injected error responses and reduced budgets avoid CI hangs. With four outer and five inner attempts, it verifies:
+
+1. **UNSAFE reproduction:** 20 low-level reads on one persistent simulated WinError 32.
+2. **UNSAFE reproduction:** persistent simulated WinError 5 likewise receives 20 low-level reads.
+3. **UNSAFE reproduction:** POSIX PermissionError gets four outer retries.
+4. **Positive control:** transient Windows WinError 32 clears after two denials, yielding a correct response on the third attempt.
+5. **Strict expected-failure safety requirements:** a single bounded Windows retry budget, immediate WinError 5 rejection, immediate POSIX EACCES rejection. Intentional XFAIL is *not safety acceptance*.
+
+Four-platform pinned `ubuntu-latest`/`windows-latest` Python 3.11/3.13 workflow added at `2329faff4f2f4a9881bdb59268a70836cfcda0db`: [run 41577243072](https://github.com/nrobertson152/RevisionWorx/actions/runs/41577243072). Full result should be recorded after all jobs complete. Added an independent *genuine Win32 CreateFileW exclusive-handle* confirmation at `c2267dbbe288c08abfe17524eff0373225271577`, workflow `99aeb91c56da7337d0c39bf776fa959489428c0c`: [run 41577491200](https://github.com/nrobertson152/RevisionWorx/actions/runs/41577491200). Do not count queued jobs as complete.
+
+## Actual Git topology and safe candidate order
+
+From the exact GitHub compare API at this audit: `phase2-documents` is **25 ahead, 0 behind** `phase1-foundation`, so the Phase 2 tree includes Phase 1 history. `main` and `phase1-foundation` diverge (**6 ahead / 31 behind**, with a common ancestor at `0c9cc6b`). PR #7 currently reports mergeable, while PR #6 currently reports **mergeable=false**. The core owner's `docs/INTEGRATION_PLAN.md` had previously identified a `docs/DEVELOPMENT_PROGRESS.md` conflict; re-evaluate actual conflict against current `main`, which has advanced since that report.
+
+**The dependency requirement is invariant:** do not land `phase1-foundation` SHA `412e69a` by itself. Any Director-approved integration would first incorporate a *new independently accepted* Phase 2 exact commit into the Phase 1 branch, then resolve the current-main conflict and test the resulting merged tree. Only then consider GUI PR #14. Do not rebase approved commits or treat a green component CI as merged-tree acceptance. The rejected Phase 1 backport `36d1957` should not be substituted silently. GitHub branches, PR targets, and production files were not changed by this audit.
+
+## Required owner/QA gates
+
+1. Fix the nested retry composition so a single bounded Windows **WinError 32** retry budget applies to an operation, and other PermissionError/WinError 5/POSIX EACCES errors fail immediately. Preserve correct `FileNotFoundError`/successor-handoff and Win32 FILE_SHARE_DELETE semantics. Add ordinary **PASS** tests for all three unmet safety predicates on the corrected *exact new SHA*.
+2. Independently re-run the three accepted ADR-019 rev.4 positive safety interleavings and separate-process custody crashes on the next SHA, alongside ADR-022 authoritative record-file/journal replay and Windows checkout contention.
+3. Verify and test the *merged tree* on native Linux and Windows; repeat after any GUI or docs conflict resolution. Obtain Director approval for the actual merge sequence. No automatic backport, merge, retarget, release or network-folder claim.
+
+**No production core, phase1, GUI, or branch target modified. Only research tests, workflow, documentation and PR comments are in scope.**
