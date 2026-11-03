@@ -81,3 +81,40 @@ failed 10 Qt tests on each OS due to an invalid relative import of
 CommittedNotApplied in the GUI document tab. Reported to Claude B. Keep the
 frozen-alpha source pinned until a fixed GUI SHA passes independently.
 No interactive/manual app acceptance or release authorization is implied.
+
+
+## Newest accepted GUI source and observable-state evidence
+
+The test-only alpha workflow now pins Claude B GUI source
+17651af68128572c7c83429513044a5948dd07bd. Its native Windows/Linux
+[GUI CI 41570211687](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570211687)
+passed on both OS. Integration harness SHA
+b4866ec56e20af02f882699749feddd7cab23e0f,
+[alpha CI 41570682514](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570682514):
+**Ubuntu and Windows frozen-app matrix PASSED.**
+
+Alongside the original Qt actions, two revision exports and separate-process
+reopen, the frozen GUI wrapper now asserts the **documented version 1
+GUI observable-state contract** at initial start, project creation,
+first import, checkout ownership, second check-in, F5 refresh and new GUI
+process restart. In particular, the visible selected project/document,
+two history rows and enabled checkout versus check-in actions must agree
+with the durable storage state. The test explicitly fails if F5 loses
+selection or if an ordinary successful check-in is shown as an error.
+The host-side verifier requires named JSON evidence for the contract and F5
+assertions rather than accepting a nominal process-success status.
+
+The Ubuntu job also passed the complete widget path and normal GUI start
+inside the **network=none Python/pip-free** test container. The Windows
+job passed the frozen widget path, 401-character local and extended-length
+path probes, local UNC loopback read, and locked-file rejection. This is
+not human-driven GUI acceptance or physical two-host SMB.
+
+The separate older-source packaging [CI 41570682310](https://github.com/nrobertson152/RevisionWorx/actions/runs/41570682310)
+also PASSED on Ubuntu/Windows with production source
+d656884b39401134149273dd0121ef620b76eb8e unchanged. These two exact
+source pins are intentionally separate. Nothing authorizes a release,
+Phase 1 backport or newer Phase 2 safety acceptance; the unaccepted
+Phase 2 core d2b7a1c has three independently reproduced in-scope
+protocol-only writer exclusivity P1 failures. No clean Windows VM or actual
+manual interactive installed GUI has been executed.
