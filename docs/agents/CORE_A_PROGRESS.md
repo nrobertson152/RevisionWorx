@@ -23,3 +23,12 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Interfaces:** existing `Workspace.commit`, `transaction_outcome`, `head_seq`, `RecordCheck`, `RecordPut`, `TxidReuseError`. No public API change, production source edit, or branch merge.
 - **Execution:** tests NOT EXECUTED; this GitHub connector can commit files but cannot run pytest or Actions. No OS/Python pass/fail count or CI URL. Prior local clone DNS failure is not treated as proof that this test passes. QA should run `python -m pytest -q tests/test_core_adr017_ordered_checks_restart.py` on pinned old source and latest corrected exact SHA across native Ubuntu/Windows Python 3.11/3.13, and inspect all strict outcomes.
 - **Next:** examine nonoverlapping orphan recovery/disk-full crash fixture or read-only integrity-doctor fixture after QA confirms overlap and exact source. Core malformed-journal and CAD source-provenance production fixes remain Claude A-owned P0 merge blockers.
+
+## 2026-11-03 — Pinned four-platform workflow added
+
+- **Checkout:** issue #29 simple GitHub comment checkout; role-owned branch only.
+- **Workflow commit:** `328b03849b66946c9682b1c19477edff066adfef`, `.github/workflows/core-a-pinned-regressions.yml`.
+- **Pinned historical production:** `f01b37d345c5208ab0fa520588a2abe8c66c894a` checked out separately from role-owned tests; runtime code is NOT changed.
+- **Matrix:** native `ubuntu-latest` and `windows-latest`, CPython 3.11 and 3.13; `pytest` executes `tests/test_core_independent_journal_shape.py` and `tests/test_core_adr017_ordered_checks_restart.py` after copying the exact test files into a disposable production checkout. Prints both production and test commit SHAs.
+- **Important:** This is a *historical negative-control* gate. Strict malformed-journal tests are expected to fail on the old source; a red job is useful only when logs confirm the expected specific assertions. No CI run ID or observed pass/fail/skip counts were available at commit time; no green acceptance is claimed. A future corrected-source workflow must use the same tests against a pinned new Claude A SHA, not silently update this historical baseline.
+- **Next:** inspect actual Actions logs for four native jobs and distinguish setup failures from intended strict corruption failures. Ask QA to rerun unchanged tests on corrected exact core once available; separately pursue source-provenance acceptance.
