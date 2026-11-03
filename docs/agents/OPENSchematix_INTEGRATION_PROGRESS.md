@@ -496,3 +496,43 @@ rename/replace and are therefore **inside** the Director's single-user
 trusted-local alpha safety scope. The existing frozen GUI acceptance only
 establishes the tested UI and CLI paths on disposable data; it cannot
 override this rejection. No repin, Phase 1 backport, merge or release.
+
+
+## 2026-11-02 — current GUI b4c6d72 frozen alpha source acceptance
+
+**Assignment:** Coordinator PR #2 requests a separately pinned exact-SHA frozen
+GUI matrix, with GUI code held by Claude B (PR #14). Claude B fixed both
+document-selection/health refresh regressions at GUI source commit
+b4c6d72664a65f1c51c665df8fd3aa30552b5f45, whose own
+[desktop-alpha CI 41567499552](https://github.com/nrobertson152/RevisionWorx/actions/runs/41567499552)
+completed SUCCESS on Ubuntu and Windows Python 3.11.
+
+Integration updated *only* the independent test-only alpha workflow at
+packaging commit 06785d1035e6ec09b01f91d9b1bc80dc78ae2fec to pin
+the same GUI source SHA in both checkout and builder verification.
+**[Integration run 41568957858](https://github.com/nrobertson152/RevisionWorx/actions/runs/41568957858)
+finished SUCCESS for both Ubuntu and Windows Python 3.11 matrix jobs.**
+Source provenance in each job confirms SHA b4c6d72664a65f1c51c665df8fd3aa30552b5f45,
+test-only GUI wrapper true. Both OS passed five packaging-safeguard unittests,
+bundled CLI/Qt startup, copied-workspace immutable hash preservation,
+relocation into a Unicode/spaces directory, *actual frozen Qt widget* create,
+import, checkout/checkin with description, two revision rows, fresh frozen
+GUI-process reopen and independently verified frozen CLI SHA-256 exports.
+Windows extra: 401-character local path, extended-length path, localhost
+UNC-loopback read, locked-file read rejection and original hashes unchanged.
+Ubuntu extra: no Python or pip, nonroot/read-only-root image under Docker
+--network none, copied bundle widget workflow, independent exported historical
+SHA-256 and normal frozen GUI startup all passed
+(OFFLINE_ALPHA_GUI_EVIDENCE).
+
+This passes **only exact GUI/source functional and frozen-runtime acceptance**
+on disposable local data. It is NOT proof of an interactive user-operated
+desktop/installer, absent socket attempts, clean Windows without Python or
+network, genuine power loss, or core storage writer exclusivity. Director
+approved trusted single-user local alpha scope only. QA now independently
+confirms **three** protocol-only dual-effective-writer P1 hazards against
+unaccepted core d2b7a1c; all are inside alpha cooperative protocol scope.
+Do NOT merge, backport, release or repin baseline authority workflow;
+separate revisionworx-packaging-readiness.yml still pins d656884b. PR #2
+remains draft. New acceptance does not inherit safety approval for any core
+commit.
