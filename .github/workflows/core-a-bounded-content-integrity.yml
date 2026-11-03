@@ -1,0 +1,58 @@
+name: Core A bounded content integrity pinned positive matrix
+
+on:
+  push:
+    branches: [core/independent-journal-schema-regressions]
+    paths:
+      - '.github/workflows/core-a-bounded-content-integrity.yml'
+      - 'tests/test_core_bounded_content_integrity.py'
+  pull_request:
+    paths:
+      - '.github/workflows/core-a-bounded-content-integrity.yml'
+      - 'tests/test_core_bounded_content_integrity.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-content:
+    name: bounded content / ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - name: Checkout immutable independent fixture source
+        uses: actions/checkout@v4
+        with:
+          ref: b93c012d
+          path: independent
+          persist-credentials: false
+      - name: Checkout immutable corrected production source
+        uses: actions/checkout@v4
+        with:
+          ref: 3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194
+          path: production
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Verify immutable source identities and stage fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C production rev-parse HEAD)" = "3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194"
+          fixture_sha="$(git -C independent rev-parse HEAD)"
+          test "$(git -C independent rev-parse --short=8 HEAD)" = "b93c012d"
+          echo "PRODUCTION_SHA=$(git -C production rev-parse HEAD)"
+          echo "TEST_SHA=$fixture_sha"
+          test -f independent/tests/test_core_bounded_content_integrity.py
+          cp independent/tests/test_core_bounded_content_integrity.py production/tests/
+      - name: Strict positive bounded content integrity regressions
+        working-directory: production
+        run: python -m pytest -q -ra tests/test_core_bounded_content_integrity.py
