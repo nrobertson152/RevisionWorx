@@ -275,3 +275,55 @@ jobs:
         env:
           REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
         run: python -m unittest -v prototype.test_phase2_revoked_cleanup_protocol_only
+
+  phase2-rev4-admin-break-acceptance:
+    name: ADR-019 rev4 independent admin successor (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: fe8a179f0203ef08151dc8459c84609dc639c4fe
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Exercise actual admin-break displaced-token safety and crash edge
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_phase2_admin_break_successor
+
+  phase2-rev4-admin-break-old-control:
+    name: ADR-019 rev3 administrative break unsafe baseline (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: d2b7a1cfead5b83acecce2252e70d0a155f146b7
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Negative control must reject old candidate
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        shell: bash
+        run: |
+          set +e
+          python -m unittest -v prototype.test_phase2_admin_break_successor
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then echo "Old vulnerable implementation unexpectedly passed"; exit 1; fi
+          echo "Confirmed: vulnerable old source fails positive safety oracles"
