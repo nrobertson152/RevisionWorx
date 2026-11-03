@@ -78,3 +78,13 @@ def make_checkout_fixture(share) -> str:
         target.write_bytes(b"IPT v1")
         doc, _ = documents.register_document(ws, project["id"], target)
     return doc["id"]
+
+
+def put_tokens(state_dir: str, who: int, barrier) -> None:
+    """Racing writers of the per-machine token store."""
+    from pathlib import Path
+    from revisionworx.clientstate import CheckoutTokens
+    tokens = CheckoutTokens(Path(state_dir))
+    barrier.wait()
+    for j in range(20):
+        tokens.put("ws", f"doc_{who}_{j}", f"token-{who}-{j}")

@@ -7,14 +7,29 @@ share), records the journal sequence it reflects, and can be deleted and rebuilt
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import Any, Callable
 
-from .workspace import Workspace, WorkspaceError
+from .workspace import Workspace, WorkspaceCorruptError, WorkspaceError, entry_digest
 
 SCHEMA_VERSION = 2  # 2: Phase 2 document/revision/checkout tables
+BUSY_TIMEOUT = 15.0  # seconds to wait for another RevisionWorx process using this machine's cache
+_BUSY_MESSAGE = "the local search index is in use by another RevisionWorx process; try again in a moment"
+
+
+class IndexBusyError(WorkspaceError):
+    """Another process is using the local index right now. Nothing is wrong with it; try again."""
+
+
+def _is_busy(exc: sqlite3.Error) -> bool:
+    code = getattr(exc, "sqlite_errorcode", None)    # Python 3.11+; the low byte is the primary result code
+    if code is not None:
+        return code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    return "locked" in str(exc) or "busy" in str(exc)
 
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -82,30 +97,79 @@ class LocalIndex:
         self.db = self._open()
 
     # ------------------------------------------------------------------ setup
-    def _open(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path)
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.path, timeout=BUSY_TIMEOUT)
+
+    def _discard_files(self) -> None:
+        try:
+            for suffix in ("", "-wal", "-shm"):
+                Path(str(self.path) + suffix).unlink(missing_ok=True)
+        except PermissionError as exc:           # Windows: another process has it open
+            raise IndexBusyError(_BUSY_MESSAGE) from exc
+
+    def _usable(self, db: sqlite3.Connection) -> bool | None:
+        """True: this workspace's cache. False: someone else's, an old format or damaged, so disposable.
+        None: an empty database, nobody's yet. Raises IndexBusyError: in use, so it is not ours to judge."""
         try:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=NORMAL")
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone() is None:
+                return None
             row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            ok = row is not None and int(row[0]) == SCHEMA_VERSION
             wsrow = db.execute("SELECT value FROM meta WHERE key='workspace_id'").fetchone()
-            ok = ok and wsrow is not None and wsrow[0] == self.ws.id
-        except sqlite3.DatabaseError:
-            ok = False
-        if not ok:
+            return row is not None and int(row[0]) == SCHEMA_VERSION and wsrow is not None and wsrow[0] == self.ws.id
+        except sqlite3.DatabaseError as exc:
+            if _is_busy(exc):
+                raise IndexBusyError(_BUSY_MESSAGE) from exc
+            return False
+
+    def _open(self) -> sqlite3.Connection:
+        db = self._connect()
+        try:
+            usable = self._usable(db)
+            if usable is False:
+                db.close()
+                self._discard_files()
+                db = self._connect()
+                usable = self._usable(db)
+            if usable is None:
+                self._create_schema(db)
+        except BaseException:
             db.close()
-            for suffix in ("", "-wal", "-shm"):
-                Path(str(self.path) + suffix).unlink(missing_ok=True)
-            db = sqlite3.connect(self.path)
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA synchronous=NORMAL")
-            with db:
-                db.executescript(SCHEMA)
-                db.executemany("INSERT INTO meta VALUES (?, ?)",
-                               [("schema_version", str(SCHEMA_VERSION)), ("workspace_id", self.ws.id),
-                                ("journal_seq", "0")])
+            raise
         return db
+
+    def _create_schema(self, db: sqlite3.Connection) -> None:
+        """All or nothing, and safe to race: whoever comes second finds it done."""
+        workspace_id = self.ws.id.replace("'", "''")
+        try:
+            db.executescript(
+                f"BEGIN IMMEDIATE;{SCHEMA}"
+                f"INSERT INTO meta VALUES ('schema_version', '{SCHEMA_VERSION}'), "
+                f"('workspace_id', '{workspace_id}'), ('journal_seq', '0');COMMIT;")
+        except sqlite3.OperationalError as exc:
+            db.rollback()
+            if _is_busy(exc):
+                raise IndexBusyError(_BUSY_MESSAGE) from exc
+            if "already exists" not in str(exc):
+                raise
+
+    def _start_over(self) -> None:
+        """The cache is damaged. It holds nothing the journal does not, so replace it."""
+        self.db.close()
+        self._discard_files()
+        self.db = self._open()
+        self.rebuild()
+
+    def _healing(self, work: Callable[[], Any]) -> Any:
+        """Run a query. If the cache turns out to be damaged, replace it and run the query once more."""
+        try:
+            return work()
+        except sqlite3.DatabaseError as exc:
+            if _is_busy(exc):
+                raise IndexBusyError(_BUSY_MESSAGE) from exc
+            self._start_over()
+            return work()
 
     def close(self) -> None:
         self.db.close()
@@ -118,7 +182,39 @@ class LocalIndex:
 
     # ------------------------------------------------------------------ sync
     def cursor_seq(self) -> int:
-        return int(self.db.execute("SELECT value FROM meta WHERE key='journal_seq'").fetchone()[0])
+        return int(self._meta("journal_seq"))
+
+    def _meta(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def _set_meta(self, key: str, value: str) -> None:
+        self.db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
+
+    def _digest_at(self, seq: int) -> str | None:
+        """The journal's own fingerprint of an entry. None if it cannot be read (missing or damaged)."""
+        if seq == 0:
+            return ""
+        try:
+            entry = self.ws.read_entry(seq)
+        except (OSError, WorkspaceCorruptError):
+            return None
+        return entry.get("digest") or entry_digest(entry)
+
+    def _anchored(self, cur: int) -> bool:
+        """Is this the journal the cache was built from? A cursor alone cannot tell: a restored workspace
+        can grow back to or past it with different entries, and the cache would then serve records that
+        exist in no journal. Entry digests cover the txid and time, so they differ across timelines.
+
+        A damaged entry cannot answer, and the workspace is already recovery-blocked then: searching stays
+        available, as reads do, and a repair brings the entry and this check back."""
+        try:
+            entry = self.ws.read_entry(cur) if cur else None
+        except WorkspaceCorruptError:
+            return True
+        except OSError:
+            return False
+        return self._meta("journal_digest") == ((entry.get("digest") or entry_digest(entry)) if entry else "")
 
     def status(self) -> dict:
         head = self.ws.head_seq()
@@ -145,11 +241,21 @@ class LocalIndex:
         self.db.execute("DELETE FROM files_fts WHERE project_id=?", (pid,))
         if not blob_ref:
             return
-        baseline = self.ws.read_blob(blob_ref)
+        try:
+            baseline = self.ws.read_blob(blob_ref)
+        except (OSError, ValueError):            # verify() reports this; the rest of the index still works
+            self._note_baseline(pid, unavailable=True)
+            return
+        self._note_baseline(pid, unavailable=False)
         rows = [(pid, f["path"], f["size"], f["mtime_ns"], f["category"], f.get("sha256"),
                  f.get("verified_format")) for f in baseline["files"]]
         self.db.executemany("INSERT INTO files VALUES (?,?,?,?,?,?,?)", rows)
         self.db.executemany("INSERT INTO files_fts VALUES (?,?)", [(pid, r[1]) for r in rows])
+
+    def _note_baseline(self, pid: str, unavailable: bool) -> None:
+        ids = set(json.loads(self._meta("baselines_unavailable") or "[]"))
+        (ids.add if unavailable else ids.discard)(pid)
+        self._set_meta("baselines_unavailable", json.dumps(sorted(ids)))
 
     def _apply_put(self, kind: str, rid: str, data: dict) -> None:
         if kind == "project":
@@ -212,19 +318,34 @@ class LocalIndex:
             for table in ("roots", "projects", "projects_fts", "files", "files_fts", "documents",
                           "documents_fts", "revisions", "checkouts"):
                 self.db.execute(f"DELETE FROM {table}")
+            self._set_meta("baselines_unavailable", "[]")
             for kind in kinds:
                 for rid, data in snapshot[kind].items():
                     self._apply_put(kind, rid, data)
-            self.db.execute("UPDATE meta SET value=? WHERE key='journal_seq'", (str(head),))
+            self._set_meta("journal_seq", str(head))
+            self._set_meta("journal_digest", self._digest_at(head) or "")
         return head
 
     def sync(self) -> dict:
-        """Apply journal entries newer than the cache. Rebuilds if continuity cannot be proven."""
+        """Apply journal entries newer than the cache. Rebuilds if continuity cannot be proven, and replaces
+        the cache if it turns out to be damaged."""
+        try:
+            return self._sync()
+        except sqlite3.DatabaseError as exc:
+            if _is_busy(exc):
+                raise IndexBusyError(_BUSY_MESSAGE) from exc
+            self._start_over()
+            return {"mode": "rebuild", "reason": "the local index was damaged and has been replaced"}
+
+    def _sync(self) -> dict:
         cur = self.cursor_seq()
         head = self.ws.head_seq()
         if cur > head:
             self.rebuild()
             return {"mode": "rebuild", "reason": "cache is ahead of workspace (restored backup?)"}
+        if not self._anchored(cur):
+            self.rebuild()
+            return {"mode": "rebuild", "reason": "the journal is not the one this cache was built from"}
         if cur == head:
             return {"mode": "current", "applied": 0}
         applied = 0
@@ -238,7 +359,8 @@ class LocalIndex:
                         self._apply_delete(item["kind"], item["id"])
                     else:
                         self._apply_put(item["kind"], item["id"], item["data"])
-                self.db.execute("UPDATE meta SET value=? WHERE key='journal_seq'", (str(entry["seq"]),))
+                self._set_meta("journal_seq", str(entry["seq"]))
+                self._set_meta("journal_digest", entry.get("digest") or entry_digest(entry))
                 expected += 1
                 applied += 1
         if self.cursor_seq() != head:
@@ -250,9 +372,11 @@ class LocalIndex:
     _PROJECT_COLS = "id, name, number, customer, description, mode, status, root_id, rel_path, origin, created"
 
     def _rows(self, sql: str, args: tuple) -> list[dict]:
-        cur = self.db.execute(sql, args)
-        cols = [c[0] for c in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        def run() -> list[dict]:
+            cur = self.db.execute(sql, args)
+            cols = [c[0] for c in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        return self._healing(run)
 
     def project_by_number(self, number: str) -> list[dict]:
         return self._rows(f"SELECT {self._PROJECT_COLS} FROM projects WHERE number = ? COLLATE NOCASE",
@@ -274,7 +398,7 @@ class LocalIndex:
 
     def count_projects(self, include_archived: bool = False) -> int:
         clause = "" if include_archived else "WHERE status = 'active'"
-        return self.db.execute(f"SELECT COUNT(*) FROM projects {clause}").fetchone()[0]
+        return self._rows(f"SELECT COUNT(*) AS n FROM projects {clause}", ())[0]["n"]
 
     def search_files(self, text: str, project_id: str | None = None, limit: int = 100,
                      offset: int = 0) -> list[dict]:
@@ -319,9 +443,10 @@ class LocalIndex:
 
     def coverage(self) -> dict:
         """What the index covers, so callers can never imply company-wide completeness."""
-        rows = self.db.execute("SELECT mode, COUNT(*) FROM projects GROUP BY mode").fetchall()
-        return {"registered_projects": dict(rows),
-                "files_inventoried": self.db.execute("SELECT COUNT(*) FROM files").fetchone()[0],
+        rows = self._rows("SELECT mode, COUNT(*) AS n FROM projects GROUP BY mode", ())
+        return {"registered_projects": {r["mode"]: r["n"] for r in rows},
+                "files_inventoried": self._rows("SELECT COUNT(*) AS n FROM files", ())[0]["n"],
+                "baselines_unavailable": json.loads(self._healing(lambda: self._meta("baselines_unavailable")) or "[]"),
                 "note": "Only registered (indexed/managed) projects are covered. Unmanaged folders "
                         "are never searched."}
 

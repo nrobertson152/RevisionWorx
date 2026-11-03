@@ -24,6 +24,7 @@ RID = "root_" + "a" * 32
 @pytest.fixture
 def root(tmp_path, monkeypatch):
     monkeypatch.setattr(Workspace, "LOCK_RELEASE_DELAY", 0)
+    monkeypatch.setattr(atomicio, "SHARING_DELAY", 0)
     root = tmp_path / "w"
     with Workspace.create(root, "t"):
         pass
@@ -31,16 +32,17 @@ def root(tmp_path, monkeypatch):
 
 
 def busy_reads(monkeypatch, name, times):
-    """The next ``times`` reads of files called ``name`` fail with a sharing violation."""
-    real = atomicio.read_json
+    """The next ``times`` opens of files called ``name`` fail as sharing violations do on Windows."""
+    monkeypatch.setattr(atomicio, "RETRY_SHARING", True)
+    real = atomicio._open_for_read
     left = [times]
 
-    def read(path):
+    def opener(path):
         if Path(path).name.startswith(name) and left[0] > 0:
             left[0] -= 1
             raise PermissionError(13, "injected WinError 32")
         return real(path)
-    monkeypatch.setattr(atomicio, "read_json", read)
+    monkeypatch.setattr(atomicio, "_open_for_read", opener)
     return left
 
 
@@ -59,8 +61,8 @@ def test_close_releases_when_reads_stay_busy(root, monkeypatch):
     busy_reads(monkeypatch, "writer.lock", 10_000)      # release must not depend on the courtesy read
     ws.close()
     monkeypatch.undo()
-    assert Workspace.read_writer_lock(root) is None
-    assert token                                         # released by inspecting the moved file instead
+    assert Workspace.read_writer_lock(root) is None      # released by inspecting the moved file instead
+    assert token not in Workspace._revoked_tokens(root / ".revisionworx")
 
 
 def test_close_never_takes_a_successors_lock_after_a_failed_read(root, monkeypatch):
@@ -142,7 +144,7 @@ def test_lock_stays_held_when_release_cannot_finish(root, monkeypatch):
 
 def test_retry_sharing_rides_out_a_transient_violation_on_windows(monkeypatch, tmp_path):
     """Was: a reader of state.json made the writer's replace fail, so a saved change looked unapplied."""
-    monkeypatch.setattr(atomicio, "IS_WINDOWS", True)
+    monkeypatch.setattr(atomicio, "RETRY_SHARING", True)
     monkeypatch.setattr(atomicio, "SHARING_DELAY", 0)
     target = tmp_path / "state.json"
     real, denied = os.replace, []
@@ -160,7 +162,7 @@ def test_retry_sharing_rides_out_a_transient_violation_on_windows(monkeypatch, t
 
 
 def test_retry_sharing_gives_up_and_reports(monkeypatch):
-    monkeypatch.setattr(atomicio, "IS_WINDOWS", True)
+    monkeypatch.setattr(atomicio, "RETRY_SHARING", True)
     monkeypatch.setattr(atomicio, "SHARING_DELAY", 0)
     calls = []
 
@@ -173,7 +175,7 @@ def test_retry_sharing_gives_up_and_reports(monkeypatch):
 
 
 def test_retry_sharing_does_not_retry_elsewhere(monkeypatch):
-    monkeypatch.setattr(atomicio, "IS_WINDOWS", False)
+    monkeypatch.setattr(atomicio, "RETRY_SHARING", False)
     calls = []
 
     def denied():

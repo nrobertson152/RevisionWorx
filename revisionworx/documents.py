@@ -16,13 +16,13 @@ import stat
 import uuid
 from pathlib import Path
 
+from . import atomicio, paths, projects, revlabels
 from . import lifecycle as lc_mod
-from . import paths, projects, revlabels
 from .content import ContentStore, hash_file
 from .filetypes import classify
 from .lifecycle import LifecycleError
-from .workspace import (ConflictError, RecordCheck, RecordDelete, RecordPut, Workspace, WorkspaceError,
-                        current_actor, new_id, now_iso, register_kind, strip_rev)
+from .workspace import (ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
+                        Workspace, WorkspaceError, current_actor, new_id, now_iso, register_kind, strip_rev)
 
 for _kind in ("doctype", "document", "revision", "checkout", "lifecycle"):
     register_kind(_kind)
@@ -322,11 +322,38 @@ def _require_checkout(ws: Workspace, doc_id: str, token: str) -> dict:
     return co
 
 
+def _earlier_checkin(ws: Workspace, doc_id: str, txid: str, description: str, label: str | None) -> dict | None:
+    """What an earlier attempt with this txid already did (CORE_API 4), or None if nothing happened yet.
+
+    A check-in cannot lean on commit()'s own retry check: every attempt makes a new revision id and time, so
+    no two attempts are ever the same request, and after a success the checkout it needs is gone. The
+    journal answers instead: the original revision for the same request, and a refusal for anything else."""
+    outcome = ws.transaction_outcome(txid)
+    if outcome["state"] == "not-found":
+        return None
+    if outcome["state"] == "fenced":
+        raise LockLostError(f"check-in attempt {txid} (entry {outcome['seq']}) never took effect, because its "
+                            "session had lost the writer lock. Nothing changed. Start a new attempt with a new txid")
+    entry = ws.read_entry(outcome["seq"])
+    revs = [i["data"] for i in entry["records"] if i["kind"] == "revision" and not i.get("delete")]
+    same = (entry.get("op") == "document.checkin" and len(revs) == 1 and revs[0]["document_id"] == doc_id
+            and revs[0]["description"] == description.strip() and (label is None or revs[0]["label"] == label.strip()))
+    if not same:
+        raise TxidReuseError(f"txid {txid} was already used for a different change (entry {outcome['seq']})")
+    return {**revs[0], "_rev": outcome["seq"]}
+
+
 def checkin(ws: Workspace, doc_id: str, token: str, description: str, label: str | None = None,
             allow_unchanged: bool = False, txid: str | None = None) -> dict:
-    """Snapshot the working file as a new immutable revision and release the checkout atomically."""
+    """Snapshot the working file as a new immutable revision and release the checkout atomically.
+
+    With a ``txid``, a retry returns the original revision and captures nothing new (CORE_API 4)."""
     if not description.strip():
         raise DocumentError("a change description is required")
+    if txid is not None:
+        earlier = _earlier_checkin(ws, doc_id, txid, description, label)
+        if earlier is not None:
+            return earlier
     doc = _require_doc(ws, doc_id)
     co = _require_checkout(ws, doc_id, token)
     if doc["latest_rev_id"] != co["base_rev_id"]:
@@ -353,8 +380,11 @@ def checkin(ws: Workspace, doc_id: str, token: str, description: str, label: str
 
 def _write_working_from_store(ws: Workspace, sha256: str, path: Path) -> None:
     tmp = path.with_name(f".{path.name}.rwx-{uuid.uuid4().hex[:8]}.tmp")
-    ContentStore(ws).export(sha256, tmp)
-    os.replace(tmp, path)
+    try:
+        ContentStore(ws).export(sha256, tmp)
+        atomicio.retry_sharing(lambda: os.replace(tmp, path))
+    finally:
+        atomicio.remove_quietly(tmp)     # a CAD program holding the file must not leave copies in the project
 
 
 def cancel_checkout(ws: Workspace, doc_id: str, token: str, revert: bool = False) -> None:

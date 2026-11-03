@@ -22,7 +22,7 @@ from revisionworx.workspace import LockLostError, RecordPut, Workspace, Workspac
 
 RID_B = "root_" + "b" * 32
 RID_C = "root_" + "c" * 32
-CLEANUP_STEPS, BREAK_STEPS, RELEASE_STEPS = 14, 4, 5  # filesystem changes after the stale move
+CLEANUP_STEPS, BREAK_STEPS, RELEASE_STEPS = 17, 5, 6  # filesystem changes after the stale move
 MOVED_FROM_LOCK = (".releasing-", "writer.lock.revoked-", "writer.lock.broken-")
 
 

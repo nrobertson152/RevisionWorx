@@ -24,9 +24,11 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable, TypeVar
 
 IS_WINDOWS = os.name == "nt"
-SHARING_RETRIES = 250
+RETRY_SHARING = IS_WINDOWS  # only Windows has transient sharing violations; elsewhere they are real denials
+SHARING_RETRIES = 250       # about 5 s: long enough for a virus scanner or backup tool to let go of a file
 SHARING_DELAY = 0.02
 _T = TypeVar("_T")
+_kernel32 = None
 
 
 def retry_sharing(op: Callable[[], _T]) -> _T:
@@ -35,7 +37,7 @@ def retry_sharing(op: Callable[[], _T]) -> _T:
     Another program that has a file open (a virus scanner, a backup tool, an editor preview) makes a rename
     or delete fail with WinError 32 until it lets go. Elsewhere this never applies, and any other error, or
     the last failure, is raised to the caller."""
-    attempts = SHARING_RETRIES if IS_WINDOWS else 1
+    attempts = SHARING_RETRIES if RETRY_SHARING else 1
     for attempt in range(attempts):
         try:
             return op()
@@ -52,16 +54,18 @@ def _open_sharing_delete(path: Path) -> BinaryIO:
     Python's open() does not grant FILE_SHARE_DELETE, so every reader of writer.lock made a concurrent
     release fail with WinError 32. Under load that starved the release until it gave up (issue #10, seen on
     real Windows in Core CI). The standard library has no other way to request this share mode."""
+    global _kernel32
     import ctypes
     import msvcrt
     from ctypes import wintypes
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = kernel32.CreateFileW
-    create.restype = wintypes.HANDLE
-    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
-                       wintypes.DWORD, wintypes.HANDLE]
+    if _kernel32 is None:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                         wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        _kernel32 = kernel32
     generic_read, share_all, open_existing, attribute_normal = 0x80000000, 0x7, 3, 0x80
-    handle = create(str(path), generic_read, share_all, None, open_existing, attribute_normal, None)
+    handle = _kernel32.CreateFileW(str(path), generic_read, share_all, None, open_existing, attribute_normal, None)
     if handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     return os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY), "rb")
@@ -69,6 +73,25 @@ def _open_sharing_delete(path: Path) -> BinaryIO:
 
 def _open_for_read(path: Path) -> BinaryIO:
     return _open_sharing_delete(path) if IS_WINDOWS else open(path, "rb")
+
+
+def remove_quietly(path: Path) -> None:
+    """Remove a temp file we no longer need. Failing to is never worth reporting: an old temp file is
+    harmless and later cleanup takes it, while raising here would hide the result of the real work."""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def move_exclusive(src: Path, dst: Path) -> None:
+    """Give ``src`` the name ``dst`` only if nothing has that name; FileExistsError otherwise. Never
+    clobbers. POSIX uses link() then unlink(), so a crash can leave both names; Windows uses rename()."""
+    if IS_WINDOWS:
+        retry_sharing(lambda: os.rename(src, dst))
+    else:
+        os.link(src, dst)
+        remove_quietly(src)
 
 
 class ExclusiveCreateError(FileExistsError):
@@ -122,18 +145,11 @@ def publish_exclusive(path: Path, data: bytes) -> None:
     path = Path(path)
     tmp = _write_temp(path.parent, data, path.name)
     try:
-        if IS_WINDOWS:
-            try:
-                os.rename(tmp, path)  # Windows rename refuses an existing destination.
-            except FileExistsError as exc:
-                raise ExclusiveCreateError(str(path)) from exc
-        else:
-            try:
-                os.link(tmp, path)
-            except FileExistsError as exc:
-                raise ExclusiveCreateError(str(path)) from exc
+        move_exclusive(tmp, path)
+    except FileExistsError as exc:
+        raise ExclusiveCreateError(str(path)) from exc
     finally:
-        tmp.unlink(missing_ok=True)
+        remove_quietly(tmp)
     _fsync_dir(path.parent)
 
 
@@ -146,10 +162,15 @@ def atomic_write_json(path: Path, obj: Any) -> None:
 
 
 def read_json(path: Path) -> Any:
+    return json.loads(read_bytes(path).decode("utf-8"))
+
+
+def read_bytes(path: Path) -> bytes:
+    """Read a whole file without blocking a rename of it, as :func:`read_json` does."""
     def read() -> bytes:
         with _open_for_read(path) as fh:
             return fh.read()
-    return json.loads(retry_sharing(read).decode("utf-8"))
+    return retry_sharing(read)
 
 
 ORPHAN_TEMP_MIN_AGE_SECONDS = 3600
@@ -162,8 +183,6 @@ def cleanup_temp_files(directory: Path, min_age_seconds: float = ORPHAN_TEMP_MIN
     another client that is writing right now (e.g. racing for the writer lock), and deleting it
     would break that client's publish. Regression: test_writer_lock_race_between_processes.
     """
-    import time
-
     removed = []
     if not directory.is_dir():
         return removed
@@ -173,8 +192,8 @@ def cleanup_temp_files(directory: Path, min_age_seconds: float = ORPHAN_TEMP_MIN
             try:
                 if entry.stat().st_mtime > cutoff:
                     continue
-            except FileNotFoundError:
+                entry.unlink(missing_ok=True)
+            except OSError:      # cleanup is a courtesy: it must never block opening a workspace
                 continue
-            entry.unlink(missing_ok=True)
             removed.append(entry)
     return removed

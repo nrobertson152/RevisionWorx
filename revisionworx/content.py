@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import atomicio
-from .atomicio import ExclusiveCreateError
 from .workspace import Workspace, WorkspaceCorruptError
 
 _HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -109,18 +108,15 @@ class ContentStore:
                 reused = True
             else:
                 try:
-                    if os.name == "nt":
-                        os.rename(tmp, final)
-                    else:
-                        os.link(tmp, final)
+                    atomicio.move_exclusive(tmp, final)
                     atomicio._fsync_dir(final.parent)
-                except (ExclusiveCreateError, FileExistsError):
+                except FileExistsError:
                     if hash_file(final)[0] != digest:
                         raise WorkspaceCorruptError(f"stored content object {digest} is damaged") from None
                     reused = True
             return StoredContent(digest, size, after.st_mtime_ns, reused)
         finally:
-            tmp.unlink(missing_ok=True)
+            atomicio.remove_quietly(tmp)
 
     def read_verified(self, sha256: str, max_bytes: int, expected_size: int | None = None) -> bytes:
         """Return the exact bytes of an immutable content object, verified (ADR-018).
@@ -164,18 +160,12 @@ class ContentStore:
             if hash_file(tmp)[0] != sha256:
                 raise WorkspaceCorruptError(f"content object {sha256} failed verification on export")
             if overwrite:
-                os.replace(tmp, dest)
+                atomicio.retry_sharing(lambda: os.replace(tmp, dest))
             else:  # exclusive, like atomicio.publish_exclusive: never replaces an existing file
-                if os.name == "nt":
-                    try:
-                        os.rename(tmp, dest)
-                    except FileExistsError:
-                        raise FileExistsError(f"{dest} already exists") from None
-                else:
-                    try:
-                        os.link(tmp, dest)
-                    except FileExistsError:
-                        raise FileExistsError(f"{dest} already exists") from None
+                try:
+                    atomicio.move_exclusive(tmp, dest)
+                except FileExistsError:
+                    raise FileExistsError(f"{dest} already exists") from None
         finally:
-            tmp.unlink(missing_ok=True)
+            atomicio.remove_quietly(tmp)
         return dest
