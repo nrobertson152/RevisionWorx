@@ -41,6 +41,10 @@ def files_under(root: Path, *, allow_manifest: bool = False) -> dict[str, tuple[
     found = {}
     for current, dirs, files in os.walk(root, followlinks=False):
         parent = Path(current)
+        # A file-only manifest cannot faithfully restore empty directories.
+        # Refuse them rather than silently producing an incomplete workspace.
+        if parent != root and not dirs and not files:
+            raise BackupError("empty directory cannot be preserved: " + str(parent))
         for name in dirs + files:
             item = parent / name
             if item.is_symlink():
