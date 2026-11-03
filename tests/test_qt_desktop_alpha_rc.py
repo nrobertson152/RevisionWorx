@@ -77,6 +77,19 @@ def commits_then_lags(monkeypatch, name):
 
 
 # ---------------------------------------------------------------------------- layout
+def _width_report(w) -> str:
+    """Which widgets ask for the most width, so a failure on a platform we cannot run locally explains itself."""
+    rows = []
+    for child in w.findChildren(QtWidgets.QWidget):
+        text = child.text() if hasattr(child, "text") and callable(child.text) else ""
+        rows.append((child.minimumSizeHint().width(), type(child).__name__, child.objectName(), str(text)[:40]))
+    rows.sort(key=lambda r: r[0], reverse=True)
+    fm = w.fontMetrics()
+    return (f"font={w.font().family()!r} pt={w.font().pointSizeF()} "
+            f"advance('Compare with previous')={fm.horizontalAdvance('Compare with previous')} "
+            f"dpi={w.logicalDpiX()} widest={rows[:14]}")
+
+
 def _row_capacity(view) -> float:
     """How many data rows the view can show."""
     return view.viewport().height() / max(1, view.verticalHeader().defaultSectionSize())
@@ -107,7 +120,7 @@ def test_minimum_size_fits_a_small_laptop_screen(qapp, ctl, tmp_path):
     """1366x768 minus title bar and taskbar: the window must be able to fit."""
     w, *_ = window(qapp, ctl, tmp_path)
     hint = w.minimumSizeHint()
-    assert hint.width() <= 1000 and hint.height() <= 700, hint
+    assert hint.width() <= 1000 and hint.height() <= 700, (hint, _width_report(w))
     w.close()
 
 
@@ -134,7 +147,7 @@ def test_long_paths_and_names_do_not_force_a_wide_window(qapp, ctl, tmp_path):
     w.start_page.preview.setText(path)
     w.start_page.preview.setToolTip(path)
     qapp.processEvents()
-    assert w.minimumSizeHint().width() <= 1000, w.minimumSizeHint()
+    assert w.minimumSizeHint().width() <= 1000, (w.minimumSizeHint(), _width_report(w))
     assert path in tab.status.toolTip() and path in tab.summary.toolTip() and path in w.warning_label.toolTip()
     assert path in w.start_page.error_label.toolTip() and path in w.start_page.preview.toolTip()
     w.close()
