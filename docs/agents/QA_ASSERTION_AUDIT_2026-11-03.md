@@ -1,0 +1,25 @@
+# QA independent assertion audit — 2026-11-03 (issue #31)
+
+## Evidence identity
+- Corrected production Core source: `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`.
+- Core independent test branch: `ba51686f0f0db77373c771ab17121668a8648e3b`; PR #34 synthetic test merge: `d251ca099a5a4a09ee7e7ad9a7421658c38f9697`.
+- Native CI: https://github.com/nrobertson152/RevisionWorx/actions/runs/41689355302. Coordinator independently inspected raw logs: Ubuntu 3.11/3.13 and Windows 3.11/3.13 each **22 passed, 0 failed/skipped/xfailed**, 88 total. This QA session independently inspected the six fixture source files and pinned workflow, **not raw job logs or a local execution**. The counts remain attributed to the Coordinator until independently re-read.
+- Workflow checks exact production Git SHA before overlaying six test modules from the test checkout. This establishes production source identity, but test identity should additionally be pinned to a fixed test SHA rather than branch/PR synthetic merge to make later reruns reproducible.
+
+## Assertion-by-assertion scope
+1. `test_core_independent_journal_shape.py`: six malformed fields (boolean seq, nonboolean delete, nonmapping put data, nonstring blob, unhashable txid and writer token) demand typed `WorkspaceCorruptError` from `read_entry(1)` and unhealthy `health()`. The seventh intact control demands healthy state. Digest deliberately removed to exercise schema checks, not digest mismatch. **Does not** assert a write transaction aborts without journal mutation after corrupt input.
+2. `test_core_crash_integrity_readonly.py`: truncated JSON, JSON null/array, missing first journal sequence and intact control. Read-only checks compare SHA-256 of all files before/after; missing-first-entry test expects typed failure at open. **Does not** simulate physical process crash or power loss despite filename.
+3. `test_core_adr017_ordered_checks_restart.py`: checks same txid retry after restart, reversed or changed RecordCheck preconditions rejected, and identical retry after subsequent record revision. **Does not** exercise simultaneous writers or a crash during journal publication.
+4. `test_core_readonly_derived_integrity.py`: verifies derived record tamper and stray record detection with read-only no-byte-mutation. **Does not** cover authoritative journal rewriting, GC reachability, or write-mode repair safety.
+5. `test_core_revision_chain_cad_refs.py`: persisted revision IDs, content hashes, immutable content objects, original managed part bytes and untouched synthetic assembly reference after restart. **Does not** parse real native CAD dependency formats or race an external rename during check-in.
+6. `test_core_unicode_cad_provenance.py`: nested Unicode path spelling, managed bytes and unmanaged sibling bytes/mtimes preserved. **Does not** exercise case-insensitive collisions, symlink escape, long-path limits or external rename race.
+
+## GUI #35 independent source audit
+- GUI test source inspected at PR #35 HEAD `13a16608f3d1ec84656f552ec96f6c720e29dfbc`, `tests/test_qt_gui_accessibility_a.py`. The new `test_escape_cancel_survives_controller_restart_without_cad_mutation` uses the actual check-in button, Escape and fresh Controller/MainWindow, compares journal file names/bytes, external source bytes and revision history after reopen. `test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout` tests focused Space activation.
+- **Gap:** the old controller object remains alive after closing its window; the fixture does not explicitly close/dispose its workspace before creating the new controller. This is a *controller/window reconstruction* check, not necessarily a fully closed workspace/process restart. It does not explicitly assert persisted checkout token/ownership after reopen, only history, source bytes and journal byte equality. `source` is the original import path outside the managed project; compare the managed CAD path and content store objects as well.
+- No native GUI job logs independently read in this session. The Coordinator reports 8 accessibility and 66 desktop passes per OS on synthetic GUI SHA `0c48084`, Actions https://github.com/nrobertson152/RevisionWorx/actions/runs/41691264091; this is **upstream-reported**, not independently accepted here.
+
+## Verdict / next gates
+**Scoped ACCEPT of the six Core regression modules' assertion design** for the enumerated cases, contingent on independent raw-log verification of the exact 88-pass run. **HOLD** broader journal/CAD and GUI end-to-end release qualification. Next: verify raw logs and fixture test SHA; add a QA-owned fail-closed precommit test with byte snapshot and a deterministic file replacement-by-rename test on disposable source; require an actual closed workspace restart for GUI and explicit persisted checkout assertion. Windows `.releasing-*` PermissionError race, real SMB/NFS two-host, native installer/DPI and power-loss remain unqualified.
+
+No production code or other owners' branches changed. This audit is static source inspection, not execution.
