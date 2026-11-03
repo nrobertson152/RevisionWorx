@@ -180,8 +180,8 @@ it again.~~ Fixed in checkpoint 5 below.
 - Packaging coordination with PR #2 (Windows/Linux offline bundles).
 
 ## Checkpoint 5 — workspace health re-check (Claude B, 2026-11-03)
-Base: `feature/desktop-alpha` `0773bde`. **Local commit only — not pushed** (this session had read-only GitHub access);
-delivered as a patch/bundle for the Coordinator to apply. GUI controller only; no core or protocol change.
+Base: `feature/desktop-alpha` `0773bde`. Commit `1cf26aa`, written in a session with read-only GitHub access and pushed
+unchanged on 2026-11-03 (see checkpoint 6 for the CI). GUI controller only; no core or protocol change.
 
 | Defect | Found by | Fix |
 |---|---|---|
@@ -204,7 +204,7 @@ Decision for the Coordinator: F5 now takes the writer lock briefly (and rolls fo
 when, a change was already refused for a block the read-only check cannot see. Request A1 would make this a pure read.
 
 ## Checkpoint 6 — a saved change is never reported as failed because the lock release failed (Claude B, 2026-11-03)
-Base: checkpoint 5 (`1cf26aa`, local). **Local commit only — not pushed.** GUI controller only; no core change.
+Base: checkpoint 5 (`1cf26aa`). Pushed with checkpoint 5 on 2026-11-03 as `0cb3b0b`. GUI controller only; no core change.
 
 | Defect | Found by | Fix |
 |---|---|---|
@@ -213,5 +213,44 @@ Base: checkpoint 5 (`1cf26aa`, local). **Local commit only — not pushed.** GUI
 | Check-in: same case already ended as saved via `transaction_outcome`, now direct; the checkout token is forgotten in both paths | same | `checkin_now` handles SavedWithWarning from `_write()`. |
 
 Regressions: `tests/test_gui_release_failure.py` (6 tests; 3 fail on `1cf26aa`, 3 guard paths that were already right).
-Linux container, Python 3.13.18, no PySide6: `pytest -q -ra` 238 passed, 5 skipped. Qt tests, Windows and CI **not run**.
+Linux container, Python 3.13.18, no PySide6: `pytest -q -ra` 238 passed, 5 skipped.
+CI after the push: run 41679983437 at `53c33a1` all jobs green (Qt 66 per OS; full suite Ubuntu 316, Windows 314 + 2 skipped).
+Run 41678241178 at `0cb3b0b`: Windows failed intermittently in both attempts on different tests (core release race in
+`_fence_orphaned_releases`, forwarded to Core via #33; GUI import-title test, saved-with-warning, cause unconfirmed). Not
+yet a reliable Windows record.
 A real Windows sharing-violation reproduction was not attempted; the release failure is injected after a real release.
+
+## Checkpoint 7 — end-to-end journey acceptance with a real crash (Claude B, 2026-11-03, backlog #28 item 04)
+Base: `53c33a1`. Commit `09f7ea3`. Test-first; one GUI controller wording fix found by the journey; no core change.
+
+Journey: import → check out → check in → check out and edit → **a real child process running the GUI controller dies
+(`os._exit`) after its check-in is committed, before it is applied** → restart (new Controller on the same per-user
+folders; in the Qt test also a new window) → the pending change and the crash's lock are shown, nothing reported as
+inconsistent, the committed revision already in the history, no phantom checkout → the user's checkout is refused with the
+lock-break command → administrator runs it → F5 → the next checkout applies the pending entries → another check-in and
+restart. Checked independently of the GUI: `rev export` bytes of every revision, `verify`, `doc verify --id`, and the
+untouched outside original.
+
+| Test | Where |
+|---|---|
+| `tests/test_gui_journey.py` (controller + view-models, no Qt) | every OS, every Python in CI |
+| `tests/test_qt_desktop_alpha_journey.py` (MainWindow: real buttons, real import and check-in dialogs with typed input, error box, F5, `observable_state`) | the required "must not be skipped" Qt CI step on Ubuntu and Windows |
+
+| Defect | Found by | Fix |
+|---|---|---|
+| After a crash between commit and apply, the notice said "your next change applies it first", but every change is refused until that crash's writer lock is released or broken | This journey | `health()` reads the public `Workspace.read_writer_lock` (only when changes are pending) and, while a lock is held, names the holder and says changes are refused until it is released. Regression `test_pending_notice_does_not_promise_the_next_change_while_a_lock_is_held` fails on `53c33a1`. |
+
+Observed, not a defect: after the crash the per-user state keeps the dead session's checkout token for a document that is
+no longer checked out. It is never shown as "mine" and the next checkout replaces it.
+
+| Where | Commit | Result |
+|---|---|---|
+| Linux container, Python 3.13.18, no PySide6, `pytest -q -ra` | `09f7ea3` | 240 passed, 6 skipped (5 Qt modules incl. the new one, 1 root-only) |
+| CI run 41683489559, ubuntu-latest / Python 3.11, PySide6 6.12.0 | `09f7ea3` | Qt step 67 passed (66 + journey); full suite 319 passed |
+| same, windows-latest / Python 3.11 | `09f7ea3` | Qt step 67 passed; full suite 317 passed, 2 skipped; native size 2 passed |
+| same, GUI merged with accepted core, Ubuntu / Windows | `09f7ea3` | 373 passed / 371 passed, 2 skipped |
+| same, keyboard walkthrough on X | `09f7ea3` | WALKTHROUGH PASSED |
+
+Limits: offscreen, window shortcuts are asserted bound but triggered through their actions (window focus is not guaranteed
+offscreen); real keystrokes are covered by the X11 walkthrough on Linux only. One green Windows run; the intermittent
+Windows failures seen at `0cb3b0b` were not reproduced here and are not fixed. No interactive installed-GUI acceptance.
