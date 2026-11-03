@@ -87,6 +87,8 @@ jobs:
       - name: Real document BOM where-used ECR read-only/restart contract
         working-directory: inputs/core
         run: python -m pytest -q -ra ../../tools/packaging/test_product_stack_contract.py
+      - name: Install pinned wheel-builder tool on CI host only
+        run: python -m pip install --no-input wheel==0.45.1
       - name: Prepare separate wheelhouse outside source checkout
         run: python -c "from pathlib import Path; Path('wheelhouse').mkdir(exist_ok=True)"
       - name: Build a test-only source wheel (not an installer)
