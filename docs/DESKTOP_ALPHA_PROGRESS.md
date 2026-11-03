@@ -202,3 +202,16 @@ was found, but CI must confirm. No interactive desktop acceptance.
 
 Decision for the Coordinator: F5 now takes the writer lock briefly (and rolls forward committed entries) when, and only
 when, a change was already refused for a block the read-only check cannot see. Request A1 would make this a pure read.
+
+## Checkpoint 6 — a saved change is never reported as failed because the lock release failed (Claude B, 2026-11-03)
+Base: checkpoint 5 (`1cf26aa`, local). **Local commit only — not pushed.** GUI controller only; no core change.
+
+| Defect | Found by | Fix |
+|---|---|---|
+| `Workspace.close()` can raise after the commit point (Windows lock-file rename gives up while antivirus/backup holds the file). Import, register, checkout, cancel, state changes and project edits were then shown as **failed although saved**, inviting a retry | Audit of `_write()` and the Phase 1 lock-release path | `_write()` compares the journal head before and after the change. Committed + release failure → "Saved, but releasing the writer lock failed…" (SavedWithWarning, shown by the existing "Saved with a warning" paths). Nothing committed → the release error, as before. |
+| A release failure during an error **replaced** the change's own error (a ConflictError became a lock error; CommittedNotApplied could become a failure) | same | The change's own exception is kept; the release error is attached as a note (Python 3.11+). |
+| Check-in: same case already ended as saved via `transaction_outcome`, now direct; the checkout token is forgotten in both paths | same | `checkin_now` handles SavedWithWarning from `_write()`. |
+
+Regressions: `tests/test_gui_release_failure.py` (6 tests; 3 fail on `1cf26aa`, 3 guard paths that were already right).
+Linux container, Python 3.13.18, no PySide6: `pytest -q -ra` 238 passed, 5 skipped. Qt tests, Windows and CI **not run**.
+A real Windows sharing-violation reproduction was not attempted; the release failure is injected after a real release.

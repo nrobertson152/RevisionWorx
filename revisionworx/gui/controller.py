@@ -285,8 +285,33 @@ class Controller:
         if self.blocked_reason is not None:
             raise RecoveryBlocked(self.blocked_reason)
         try:
-            with Workspace.open(self.location, writable=True) as ws:
+            ws = Workspace.open(self.location, writable=True)
+            start = ws.head_seq()
+            try:
                 yield ws
+            except BaseException as exc:
+                # Release, but never let a release failure replace the change's own outcome: that
+                # could turn CommittedNotApplied (saved) into a failure, or hide a plain refusal.
+                try:
+                    ws.close()
+                except Exception as close_exc:
+                    if hasattr(exc, "add_note"):
+                        exc.add_note(f"Also, releasing the writer lock failed: {close_exc}")
+                raise
+            end = ws.head_seq()
+            try:
+                ws.close()
+            except WorkspaceCorruptError:
+                raise
+            except Exception as close_exc:
+                if end == start:
+                    raise  # nothing was committed: a plain failure
+                # Committed (single writer: only this handle can have advanced the journal), so the
+                # change is saved; only the lock release failed. Never report that as a failure.
+                raise SavedWithWarning(
+                    f"Saved, but releasing the workspace writer lock then failed: {close_exc} Until it is "
+                    "released, further changes are refused; an administrator can break the lock "
+                    "(audited).") from close_exc
         except WorkspaceCorruptError as exc:
             self._set_block(str(exc), found_by_write=True)
             raise
@@ -593,6 +618,9 @@ class Controller:
         except CommittedNotApplied as exc:
             self._forget_token(ws_id or self.workspace_id, doc_id)
             raise SavedWithWarning(f"Checked in. {exc}") from exc
+        except SavedWithWarning as exc:  # committed; only the writer-lock release failed
+            self._forget_token(ws_id or self.workspace_id, doc_id)
+            raise SavedWithWarning(f"Checked in. {exc.warning}") from exc
         except (documents.DocumentError, RecoveryBlocked):
             raise  # validation refusals: nothing was written
         except Exception as exc:
