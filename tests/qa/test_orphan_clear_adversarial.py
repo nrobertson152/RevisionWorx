@@ -26,6 +26,8 @@ SWAPPED = b"{qa-different-lock-evidence-Y"
 
 
 def _vulnerable_move():
+    if not hasattr(Workspace, "_complete_orphan_clear"):
+        return False
     source = inspect.getsource(Workspace._complete_orphan_clear)
     return "hashlib.sha256(src.read_bytes())" in source and "os.replace(src," in source
 
@@ -96,12 +98,12 @@ def _overlap_admin_requests(root, monkeypatch):
     publish = Workspace._publish_admin_entry
     entered = False
 
-    def interleaved(cls, meta, op, data, revokes=None):
+    def interleaved(cls, meta, op, data, revokes=None, **kwargs):
         nonlocal entered
         if op == "workspace.orphan.clear" and not entered:
             entered = True
             Workspace.clear_orphaned_release(root, NAME, "administrator B")
-        return publish(meta, op, data, revokes=revokes)
+        return publish(meta, op, data, revokes=revokes, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(Workspace, "_publish_admin_entry", classmethod(interleaved))
@@ -133,12 +135,20 @@ def test_p1_safety_moved_evidence_must_match_audit_or_refuse_writer(
     root, _, orphan = _setup(tmp_path)
     audits, evidence, rejected, effective = _swap_on_custody_move(root, orphan, monkeypatch)
     assert audits, "no durable audit available to authorize the disposition"
+    blocking = list(orphan.parent.glob(".releasing-*")) + list(orphan.parent.glob(".clearing-*"))
+    with Workspace.open(root) as reader:
+        results = [v for v in reader.list("audit").values()
+                   if v.get("event") == "orphaned-release-clear-result"]
     for audit in audits:
         matches = any(p.name == audit["evidence"]
                       and hashlib.sha256(p.read_bytes()).hexdigest() == audit["file_sha256"]
                       for p in evidence)
-        assert matches or (orphan.exists() and rejected and not effective), (
-            "moved bytes do not match the audit and the original recovery barrier is gone")
+        refused = (any(r.get("outcome") == "refused" for r in results)
+                   and any(p.read_bytes() == SWAPPED for p in blocking)
+                   and rejected and not effective)
+        assert matches or refused, (
+            "moved bytes were neither preserved under their exact audit nor "
+            "quarantined under an audited refusal with writer access blocked")
     mismatch = any(p.name == a["evidence"] and
                    hashlib.sha256(p.read_bytes()).hexdigest() != a["file_sha256"]
                    for a in audits for p in evidence)
@@ -201,8 +211,12 @@ def test_crash_just_after_custody_rename_retains_audit_and_exact_bytes(
     audits = _audits(root)
     assert len(audits) == 1
     assert audits[0]["file_sha256"] == hashlib.sha256(ORIGINAL).hexdigest()
-    assert audits[0]["evidence"] == moves[0].name
+    # Rev. 2 moves directly to evidence; rev. 3 moves first to blocking custody.
+    assert moves[0].name == audits[0]["evidence"] or moves[0].name.startswith(".clearing-")
     Workspace.clear_orphaned_release(root, NAME, "idempotent restart retry")
     assert len(_audits(root)) == 1
+    evidence = orphan.parent / audits[0]["evidence"]
+    assert evidence.read_bytes() == ORIGINAL
+    assert not list(orphan.parent.glob(".clearing-*"))
     rejected, effective = _probe_effective_write(root)
     assert effective and not rejected
