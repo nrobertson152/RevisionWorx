@@ -35,7 +35,7 @@ def digest(path: Path) -> tuple[int, str]:
     return size, h.hexdigest()
 
 
-def files_under(root: Path) -> dict[str, tuple[int, str]]:
+def files_under(root: Path, *, allow_manifest: bool = False) -> dict[str, tuple[int, str]]:
     if not root.is_dir() or root.is_symlink():
         raise BackupError("source must be a real directory")
     found = {}
@@ -51,6 +51,8 @@ def files_under(root: Path) -> dict[str, tuple[int, str]]:
                 raise BackupError("non-regular file refused: " + str(item))
             rel = item.relative_to(root).as_posix()
             if rel == MANIFEST:
+                if allow_manifest:
+                    continue
                 raise BackupError("reserved manifest name in source")
             found[rel] = digest(item)
     return dict(sorted(found.items()))
@@ -94,7 +96,7 @@ def load_manifest(root: Path) -> dict[str, tuple[int, str]]:
 
 def verify(root: Path) -> dict[str, tuple[int, str]]:
     expected = load_manifest(root)
-    actual = files_under(root)
+    actual = files_under(root, allow_manifest=True)
     if actual != expected:
         missing = sorted(set(expected) - set(actual))
         extra = sorted(set(actual) - set(expected))
