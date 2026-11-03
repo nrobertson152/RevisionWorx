@@ -362,3 +362,42 @@ Remaining severe blockers: both SQLite+ordinary witness may be rolled back toget
 ### Remaining hard gates and stop
 
 No independently nonrollbackable epoch/high-water trust root; test-authorized principals are NOT Windows SSPI/AD; no physical two-host SMB power-cut/ACL/reconnect tests (**NOT EXECUTED**); no deployed LAN coordinator or service, no integrated production batch bridge, no safe physical backup-restore reconciliation; no standalone migration or installed interactive GUI acceptance. **No production source, other agent branch, other repository, merges, releases, retargets, force pushes or tags changed.** PR #4 remains draft. Next step only when Claude reviews source-identity and audit-CAS design; do not fabricate approval or add a speculative live service.
+
+## Resumed independent verification — 2026-11-02 ET
+
+Research parent: `a8f0daa28ad116076450841d6000775a9021c8fd`.
+Read historical main agent README/orders and Claude handoff from `e31efe1`
+(the latest main removed these files), branch progress/handoff and production
+ADR-017/019/021. Read-only remote discovery found production unchanged at
+`366d4355abcde7543122551fadaab01ac9832e01` and backport unchanged at
+`36d1957fe8d7800659b488106ef6cec1fa0c6267`.
+
+Preserved both original race reproducers. Added deterministic pre-verification
+replacement positive control and distinct-object pathname replacement unsafe
+proof, including a POSIX open descriptor showing original bytes while pathname
+custody archives different bytes. See `docs/ORPHAN_CUSTODY_REVIEW.md` for proposed
+exactly-once semantics, custody states, trust boundary and backport applicability.
+No production or OpenSchematix files changed.
+
+Executed on Debian GNU/Linux 13, Python 3.12.14, local overlay containing this
+entry. Production source exported using git archive at the full pins above into
+`/workspace/scratch/revisionworx-review/{phase2,backport}`; no worktree created.
+Exact commands from the research root:
+
+- `python3 -m unittest -v prototype.test_authority prototype.test_coordinator_research prototype.test_immutable_manifest_research prototype.test_witnessed_coordinator prototype.test_record_batch_research prototype.test_request_identity_research`: 81 passed, 0 failed, 0 skipped, 0 expected failures.
+- `REVISIONWORX_PHASE2_CHECKOUT=/workspace/scratch/revisionworx-review/phase2 python3 -m unittest -v prototype.test_phase2_orphan_clear_protocol prototype.test_phase2_identity_interop`: 18 total, 16 passed, 2 expected failures, 0 unexpected failures, 0 skipped. Passing unsafe demonstrations are defect evidence, not acceptance.
+- `REVISIONWORX_PHASE2_CHECKOUT=/workspace/scratch/revisionworx-review/phase2 /workspace/.venvs/openschematix/bin/python -m pytest -q prototype/test_phase2_contract_adapter.py`: 20 passed, 0 failed/skipped/xfail; reused existing pytest installation without modifying the other repository.
+- `REVISIONWORX_BACKPORT_CHECKOUT=/workspace/scratch/revisionworx-review/backport python3 -m unittest -v prototype.test_phase1_backport_release_race`: 2 total, 1 passing unsafe proof, 1 expected failure, 0 unexpected failures, 0 skipped.
+
+Current comments on PRs #4/#7/#3, issue #10 and live CI could NOT be read:
+`gh pr view` receives Forbidden from api.github.com; CONNECT diagnosis confirms
+HTTP 403. Existing Git proxy read authentication works. Saved additive
+api.github.com domain requirement in environment draft; user must apply it in
+settings before live coordination/CI inspection can resume. Historical CI totals
+above are prior logged evidence, NOT independently reverified this session.
+Windows and physical SMB/power-loss checks NOT RUN. No corrected Phase 2 or
+backport commit is present; do not certify either. Existing pinned CI jobs will
+cover the added methods if the push workflow executes; results remain unverified
+until API access is restored. Next: inspect live comments/CI, report the
+pathname-object refinement to PR #7, update PR #4 with the pushed SHA, and test
+Claude's eventual correction. No merges/releases/force-pushes/retargeting.

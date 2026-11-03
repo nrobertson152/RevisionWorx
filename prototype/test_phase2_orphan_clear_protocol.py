@@ -332,6 +332,70 @@ class Phase2AdministrativeOrphanClearAcceptance(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].read_bytes(), ORPHAN_BYTES)
 
+    def test_replaced_path_before_final_verification_preserves_guard(self):
+        """Replacement after audit but before final read must remain blocked."""
+        changed = b"{different unknown owner"
+        original = self.ws.Workspace._complete_orphan_clear
+        hit = []
+
+        def replace_before_read(meta, audit):
+            replacement = self.locks / "replacement.tmp"
+            replacement.write_bytes(changed)
+            os.replace(replacement, self.orphan)
+            hit.append(True)
+            return original(meta, audit)
+
+        with patch.object(self.ws.Workspace, "_complete_orphan_clear",
+                          side_effect=replace_before_read):
+            self._clear()
+        self.assertEqual(hit, [True])
+        self.assertEqual(len(self._clear_audits()), 1)
+        self.assertEqual(self.orphan.read_bytes(), changed)
+        with self.assertRaises(self.ws.WorkspaceCorruptError):
+            self.ws.Workspace.open(self.meta, writable=True)
+        self.assertEqual(list(self.locks.glob("writer.lock.orphaned-*")), [])
+
+    def test_atomic_path_replacement_at_custody_edge_UNSAFE_reproduction(self):
+        """Distinct file replacement, rather than the original in-place overwrite.
+
+        An open descriptor continues reading the authorized original on POSIX;
+        the pathname rename archives the replacement. Windows deliberately closes
+        the descriptor first: its share-delete policy is a separate qualification.
+        """
+        import hashlib
+        changed = b"{replacement object at same pathname"
+        real = self.ws.os.replace
+        hit = []
+        descriptor_bytes = []
+
+        def replace_object(src, dst, *args, **kwargs):
+            if Path(src) == self.orphan and Path(dst).name.startswith("writer.lock.orphaned-"):
+                replacement = self.locks / "replacement.tmp"
+                replacement.write_bytes(changed)
+                if os.name == "posix":
+                    with self.orphan.open("rb") as original:
+                        real(replacement, self.orphan)
+                        descriptor_bytes.append(original.read())
+                else:
+                    real(replacement, self.orphan)
+                hit.append(True)
+            return real(src, dst, *args, **kwargs)
+
+        with patch.object(self.ws.os, "replace", side_effect=replace_object):
+            self._clear()
+        self.assertEqual(hit, [True])
+        if os.name == "posix":
+            self.assertEqual(descriptor_bytes, [ORPHAN_BYTES])
+        audit = self._clear_audits()[0]["records"][0]["data"]
+        evidence = self.locks / audit["evidence"]
+        self.assertEqual(evidence.read_bytes(), changed)
+        self.assertNotEqual(hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                            audit["file_sha256"])
+        with self.ws.Workspace.open(self.meta, writable=True) as successor:
+            seq = successor.commit("replacement-object", [self.ws.RecordPut(
+                "project", "prj_" + "4" * 32, {"alive": True})])
+            self.assertEqual(successor.head_seq(), seq)
+
     def test_rejected_path_or_blank_reason_never_changes_authority(self):
         for name in ("../.releasing-a11ce5", "/tmp/foo", "writer.lock",
                      ".releasing-invalid_name"):
