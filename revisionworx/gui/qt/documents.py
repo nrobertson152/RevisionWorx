@@ -1,16 +1,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Documents tab (Phase 2). Binds DocumentListModel / DocumentPanel; no business logic."""
+"""Documents tab. Binds DocumentListModel / DocumentPanel; no business logic."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget)
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
+                               QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
+                               QTableView, QVBoxLayout, QWidget)
 
 from ..controller import Controller, describe_error
 from ..viewmodels import DocumentListModel, DocumentPanel
+from .dialogs import CheckinDialog, ImportDialog
 from .models import ViewModelTable
+
+SEVERITY_STYLE = {"ok": "", "warning": "color: #8a5300", "error": "color: #b00020; font-weight: bold"}
 
 
 class DocumentsTab(QWidget):
@@ -19,54 +24,92 @@ class DocumentsTab(QWidget):
         self.ctl = ctl
         self.list_vm = DocumentListModel(ctl)
         self.panel = DocumentPanel(ctl)
+        self.dialogs: list = []
         outer = QVBoxLayout(self)
         top = QHBoxLayout()
         self.filter = QLineEdit(self)
         self.filter.setPlaceholderText("Filter documents…")
+        self.filter.setAccessibleName("Filter documents")
         self.filter.returnPressed.connect(lambda *_: self.apply_filter())
-        self.register_btn = QPushButton("Register file…", self)
+        self.import_btn = QPushButton("&Import file…", self)
+        self.import_btn.setToolTip("Copy a file into this project and record it as revision 1 (Ctrl+I)")
+        self.import_btn.clicked.connect(lambda *_: self.import_file())
+        self.register_btn = QPushButton("&Register file…", self)
+        self.register_btn.setToolTip("Register a file that is already inside the project folder")
         self.register_btn.clicked.connect(lambda *_: self.register_file())
         top.addWidget(self.filter, 1)
+        top.addWidget(self.import_btn)
         top.addWidget(self.register_btn)
         outer.addLayout(top)
+        self.notice = QLabel(self)
+        self.notice.setWordWrap(True)
+        outer.addWidget(self.notice)
 
         split = QSplitter(Qt.Orientation.Vertical, self)
         self.table = QTableView(split)
+        self.table.setAccessibleName("Documents")
         self.table_model = ViewModelTable(DocumentListModel.COLUMNS, lambda: len(self.list_vm.rows),
                                           self.list_vm.cell, self)
         self.table.setModel(self.table_model)
         configure_table(self.table, DocumentListModel.COLUMNS)
         self.table.selectionModel().selectionChanged.connect(lambda *_: self.selection_changed())
+        self.table.doubleClicked.connect(lambda _: self.open_file())
 
         detail = QWidget(split)
         dl = QVBoxLayout(detail)
+        self.summary = QFormLayout()
+        dl.addLayout(self.summary)
         self.status = QLabel(detail)
         self.status.setWordWrap(True)
+        self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         dl.addWidget(self.status)
         actions = QHBoxLayout()
-        self.checkout_btn = QPushButton("Check out", detail)
-        self.checkin_btn = QPushButton("Check in…", detail)
-        self.cancel_btn = QPushButton("Cancel checkout…", detail)
+        self.checkout_btn = QPushButton("Check &out", detail)
+        self.checkout_btn.setToolTip("Reserve this document for editing (Ctrl+K)")
+        self.checkin_btn = QPushButton("Check &in…", detail)
+        self.checkin_btn.setToolTip("Record your edits as a new revision (Ctrl+Shift+K)")
+        self.cancel_btn = QPushButton("&Cancel checkout…", detail)
+        self.open_file_btn = QPushButton("Open &file", detail)
+        self.open_dir_btn = QPushButton("Show in fo&lder", detail)
         self.transition_box = QComboBox(detail)
-        self.transition_btn = QPushButton("Change state", detail)
-        self.export_btn = QPushButton("Export revision…", detail)
-        for w in (self.checkout_btn, self.checkin_btn, self.cancel_btn, self.transition_box,
-                  self.transition_btn, self.export_btn):
+        self.transition_box.setAccessibleName("Next lifecycle state")
+        self.transition_btn = QPushButton("Change &state", detail)
+        self.export_btn = QPushButton("&Export revision…", detail)
+        for w in (self.checkout_btn, self.checkin_btn, self.cancel_btn, self.open_file_btn,
+                  self.open_dir_btn, self.transition_box, self.transition_btn, self.export_btn):
             actions.addWidget(w)
         actions.addStretch(1)
         dl.addLayout(actions)
-        self.checkout_btn.clicked.connect(lambda *_: self.run(self.panel.checkout))
+        self.checkout_btn.clicked.connect(lambda *_: self.checkout())
         self.checkin_btn.clicked.connect(lambda *_: self.checkin())
         self.cancel_btn.clicked.connect(lambda *_: self.cancel())
+        self.open_file_btn.clicked.connect(lambda *_: self.open_file())
+        self.open_dir_btn.clicked.connect(lambda *_: self.open_folder())
         self.transition_btn.clicked.connect(lambda *_: self.change_state())
         self.export_btn.clicked.connect(lambda *_: self.export())
-        self.history = QTableView(detail)
+
+        hist_split = QSplitter(Qt.Orientation.Horizontal, detail)
+        self.history = QTableView(hist_split)
+        self.history.setAccessibleName("Revision history")
         self.history_model = ViewModelTable(DocumentPanel.HISTORY_COLUMNS, lambda: len(self.panel.history),
                                             self.panel.history_cell, self)
         self.history.setModel(self.history_model)
         configure_table(self.history, DocumentPanel.HISTORY_COLUMNS)
-        dl.addWidget(self.history, 1)
+        self.history.selectionModel().selectionChanged.connect(lambda *_: self.revision_selected())
+        self.revision_detail = QPlainTextEdit(hist_split)
+        self.revision_detail.setReadOnly(True)
+        self.revision_detail.setAccessibleName("Selected revision")
+        self.revision_detail.setPlaceholderText("Select a revision to see its full description and state changes.")
+        hist_split.setStretchFactor(0, 3)
+        hist_split.setStretchFactor(1, 2)
+        dl.addWidget(hist_split, 1)
         outer.addWidget(split, 1)
+
+        for keys, slot in (("Ctrl+I", self.import_file), ("Ctrl+K", self.checkout),
+                           ("Ctrl+Shift+K", self.checkin)):
+            sc = QShortcut(QKeySequence(keys), self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(slot)
 
         self.list_vm.subscribe(self.render_list)
         self.panel.subscribe(self.render_panel)
@@ -82,38 +125,86 @@ class DocumentsTab(QWidget):
         self.list_vm.text = self.filter.text()
         self.list_vm.refresh()
 
-    def selection_changed(self) -> None:
+    def selected_doc_id(self) -> str | None:
         rows = self.table.selectionModel().selectedRows()
-        self.run(lambda: self.panel.load(self.list_vm.row_id(rows[0].row()) if rows else None), refresh=False)
+        return self.list_vm.row_id(rows[0].row()) if rows and rows[0].row() < len(self.list_vm.rows) else None
+
+    def selection_changed(self) -> None:
+        self.run(lambda: self.panel.load(self.selected_doc_id()), refresh=False)
+
+    def select_document(self, doc_id: str) -> None:
+        for i, r in enumerate(self.list_vm.rows):
+            if r["id"] == doc_id:
+                self.table.selectRow(i)
+                return
 
     def render_list(self) -> None:
+        keep = self.panel.doc_id
         self.table_model.reload()
-        self.register_btn.setEnabled(self.list_vm.project_id is not None)
+        self.notice.setText(self.list_vm.notice)
+        self.import_btn.setEnabled(self.list_vm.can_add)
+        self.register_btn.setEnabled(self.list_vm.can_add)
+        if keep:
+            self.select_document(keep)
 
     def render_panel(self) -> None:
         p = self.panel
+        while self.summary.rowCount():
+            self.summary.removeRow(0)
+        for label, value in p.summary_fields:
+            v = QLabel(value)
+            v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.summary.addRow(label, v)
         self.status.setText(p.message + ("\n" if p.message else "") + p.status_text)
+        self.status.setStyleSheet(SEVERITY_STYLE[p.severity])
         self.checkout_btn.setEnabled(p.can_checkout)
         self.checkin_btn.setEnabled(p.can_checkin)
         self.cancel_btn.setEnabled(p.can_cancel)
+        self.open_file_btn.setEnabled(p.can_open_file)
+        self.open_dir_btn.setEnabled(bool(p.detail))
         self.transition_box.clear()
         for sid, name in p.transition_choices:
             self.transition_box.addItem(name, sid)
         self.transition_btn.setEnabled(bool(p.transition_choices))
         self.export_btn.setEnabled(bool(p.history))
         self.history_model.reload()
+        self.revision_detail.setPlainText(p.revision_text(0) if p.history else "")
 
-    def run(self, fn, refresh: bool = True) -> None:
+    def revision_selected(self) -> None:
+        rows = self.history.selectionModel().selectedRows()
+        if rows and rows[0].row() < len(self.panel.history):
+            self.revision_detail.setPlainText(self.panel.revision_text(rows[0].row()))
+
+    def run(self, fn, refresh: bool = True) -> bool:
         try:
             fn()
         except Exception as exc:
             QMessageBox.critical(self, "RevisionWorx", describe_error(exc))
+            ok = False
+        else:
+            ok = True
         if refresh:
             self.list_vm.refresh()
+        return ok
 
     # ------------------------------------------------------------------ actions
+    def import_file(self) -> None:
+        if not self.list_vm.can_add:
+            return
+        name = (self.list_vm.project or {}).get("name", "project")
+
+        def done(res):
+            self.list_vm.refresh()
+            if not res.error:
+                self.select_document(res.value[0]["id"])
+        dlg = ImportDialog(self.ctl, self.list_vm.project_id, name, self, on_done=done)
+        self.dialogs.append(dlg)
+        dlg.finished.connect(lambda _: self.dialogs.remove(dlg) if dlg in self.dialogs else None)
+        dlg.show()
+
     def register_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "File in this project to register (it is not moved)")
+        folder = (self.list_vm.project or {}).get("folder", "")
+        path, _ = QFileDialog.getOpenFileName(self, "File in this project to register (it is not moved)", folder)
         if not path:
             return
         number, ok = QInputDialog.getText(self, "Document number", "Company document number (optional):")
@@ -124,13 +215,25 @@ class DocumentsTab(QWidget):
             if res.error:
                 QMessageBox.critical(self, "Could not register", describe_error(res.error))
             self.list_vm.refresh()
-        self.ctl.start_register(self.list_vm.project_id, Path(path), number=number.strip(), on_done=done)
+        if not self.ctl.start_register(self.list_vm.project_id, Path(path), number=number.strip(), on_done=done):
+            QMessageBox.information(self, "Busy", "Another task is still running; try again in a moment.")
+
+    def checkout(self) -> None:
+        if not self.panel.can_checkout:
+            return
+        if self.run(self.panel.checkout):
+            self.panel.message = "Checked out to you. Edit the working file, save it, then Check in."
+            self.panel.changed()
 
     def checkin(self) -> None:
-        message, ok = QInputDialog.getMultiLineText(self, "Check in", "Describe the change:")
-        if ok:
-            self.panel.start_checkin(message, on_done=lambda _res: self.list_vm.refresh())
-            self.render_panel()
+        if not self.panel.can_checkin:
+            return
+        title = self.panel.detail["document"].get("title", "")
+        dlg = CheckinDialog(title, self)
+        if dlg.exec():
+            f = dlg.form
+            self.panel.start_checkin(f.description, on_done=lambda _res: self.list_vm.refresh(),
+                                     allow_unchanged=f.allow_unchanged, label=f.label.strip() or None)
 
     def cancel(self) -> None:
         box = QMessageBox(self)
@@ -144,6 +247,14 @@ class DocumentsTab(QWidget):
         if box.clickedButton() in (keep, discard):
             self.run(lambda: self.panel.cancel(revert=box.clickedButton() is discard))
 
+    def open_file(self) -> None:
+        if self.panel.can_open_file:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.panel.working_path))
+
+    def open_folder(self) -> None:
+        if self.panel.detail:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.panel.working_path).parent)))
+
     def change_state(self) -> None:
         state = self.transition_box.currentData()
         if not state:
@@ -153,6 +264,8 @@ class DocumentsTab(QWidget):
             self.run(lambda: self.panel.transition_latest(state, comment))
 
     def export(self) -> None:
+        if not self.panel.history:
+            return
         rows = self.history.selectionModel().selectedRows()
         rev = self.panel.history[rows[0].row()] if rows else self.panel.history[0]
         doc = self.panel.detail["document"]

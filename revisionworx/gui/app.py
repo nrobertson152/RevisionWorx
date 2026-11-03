@@ -32,8 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     recent = window.ctl.recent_workspaces()
     if argv:
         window.open_location(Path(argv[0]))
-    elif recent:
-        window.open_location(Path(recent[0]))
+    elif recent and Path(recent[0]).exists():
+        window.open_location(Path(recent[0]), quiet=True)  # failure -> start page shows why
     return app.exec()
 
 

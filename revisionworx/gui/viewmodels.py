@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .. import projects
-from .controller import Controller, JobResult, Progress, describe_error
+from .controller import (ALPHA_NOTICE, Controller, JobResult, Progress, describe_error,
+                         project_folder_name)
 
 
 def format_bytes(n: int) -> str:
@@ -336,12 +337,19 @@ class DocumentListModel(Observable):
         super().__init__()
         self.ctl = ctl
         self.project_id: str | None = None
+        self.project: dict | None = None
         self.text = ""
         self.rows: list[dict] = []
         self.error: str | None = None
 
     def load(self, project_id: str | None) -> None:
         self.project_id = project_id
+        self.project = None
+        if project_id:
+            try:
+                self.project = self.ctl.project(project_id)
+            except Exception as exc:
+                self.error = describe_error(exc)
         self.refresh()
 
     def refresh(self) -> None:
@@ -351,6 +359,30 @@ class DocumentListModel(Observable):
         except Exception as exc:
             self.rows, self.error = [], describe_error(exc)
         self.changed()
+
+    @property
+    def can_add(self) -> bool:
+        p = self.project
+        return bool(p and p.get("mode") == "managed" and p.get("status") == "active" and p.get("folder"))
+
+    @property
+    def notice(self) -> str:
+        """Why documents cannot be added, or how to start, shown above the list."""
+        p = self.project
+        if self.error:
+            return self.error
+        if not p:
+            return "Select a project to see its documents."
+        if p.get("folder_error"):
+            return f"⚠ Project folder unavailable: {p['folder_error']}"
+        if p.get("mode") != "managed":
+            return ("This project is indexed (search only). Documents and revisions need a managed "
+                    "project.")
+        if p.get("status") != "active":
+            return "This project is archived. Restore it to add or change documents."
+        if not self.rows and not self.text:
+            return "No documents yet. Use “Import file…” to copy a file into this project."
+        return ""
 
     def cell(self, row: int, col: int) -> str:
         v = self.rows[row].get(self.COLUMNS[col].key)
@@ -373,8 +405,64 @@ class DocumentPanel(Observable):
         self.message = ""
 
     def load(self, doc_id: str | None, verify_hash: bool = False) -> None:
+        if not self.detail or doc_id != self.doc_id:
+            self.message = ""
         self.detail = self.ctl.document_detail(doc_id, verify_hash) if doc_id else None
         self.changed()
+
+    @property
+    def working_path(self) -> str:
+        return self.detail["status"]["path"] if self.detail else ""
+
+    @property
+    def file_missing(self) -> bool:
+        return bool(self.detail) and self.detail["status"]["state"] == "missing"
+
+    @property
+    def can_open_file(self) -> bool:
+        return bool(self.detail) and not self.file_missing
+
+    @property
+    def severity(self) -> str:
+        """``ok`` / ``warning`` / ``error`` for colouring the status line."""
+        if not self.detail:
+            return "ok"
+        state = self.detail["status"]["state"]
+        if state == "missing":
+            return "error"
+        if state == "modified-externally" or (self.detail["checkout"] and not self.detail["mine"]):
+            return "warning"
+        return "ok"
+
+    @property
+    def summary_fields(self) -> list[tuple[str, str]]:
+        if not self.detail:
+            return []
+        d, latest = self.detail["document"], self.detail["latest"]
+        from ..lifecycle import state_name
+        return [("Title", d.get("title", "")), ("Number", d.get("number") or "—"),
+                ("File", d["rel_path"]), ("Type", d.get("type_id", "")),
+                ("Latest", f"{latest['label']} · {state_name(self.detail['lifecycle'], latest['state'])}"
+                 if latest else "none"),
+                ("Revisions", str(d.get("rev_count", 0)))]
+
+    def revision_text(self, row: int) -> str:
+        """Full, read-only description of one revision (shown when it is selected)."""
+        r = self.history[row]
+        from ..lifecycle import state_name
+        lc = self.detail["lifecycle"]
+        lines = [f"Revision {r['label']} (#{r['number']}) — {state_name(lc, r['state'])}",
+                 f"Checked in {r['created']} by {r['author'].get('user', '?')}@{r['author'].get('host', '?')}",
+                 f"Size {format_bytes(r['size'])} · SHA-256 {r['sha256']}",
+                 "", r.get("description", "")]
+        if r.get("restored_from"):
+            lines.insert(2, "Restored from an earlier revision.")
+        if r.get("transitions"):
+            lines += ["", "State changes:"]
+            lines += [f"  {t['time']}  {state_name(lc, t['from'])} → {state_name(lc, t['to'])}  "
+                      f"by {t['by'].get('user', '?')}" + (f" — {t['comment']}" if t.get("comment") else "")
+                      for t in r["transitions"]]
+        return "\n".join(lines)
 
     def reload(self) -> None:
         if self.detail:
@@ -447,7 +535,8 @@ class DocumentPanel(Observable):
         self.reload()
         return rev
 
-    def start_checkin(self, message: str, on_done=None, allow_unchanged: bool = False) -> bool:
+    def start_checkin(self, message: str, on_done=None, allow_unchanged: bool = False,
+                      label: str | None = None) -> bool:
         if not message.strip():
             self.message = "Describe the change before checking in."
             self.changed()
@@ -458,4 +547,188 @@ class DocumentPanel(Observable):
             self.reload() if not res.error else self.changed()
             if on_done:
                 on_done(res)
-        return self.ctl.start_checkin(self.doc_id, message, allow_unchanged=allow_unchanged, on_done=done)
+        started = self.ctl.start_checkin(self.doc_id, message, label=label or None,
+                                         allow_unchanged=allow_unchanged, on_done=done)
+        if started:
+            self.message = "Checking in…"
+        else:
+            self.message = "Another task is still running; try again in a moment."
+        self.changed()
+        return started
+
+
+# ---------------------------------------------------------------------------- alpha workflows
+@dataclass
+class CheckinForm:
+    """Check-in dialog state. A meaningful description is mandatory."""
+    description: str = ""
+    label: str = ""
+    allow_unchanged: bool = False
+    errors: dict[str, str] = field(default_factory=dict)
+    MIN_DESCRIPTION = 3
+
+    def validate(self) -> bool:
+        self.errors = {}
+        text = self.description.strip()
+        if not text:
+            self.errors["description"] = "Describe what changed in this revision."
+        elif len(text) < self.MIN_DESCRIPTION:
+            self.errors["description"] = "The description is too short to be meaningful."
+        if self.label.strip():
+            from ..revlabels import validate_label
+            try:
+                validate_label(self.label.strip())
+            except Exception as exc:
+                self.errors["label"] = f"Invalid revision label: {exc}"
+        return not self.errors
+
+
+@dataclass
+class QuickStartForm:
+    """Start page: create a local workspace + engineering root + first managed project."""
+    folder: str = ""
+    name: str = ""
+    number: str = ""
+    customer: str = ""
+    errors: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def project_path_preview(self) -> str:
+        if not self.folder or not self.name.strip():
+            return ""
+        from pathlib import Path
+        try:
+            return str(Path(self.folder) / "Projects" / project_folder_name(self.name, self.number))
+        except ValueError:
+            return ""
+
+    def validate(self) -> bool:
+        self.errors = {}
+        if not self.folder.strip():
+            self.errors["folder"] = "Choose a folder on this computer for your projects."
+        if not self.name.strip():
+            self.errors["name"] = "A project name is required."
+        else:
+            from ..paths import PathValidationError
+            try:
+                project_folder_name(self.name, self.number)
+            except PathValidationError as exc:
+                self.errors["name"] = f"Not usable as a folder name: {exc}"
+        return not self.errors
+
+    def submit(self, ctl: Controller) -> dict:
+        from pathlib import Path
+        if not self.validate():
+            raise ValueError("; ".join(self.errors.values()))
+        return ctl.quick_start(Path(self.folder), self.name, self.number, self.customer)
+
+
+class ImportFlow(Observable):
+    """Import an outside file into the selected managed project: idle -> importing -> done/error."""
+
+    def __init__(self, ctl: Controller, project_id: str):
+        super().__init__()
+        self.ctl = ctl
+        self.project_id = project_id
+        self.source = ""
+        self.subfolder = ""
+        self.number = ""
+        self.title = ""
+        self.description = "Initial revision"
+        self.subfolders: list[str] = []
+        self.state = "idle"
+        self.message = ""
+        self.result: tuple | None = None
+        self.errors: dict[str, str] = {}
+        try:
+            self.subfolders = ctl.project_subfolders(project_id)
+        except Exception as exc:
+            self.state, self.message = "error", describe_error(exc)
+
+    def set_source(self, path: str) -> None:
+        from pathlib import Path
+        self.source = path
+        if path and not self.title:
+            self.title = Path(path).stem
+        self.changed()
+
+    def validate(self) -> bool:
+        from pathlib import Path
+        self.errors = {}
+        if not self.source:
+            self.errors["source"] = "Choose a file to import."
+        elif not Path(self.source).is_file():
+            self.errors["source"] = f"{self.source} does not exist or is not a file."
+        if self.subfolder not in self.subfolders:
+            self.errors["subfolder"] = "Choose a destination folder inside the project."
+        if not self.description.strip():
+            self.errors["description"] = "Describe the initial revision."
+        return not self.errors
+
+    @property
+    def busy(self) -> bool:
+        return self.state == "importing"
+
+    @property
+    def can_import(self) -> bool:
+        return not self.busy and self.state != "done" and bool(self.source)
+
+    @property
+    def destination_preview(self) -> str:
+        from pathlib import Path
+        if not self.source:
+            return ""
+        return "/".join(p for p in (self.subfolder, Path(self.source).name) if p)
+
+    def start(self, on_done=None) -> bool:
+        from pathlib import Path
+        if not self.validate():
+            self.message = "\n".join(self.errors.values())
+            self.changed()
+            return False
+
+        def done(res: JobResult) -> None:
+            if res.error:
+                self.state, self.message = "error", describe_error(res.error)
+            else:
+                doc, rev = res.value
+                self.state, self.result = "done", res.value
+                self.message = (f"Imported {doc['rel_path']} as revision {rev['label']}." if rev
+                                else f"Registered {doc['rel_path']}.")
+            self.changed()
+            if on_done:
+                on_done(res)
+
+        if not self.ctl.start_import(self.project_id, Path(self.source), self.subfolder, on_done=done,
+                                     number=self.number, title=self.title, description=self.description):
+            self.message = "Another task is still running; try again in a moment."
+            self.changed()
+            return False
+        self.state, self.message = "importing", "Copying and recording revision 1…"
+        self.changed()
+        return True
+
+
+class AppStatus(Observable):
+    """Banner content: the permanent alpha notice plus workspace health."""
+
+    def __init__(self, ctl: Controller):
+        super().__init__()
+        self.ctl = ctl
+        self.alpha_notice = ALPHA_NOTICE
+        self.health: dict = {"ok": True, "blocked": False, "pending_recovery": 0, "message": ""}
+
+    def check(self) -> None:
+        try:
+            self.health = self.ctl.health()
+        except Exception as exc:
+            self.health = {"ok": False, "blocked": False, "pending_recovery": 0, "message": describe_error(exc)}
+        self.changed()
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.health.get("blocked"))
+
+    @property
+    def health_text(self) -> str:
+        return self.health.get("message", "")

@@ -8,14 +8,20 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
-                               QPushButton, QSplitter, QTableView, QTabWidget, QVBoxLayout, QWidget)
+                               QPushButton, QSplitter, QStackedWidget, QTableView, QTabWidget,
+                               QVBoxLayout, QWidget)
 
 from ... import __version__
 from ..controller import Controller, Progress, describe_error
-from ..viewmodels import ProjectDetailsModel, ProjectListModel
+from ..viewmodels import AppStatus, ProjectDetailsModel, ProjectListModel
 from .dialogs import AdoptDialog, NewProjectDialog
 from .documents import DocumentsTab
 from .models import ViewModelTable
+from .startpage import StartPage
+
+ALPHA_STYLE = "background: #fff4ce; color: #4a3b00; padding: 6px; border-bottom: 1px solid #e0c96b;"
+BLOCKED_STYLE = "background: #fde7e9; color: #8b0016; padding: 6px; font-weight: bold;"
+PENDING_STYLE = "background: #eef4fb; color: #1b3a5c; padding: 6px;"
 
 
 def configure_table(view: QTableView, columns) -> None:
@@ -39,11 +45,36 @@ class MainWindow(QMainWindow):
         self.adopt_dialogs: list[AdoptDialog] = []
         self.list_vm = ProjectListModel(ctl)
         self.detail_vm = ProjectDetailsModel(ctl)
-        self.setWindowTitle(f"RevisionWorx {__version__}")
-        self.resize(1200, 720)
+        self.status_vm = AppStatus(ctl)
+        self.setWindowTitle(f"RevisionWorx {__version__} (Alpha)")
+        self.resize(1200, 760)
+        self.setMinimumSize(800, 520)
         self._build_menu()
 
-        central = QWidget(self)
+        shell = QWidget(self)
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        self.alpha_banner = QLabel(self.status_vm.alpha_notice, shell)
+        self.alpha_banner.setObjectName("alphaBanner")
+        self.alpha_banner.setWordWrap(True)
+        self.alpha_banner.setStyleSheet(ALPHA_STYLE)
+        self.alpha_banner.setAccessibleName("Alpha warning")
+        shell_layout.addWidget(self.alpha_banner)
+        self.health_banner = QLabel(shell)
+        self.health_banner.setObjectName("healthBanner")
+        self.health_banner.setWordWrap(True)
+        self.health_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.health_banner.hide()
+        shell_layout.addWidget(self.health_banner)
+        self.stack = QStackedWidget(shell)
+        shell_layout.addWidget(self.stack, 1)
+        self.start_page = StartPage(ctl, self.stack)
+        self.start_page.opened.connect(lambda loc: self.open_location(Path(loc)))
+        self.start_page.open_requested.connect(self.open_ws)
+        self.stack.addWidget(self.start_page)
+
+        central = QWidget(self.stack)
         outer = QVBoxLayout(central)
         bar = QHBoxLayout()
         self.search = QLineEdit(central)
@@ -117,10 +148,13 @@ class MainWindow(QMainWindow):
         nav.addWidget(self.next_btn)
         nav.addStretch(1)
         outer.addLayout(nav)
-        self.setCentralWidget(central)
+        self.workspace_page = central
+        self.stack.addWidget(central)
+        self.setCentralWidget(shell)
 
         self.list_vm.subscribe(self.render_list)
         self.detail_vm.subscribe(self.render_details)
+        self.status_vm.subscribe(self.render_health)
         self.render_list()
         self.render_details()
         self.timer = QTimer(self)
@@ -132,13 +166,15 @@ class MainWindow(QMainWindow):
         ws = self.menuBar().addMenu("&Workspace")
         for text, slot, shortcut in (("Open workspace…", self.open_ws, QKeySequence.StandardKey.Open),
                                      ("Create workspace…", self.create_ws, None),
+                                     ("Close workspace", self.close_ws, QKeySequence.StandardKey.Close),
+                                     ("Check workspace health", lambda: self.status_vm.check(), None),
                                      ("Add engineering root…", self.add_root, None),
                                      ("Rebuild local index", self.rebuild, None),
                                      ("Refresh", lambda: self.list_vm.refresh(), QKeySequence.StandardKey.Refresh)):
             act = QAction(text, self)
             if shortcut is not None:
                 act.setShortcut(QKeySequence(shortcut))
-            act.triggered.connect(lambda *_: slot())
+            act.triggered.connect(lambda *_, s=slot: s())
             ws.addAction(act)
         self.recent_menu = ws.addMenu("Recent")
         ws.addSeparator()
@@ -168,6 +204,16 @@ class MainWindow(QMainWindow):
             self.recent_menu.addAction(act)
 
     # ------------------------------------------------------------------ rendering
+    def render_health(self) -> None:
+        st = self.status_vm
+        if st.health_text:
+            self.health_banner.setText(st.health_text)
+            self.health_banner.setStyleSheet(BLOCKED_STYLE if (st.blocked or not st.health.get("ok"))
+                                             else PENDING_STYLE)
+            self.health_banner.show()
+        else:
+            self.health_banner.hide()
+
     def render_list(self) -> None:
         self.table_model.reload()
         self.prev_btn.setEnabled(self.list_vm.can_prev)
@@ -192,15 +238,37 @@ class MainWindow(QMainWindow):
     def error(self, title: str, exc: Exception) -> None:
         QMessageBox.critical(self, title, describe_error(exc))
 
-    def open_location(self, location: Path) -> None:
+    def open_location(self, location: Path, quiet: bool = False) -> bool:
+        """Open a workspace; on failure stay on (or return to) the start page with the reason."""
         try:
             info = self.ctl.open_workspace(location)
         except Exception as exc:
-            self.error("Cannot open workspace", exc)
-            return
-        self.setWindowTitle(f"RevisionWorx — {info['name']}")
+            self.show_start(f"Cannot open {location}:\n{describe_error(exc)}")
+            if not quiet:
+                self.error("Cannot open workspace", exc)
+            return False
+        self.setWindowTitle(f"RevisionWorx {__version__} (Alpha) — {info['name']}")
         self._fill_recent()
+        self.stack.setCurrentWidget(self.workspace_page)
+        self.status_vm.check()
         self.list_vm.set_query(self.search.text(), self.archived.isChecked())
+        if self.list_vm.rows:
+            self.table.selectRow(0)
+        return True
+
+    def show_start(self, message: str = "") -> None:
+        self.start_page.fill_recent()
+        self.start_page.show_error(message)
+        self.stack.setCurrentWidget(self.start_page)
+
+    def close_ws(self) -> None:
+        self.ctl.close_workspace()
+        self.setWindowTitle(f"RevisionWorx {__version__} (Alpha)")
+        self.list_vm.refresh()
+        self.detail_vm.load(None)
+        self.documents_tab.load_project(None)
+        self.status_vm.check()
+        self.show_start()
 
     def open_ws(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Folder containing .revisionworx")
@@ -268,7 +336,8 @@ class MainWindow(QMainWindow):
 
     def new_project(self) -> None:
         if self.ctl.location is None:
-            QMessageBox.information(self, "No workspace", "Open or create a workspace first.")
+            self.show_start()
+            self.start_page.name_edit.setFocus()
             return
         dlg = NewProjectDialog(self.ctl, self)
         if dlg.exec():
