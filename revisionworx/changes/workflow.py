@@ -7,6 +7,7 @@ approve their own request, whether stale baselines block approval. The defaults 
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 
 from .model import ECOStatus, ECRStatus, TransitionError, ValidationError, clean_text
@@ -128,7 +129,8 @@ class Policy:
                 raise ValidationError(f"{key} must be true or false")
         prefixes = []
         for key in ("ecr_prefix", "eco_prefix"):
-            p = clean_text(base[key], key, limit="number")
+            clean_text(base[key], key, limit="number", required=True)   # validates; keeps inner spacing
+            p = unicodedata.normalize("NFC", base[key])
             if len(p) > 16:
                 raise ValidationError(f"{key} is longer than 16 characters")
             prefixes.append(p)

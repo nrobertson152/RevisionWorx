@@ -108,12 +108,14 @@ class MemoryStore:
         self.fail_next_commit: BaseException | None = None
         self._lock = threading.Lock()
 
-    def _table(self, kind: str) -> dict[str, dict]:
+    def _table(self, kind: str, create: bool = False) -> dict[str, dict]:
         if kind.startswith(CORE_PREFIX):
-            return self.core.setdefault(kind[len(CORE_PREFIX):], {})
-        if kind not in KIND_MAP:
+            tables, name = self.core, kind[len(CORE_PREFIX):]
+        elif kind in KIND_MAP:
+            tables, name = self.records, kind
+        else:
             raise ValueError(f"unknown record kind {kind!r}")
-        return self.records.setdefault(kind, {})
+        return tables.setdefault(name, {}) if create else tables.get(name, {})
 
     def get(self, kind: str, rid: str) -> dict | None:
         rec = self._table(kind).get(rid)
@@ -138,7 +140,7 @@ class MemoryStore:
                     raise ConflictError(KIND_MAP.get(kind, kind), rid, want, actual)
             self.seq += 1
             for p in c.puts:
-                self._table(p.kind)[p.id] = {**copy.deepcopy(p.data), "_rev": self.seq}
+                self._table(p.kind, create=True)[p.id] = {**copy.deepcopy(p.data), "_rev": self.seq}
             if txid is not None:
                 self.txids[txid] = self.seq
             self.log.append((self.seq, c.op))

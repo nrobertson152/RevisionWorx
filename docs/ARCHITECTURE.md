@@ -813,3 +813,10 @@ dependency. Rename/move/duplicate must preview and refuse unsafe reference edits
 - Supported Inventor/SolidWorks adapters and verified capabilities.
 - Access-control enforcement model on shared drives.
 - Packaging (PyInstaller/AppImage/Windows installer) and the CI test matrix (Windows not yet tested).
+
+### Engineering change control (issue #19) — IMPLEMENTED on `feature/change-control`; awaiting review
+ECR/ECO workflow as an isolated subsystem (`revisionworx/changes/`). It persists only through the subsystem
+interface `documents.py` already uses (`register_kind`, `Workspace.commit` with `expect_rev`/`RecordCheck`/
+`txid`, `get`/`list`, `transaction_outcome`), so each action is one journaled, fenced, recoverable entry; it
+reads documents and revisions but never writes them. Signoffs are local workflow evidence, not
+authenticated signatures. Design, failure modes and the GUI contract: `docs/CHANGE_CONTROL.md`.

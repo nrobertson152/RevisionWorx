@@ -1,0 +1,41 @@
+# Change control (issue #19, branch feature/change-control). Lean on purpose: one Linux and one Windows
+# job, full non-Qt suite plus the change-control tests reported separately. Runs only on this branch.
+name: Change control
+
+on:
+  push:
+    branches:
+      - feature/change-control
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: change-control-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: "${{ matrix.os }} / Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: '3.11'}
+          - {os: windows-latest, python: '3.13'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e . pytest
+      - name: Change-control tests
+        run: python -m pytest -q -ra tests/test_changes_model.py tests/test_changes_workflow.py tests/test_changes_service.py tests/test_changes_workspace.py tests/test_changes_reports.py
+      - name: Full suite (Qt tests skip here)
+        run: python -m pytest -q -ra
