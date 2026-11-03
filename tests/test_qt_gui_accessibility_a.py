@@ -119,3 +119,62 @@ def test_checkin_dialog_tab_shift_tab_and_escape_do_not_commit(qapp, desktop):
     assert not dialog.isVisible()
     assert len(win.observable_state()["history"]) == before
     assert win.documents_tab.checkin_btn.isEnabled(), "Cancellation must retain checkout"
+
+
+
+def test_checkin_cancel_restores_parent_focus_without_writing(qapp, desktop):
+    """Closing a modal form must not strand focus or mutate the revision chain."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from revisionworx.gui.qt.dialogs import CheckinDialog
+
+    win, _ctl, _home, _doc = desktop
+    win.show()
+    qapp.processEvents()
+    tab = win.documents_tab
+    tab.checkout()
+    qapp.processEvents()
+    before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
+    tab.checkin_btn.setFocus()
+    qapp.processEvents()
+    dialog = CheckinDialog("drawing", win)
+    dialog.setModal(True)
+    dialog.show()
+    dialog.activateWindow()
+    qapp.processEvents()
+    assert dialog.description.hasFocus()
+    QTest.keyClick(dialog.description, Qt.Key.Key_Escape)
+    qapp.processEvents()
+    assert dialog.result() == QtWidgets.QDialog.DialogCode.Rejected
+    assert not dialog.isVisible()
+    assert win.isEnabled()
+    assert tab.checkin_btn.isEnabled()
+    # The exact focused control is window-manager dependent. A valid focus
+    # target must be in the main window, never the destroyed modal.
+    focus = qapp.focusWidget()
+    assert focus is None or focus is win or win.isAncestorOf(focus)
+    after = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
+    assert after == before
+
+
+def test_checkin_dialog_large_font_keeps_controls_inside_layout(qapp):
+    """Simulate large text independently of host DPI and check widget clipping."""
+    from PySide6.QtGui import QFont
+    from revisionworx.gui.qt.dialogs import CheckinDialog
+
+    dialog = CheckinDialog("Long engineering drawing title")
+    font = QFont(dialog.font())
+    font.setPointSize(max(18, font.pointSize() * 2))
+    dialog.setFont(font)
+    dialog.show()
+    qapp.processEvents()
+    try:
+        # This is font scaling, not a native 150/200% Windows DPI run.
+        for widget in (dialog.description, dialog.label, dialog.unchanged):
+            assert widget.isVisible()
+            rect = widget.geometry()
+            assert rect.width() > 0 and rect.height() > 0
+            assert dialog.rect().contains(widget.mapTo(dialog, rect.topLeft()))
+            assert dialog.rect().contains(widget.mapTo(dialog, rect.bottomRight()))
+    finally:
+        dialog.reject()
