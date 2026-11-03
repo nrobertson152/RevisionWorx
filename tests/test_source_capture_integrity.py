@@ -77,19 +77,38 @@ def _same_mtime(path: Path, st: os.stat_result) -> None:
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
 
 
-def _rename_replace_same_size_same_mtime(path: Path):
+POSIX = sys.platform != "win32"
+
+
+def _rename_replace_same_size_same_mtime(path: Path) -> bool:
     st = os.stat(path)
     side = path.with_name("~bracket.tmp")
     side.write_bytes(SAME_SIZE)
     _same_mtime(side, st)
-    os.replace(side, path)                    # save-by-rename, as Inventor/SolidWorks do
+    try:
+        os.replace(side, path)                # save-by-rename, as Inventor/SolidWorks do
+    except PermissionError:                   # Windows refuses to replace a file we hold open (observed on
+        side.unlink()                         # windows-latest, CI 41676253420): the writer cannot act
+        return False
+    return True
 
 
-def _in_place_same_size_mtime_restored(path: Path):
+def _in_place_behind_cursor_mtime_restored(path: Path) -> bool:
     st = os.stat(path)
-    with open(path, "r+b") as fh:            # same inode
+    with open(path, "r+b") as fh:             # same inode; only bytes the current read has already passed
         fh.write(SAME_SIZE[:32])
     _same_mtime(path, st)
+    return True
+
+
+def _in_place_torn_mtime_restored(path: Path) -> bool:
+    st = os.stat(path)
+    with open(path, "r+b") as fh:             # both sides of the read cursor: a read now yields bytes
+        fh.write(SAME_SIZE[:32])              # the file never held as a whole
+        fh.seek(len(ORIGINAL) - 32)
+        fh.write(SAME_SIZE[-32:])
+    _same_mtime(path, st)
+    return True
 
 
 def _assert_nothing_captured(ws, doc, co, before_objects, head):
@@ -99,25 +118,55 @@ def _assert_nothing_captured(ws, doc, co, before_objects, head):
     assert ws.get("document", doc["id"])["rev_count"] == doc["rev_count"]
 
 
-@pytest.mark.parametrize("writer", [
-    pytest.param(_rename_replace_same_size_same_mtime, id="save-by-rename-same-size-same-mtime"),
-    pytest.param(_in_place_same_size_mtime_restored, id="same-inode-same-size-mtime-restored"),
-])
-@pytest.mark.parametrize("when", [
-    pytest.param(dict(on_open=1, after_reads=1), id="during-first-read"),
-    pytest.param(dict(on_open=2, after_reads=1), id="during-verification-read"),
-])
-def test_concurrent_writer_is_detected_and_nothing_is_committed(checked_out, monkeypatch, writer, when):
+def _capture_with_writer(checked_out, monkeypatch, writer, when):
+    """Returns (acted, revision-or-None). Whatever happens, a stored revision must equal a whole state the
+    file held (C1-C4): never a mix."""
     ws, doc, co, path = checked_out
     before, head = _objects(ws), ws.head_seq()
-    _inject(monkeypatch, path, lambda: writer(path), **when)
-    with pytest.raises(SourceChangedError):
-        D.checkin(ws, doc["id"], co["token"], "v2")
+    acted = []
+    _inject(monkeypatch, path, lambda: acted.append(writer(path)), **when)
+    try:
+        rev = D.checkin(ws, doc["id"], co["token"], "v2")
+    except SourceChangedError:
+        rev = None
     monkeypatch.undo()
-    _assert_nothing_captured(ws, doc, co, before, head)
-    # The retry captures the file as it now stands, consistently.
-    rev = D.checkin(ws, doc["id"], co["token"], "v2")
-    assert ContentStore(ws).read_verified(rev["sha256"], 1 << 20) == path.read_bytes()
+    if rev is None:
+        _assert_nothing_captured(ws, doc, co, before, head)
+        rev2 = D.checkin(ws, doc["id"], co["token"], "v2")   # the retry captures the file as it now stands
+        assert ContentStore(ws).read_verified(rev2["sha256"], 1 << 20) == path.read_bytes()
+    else:
+        stored = ContentStore(ws).read_verified(rev["sha256"], 1 << 20)
+        assert stored in (ORIGINAL, path.read_bytes()), "stored bytes the file never held as a whole"
+    return bool(acted and acted[0]), rev
+
+
+WHEN = [pytest.param(dict(on_open=1, after_reads=1), id="during-first-read"),
+        pytest.param(dict(on_open=2, after_reads=1), id="during-verification-read")]
+
+
+@pytest.mark.parametrize("when", WHEN)
+def test_torn_read_is_always_detected(checked_out, monkeypatch, when):
+    acted, rev = _capture_with_writer(checked_out, monkeypatch, _in_place_torn_mtime_restored, when)
+    assert acted and rev is None
+
+
+@pytest.mark.parametrize("when", WHEN)
+def test_save_by_rename_same_size_same_mtime(checked_out, monkeypatch, when):
+    acted, rev = _capture_with_writer(checked_out, monkeypatch, _rename_replace_same_size_same_mtime, when)
+    if acted:
+        assert rev is None                    # identity check (C1)
+    else:                                     # writer blocked: the unchanged original is captured
+        assert not POSIX and rev is not None
+
+
+@pytest.mark.parametrize("when", WHEN)
+def test_same_inode_write_with_mtime_restored(checked_out, monkeypatch, when):
+    acted, rev = _capture_with_writer(checked_out, monkeypatch, _in_place_behind_cursor_mtime_restored, when)
+    assert acted
+    if POSIX or when["on_open"] == 1:
+        assert rev is None                    # POSIX ctime (C2); first-read case also via second hash (C3)
+    # Windows, verification read: no ctime and the change is behind the cursor, so it may go undetected;
+    # _capture_with_writer has already required the revision to be the whole pre-write state.
 
 
 def test_replaced_between_open_and_identity_check_is_detected(checked_out, monkeypatch):

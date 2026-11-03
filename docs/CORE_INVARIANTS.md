@@ -147,13 +147,20 @@ What a revision's bytes are guaranteed to be. RevisionWorx cannot stop another p
 - Not detectable: a writer that changes the file and restores identical bytes, size, mtime and ctime between the checks, or
   one that writes the same bytes in both reads. On Windows and some network filesystems file IDs may be 0 and ctime is
   unavailable, so C1 rests on size/mtime/path and C3 carries more of the weight.
+- **Windows, observed on CI 41676253420 (windows-latest, Python 3.11 and 3.13):** replacing the working file by rename while
+  RevisionWorx holds it open fails with `WinError 5`, despite share-delete. A CAD save-by-rename during capture is therefore
+  refused to the CAD program (it must retry), not detected by us. **Needs Distributed Systems review** against the
+  `_open_for_read` intent that such saves never fail because of us; real Inventor/SolidWorks behaviour is untested.
+- **Windows:** an in-place write that touches only bytes the verification read has already passed, with mtime restored,
+  is not detected (no ctime). The revision is then the file's whole pre-write state, never a mix; the working file reads
+  as unchanged in metadata mode. A write that straddles the read position is always detected (C3).
 - The verification read doubles read I/O per capture (a 200 MB assembly is read twice). Accepted for integrity; revisit only
   with measurements.
 - `document_status` without `verify_hash` is a metadata check (size + mtime) and can call a same-size, same-mtime
   replacement "unchanged"; it says `method: metadata`. Check-in always hashes, so no revision depends on it.
 - Not yet run on native Windows or SMB/NFS.
 
-**Tests:** `test_source_capture_integrity.py` (writer injected during the first read and during the verification read).
+**Tests:** `test_source_capture_integrity.py` (writer injected during the first read and during the verification read). Every case asserts the revision, if any, is a whole state the file held.
 
 ## 6. Local index
 
