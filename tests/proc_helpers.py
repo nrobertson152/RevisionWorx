@@ -160,3 +160,16 @@ def break_loop(location: str, stop_file: str, results) -> None:
             errors.append(f"{type(exc).__name__}: {exc}")
         time.sleep(0.03)
     results.put({"breaks": breaks, "errors": errors[:5]})
+
+
+def subsystem_commit_then_die(location: str, kind: str, rid: str, txid: str) -> None:
+    """A domain subsystem (BOM, change control) registers its own record kind and commits through the
+    public contract, then the process dies after the journal entry is durable and before it is applied
+    (CORE_API §8)."""
+    import os
+    from revisionworx.workspace import RecordPut, Workspace, register_kind
+    register_kind(kind)
+    ws = Workspace.open(Path(location), writable=True)
+    Workspace._apply = lambda self, entry: os._exit(3)     # crash point: committed, not applied
+    ws.commit("subsys.create", [RecordPut(kind, rid, {"name": "from subsystem"}, expect_rev=0)], txid=txid)
+    os._exit(4)                                           # unreachable if the crash point fired

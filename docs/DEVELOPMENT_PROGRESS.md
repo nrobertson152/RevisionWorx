@@ -73,6 +73,16 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-04 (session 15) — subsystem persistence contract; Phase 1 journal triage
+- **CORE_API §8 (Provisional):** answers Claude D (PR #20) and Claude C (A10, PR #21). Both adapters already use only the
+  listed calls; kind registry added; no kind collisions.
+- **Tests:** `tests/test_subsystem_persistence_contract.py` (3): a real child process registers a kind, commits and dies
+  before apply; this process, which never registered it, reads, recovers and verifies it, and cannot write it. Mutation
+  check: validating kinds against the registered set makes both process tests fail.
+- **QA run 41730782278 triage:** its 4 malformed-journal failures are on `phase1-foundation` (`412e69a`), where a writable
+  open publishes on top of a damaged entry; they pass on PR #7. Reported on #33 and PR #6; Director to choose how PR #6
+  gets the current core. No push to `phase1-foundation`.
+
 ### 2026-11-03 (session 14) — Windows `.releasing-*` race (Coordinator handoff on PR #7), ADR-019 rev. 5
 - **Origin:** CI 41678241178 (GUI PR #14, `0cb3b0b`), `test_checkout_race_between_processes_has_one_winner` on Windows:
   `PermissionError` from `orphan.read_bytes()` in `_fence_orphaned_releases`. That line is in the older core the GUI

@@ -127,11 +127,51 @@ than `idx.db`: only the methods replace a damaged cache and retry. `IndexBusyErr
 RevisionWorx process is using it: nothing is wrong, so try again. A damaged cache replaces itself. `idx.coverage()`
 now includes `baselines_unavailable`, the projects whose file list could not be read.
 
+## 8. Subsystem persistence (Provisional)
+
+For **domain subsystems** inside `revisionworx/` (documents, BOM `bom/` PR #21, change control `changes/` PR #20), never
+for UI code. Requested by Claude D (PR #7 comment 6595825553) and Claude C (A10, comment 6595951841). Both adapters,
+`changes/store.py` and `bom/store.py` `WorkspaceCatalogStore`, already conform as of `724993c` / `8f67bfe`.
+
+**You may use:**
+- `register_kind(kind)` at import time, for kinds you own (`^[a-z]{2,16}$`, listed in the table below).
+- `Workspace.get(kind, id)`, `Workspace.list(kind)`; the journal is the answer, record files are a cache.
+- `Workspace.commit(op, [RecordPut | RecordDelete | RecordCheck, ...], txid=None) -> seq`: one user action, one call,
+  applied all-or-nothing. `expect_rev=0` for create-once records (unique numbers, audit events); `RecordCheck` may guard
+  **any** kind, including core and document records, but put/delete only your own kinds.
+- `Workspace.transaction_outcome(txid) -> {"state": "committed" | "fenced" | "not-found", ...}`.
+- Ids match `^[a-z]{2,8}_[0-9a-f]{32}$` or `^[a-z0-9][a-z0-9_.-]{0,63}$`. `data` is a JSON object; `_rev` is reserved and
+  set by the core.
+
+**Errors from `commit`:** `ConflictError` (nothing written; reload); `CommittedNotApplied` (**it is committed**: never
+retry as a failure, the next writable open completes it; confirm with `transaction_outcome`); `LockLostError`,
+`ReadOnlyError`, `TxidReuseError`, `IdentityUnverifiable`, `WorkspaceCorruptError`; `ValueError` for a contract error
+(unregistered kind, bad id or txid), with nothing written.
+
+**Core guarantees (tested in `tests/test_subsystem_persistence_contract.py`, real processes):** reading, recovery,
+`health()` and `verify()` are kind-agnostic. A process that never imported a subsystem reads its records and completes
+an entry whose writer died between commit and apply; it cannot *write* that kind (`ValueError`, nothing published).
+Journal validation checks a kind's *form*, never the registered set, and will stay that way while this section stands.
+
+**Not provided:** schema or versioning of your `data` (yours to own); local search index coverage of your kinds (the
+index is documents-only); anything multi-host. **Do not** touch journal, lock or record files, `KINDS`, or any name
+starting with `_`.
+
+| Kind | Owner |
+|---|---|
+| `root`, `project`, `template`, `settings`, `audit` | core |
+| `doctype`, `document`, `revision`, `checkout`, `lifecycle` | documents (core) |
+| `part`, `partnum`, `bomline`, `bomstruct`, `partseq`, `partrule` | BOM, Claude C (PR #21) |
+| `changereq`, `changeord`, `changeevt`, `changenum`, `changecfg` | change control, Claude D (PR #20) |
+
+A new kind is added to this table and to the collision test on PR #7 before use.
+
 ## Change log
 - 2026-11-02: `ws.health()`, `LocalIndex.project_files` and `documents.require_document` are new (Claude B's A1 and A5). All additive.
 - 2026-11-02: `MissingFileError` and `CommittedNotApplied.result` are new (Claude B's A4 and A6). `verify` marks `fenced-entry` with
   `severity: info`, and the CLI no longer exits 1 for it alone. `doc verify` also audits the journal for changed revisions.
   `read_writer_lock` reports an unreadable lock as `{"token": "?", "unreadable": True}` instead of raising `ValueError`.
+- 2026-11-04: §8 Subsystem persistence (Provisional) is new: documents what BOM (PR #21) and change control (PR #20) already use, plus the kind registry. No code changed.
 - 2026-11-03 (ADR-019 rev. 5): `LockReleaseBusyError` is new. `Workspace.open(writable=True)` raises it, not `WorkspaceCorruptError`, when a `.releasing-*`/`.fencing-*` file stays access-denied (Windows delete-pending or a held file); if that file has gone, the open now succeeds. No signature changed.
 - 2026-11-02 (`feffbcf`): `checkin(txid=...)` retries now return the original revision, as this page always said.
   Before, a retry raised `NotCheckedOut` or `TxidReuseError`. `IndexBusyError` is new. `get`/`list` ignore record files
