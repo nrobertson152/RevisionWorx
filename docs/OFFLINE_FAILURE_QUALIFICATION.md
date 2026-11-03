@@ -110,3 +110,35 @@ actual product migration, installer transaction or power-loss recovery.
    not newer `366d4355`.
 
 **No installer, update or release has been created.**
+
+## New frozen relocation and immutable-history checks (2026-11-02)
+
+The follow-up packaging harness runs from **copies of both onedir trees** in
+`/tmp/installed copy Ω/`, instead of their original CI build locations.
+The read-only original bundles remain mounted at `/bundles`; the runtime
+has no Python/pip installed and Docker uses `--network none`.
+The 768 MiB disposable tmpfs is sized for two copied onedir distributions,
+test workspace, and Qt logs. No production workspace is mounted.
+
+The frozen lifecycle now reopens and exports **both** revision IDs *after* a
+deliberately denied project creation attempt, verifies each export's SHA-256
+against its respective source snapshot, and ensures the existing project
+still verifies. This is not an unexpected-kill test; each command remains a
+separate clean process. The per-process token persistence check is unchanged.
+
+**Exact new implementation commits:** `b07475a1acc0acd9cec4ac5804736b87bfb32dc6`,
+`48a4e87c7c4af5b37d199cd7e89b9a06e456b8ad`,
+`acc3bdff94d1234242da2865d445099f9686b5d9`.
+**New CI execution:** [41563277330](https://github.com/nrobertson152/RevisionWorx/actions/runs/41563277330);
+at the moment of writing its status is pending, so no new pass is asserted.
+The older [41563020653](https://github.com/nrobertson152/RevisionWorx/actions/runs/41563020653)
+completed successfully on Windows and Ubuntu at code `31e041529e312d8fd0e6b617424680c5083160e7`,
+including the older Linux offline frozen lifecycle, but it did not execute
+these additional relocation and two-export checks.
+
+Passing this addition would only establish **tested-path runtime relocation**,
+not no hidden source paths in unused features, a complete native installer,
+Windows Python-free VM, a true graphical UI interaction, or any actual
+migration from an older production schema. Phase 2 source remains pinned at
+`d656884b39401134149273dd0121ef620b76eb8e`; new safety changes must
+pass independent QA before integration is repinned.
