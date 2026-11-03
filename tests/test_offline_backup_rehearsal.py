@@ -235,5 +235,33 @@ class BackupRehearsalTests(unittest.TestCase):
             with self.assertRaises(mod.BackupError):
                 mod.restore(archive, restored)
 
+
+    def test_empty_nested_directory_is_not_silently_lost(self):
+        """File-only manifests cannot represent empty workspace directories."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "workspace", root / "archive"
+            (src / "empty" / "nested").mkdir(parents=True)
+            (src / "document.ipt").write_bytes(b"untouched")
+            with self.assertRaisesRegex(mod.BackupError, "empty directory"):
+                mod.backup(src, archive)
+            self.assertFalse(archive.exists())
+            self.assertTrue((src / "empty" / "nested").is_dir())
+            self.assertEqual((src / "document.ipt").read_bytes(), b"untouched")
+
+    def test_empty_directory_added_to_archive_invalidates_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive = root / "workspace", root / "archive"
+            src.mkdir()
+            (src / "document.ipt").write_bytes(b"unchanged")
+            mod.backup(src, archive)
+            (archive / "injected-empty").mkdir()
+            with self.assertRaises(mod.BackupError):
+                mod.verify(archive)
+            with self.assertRaises(mod.BackupError):
+                mod.restore(archive, root / "restored")
+            self.assertFalse((root / "restored").exists())
+
 if __name__ == "__main__":
     unittest.main()
