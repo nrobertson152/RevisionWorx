@@ -398,3 +398,14 @@ After confirming the two Codex P1s at production d2b7a1c, QA identified **a thir
 - [Qt-library-corrected exact-source CI 41571153163](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571153163) Ubuntu 3.11 and Ubuntu 3.13 **SUCCESS**: each `3 PASS / 3 SKIP` positive P1 gate, `4 PASS` separate-process restart, `256 PASS / 3 SKIP` complete full suite including Qt. At the time this entry was authored, the latest unified run's Windows Python 3.13 had also completed SUCCESS; Windows 3.11 was still running. Its fixed-source/test-pin equivalent Windows jobs already completed SUCCESS in 41571044369; see unified run for final latest-run disposition.
 
 **Scoped acceptance:** Independent native evidence supports **ACCEPT for the three specific ADR-019 rev.4 local trusted-filesystem protocol-only P1 corrections and exercised custody/restart barriers at exact fe8a179**, with both passing positive oracles and deliberately failing old-source negative controls on both operating systems. This does **not** establish completeness of all possible thread interleavings, true physical power-loss durability, external hostile lock-directory mutation, actual two-host SMB/NFS, installed interactive GUI, or production release readiness. **Phase 1 backport, PR #7 merge and release remain HOLD pending director/architect explicit authorization and any remaining required gates.** More adversarial scheduling and Windows handle semantics would benefit from further qualification.
+
+
+### Final four-platform unified result, source-pinned run 41571153163
+
+The previously pending Windows jobs **COMPLETED SUCCESS**, making [CI 41571153163](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571153163) **4/4 full jobs SUCCESS**, all against exact production `fe8a179f0203ef08151dc8459c84609dc639c4fe` and frozen independent test source `88b0f8d11981b1eec8658a6920ff76c6aa2addcf`:
+- Ubuntu Python 3.11: 3 ordinary positive P1 PASS / 3 obsolete unsafe SKIP; 4 separate-process crash/restart PASS; full **256 PASS / 3 SKIP**.
+- Ubuntu Python 3.13: 3 ordinary positive P1 PASS / 3 obsolete unsafe SKIP; 4 separate-process crash/restart PASS; full **256 PASS / 3 SKIP**.
+- Windows Python 3.11: 3 ordinary positive P1 PASS / 3 obsolete unsafe SKIP; 4 separate-process crash/restart PASS; full **255 PASS / 4 SKIP**.
+- Windows Python 3.13: 3 ordinary positive P1 PASS / 3 obsolete unsafe SKIP; 4 separate-process crash/restart PASS; full **255 PASS / 4 SKIP**.
+
+All four corresponding [old-source negative control jobs 41571222000](https://github.com/nrobertson152/RevisionWorx/actions/runs/41571222000) completed SUCCESS as *demonstrations of three old defects*: each 3 deliberately UNSAFE PASS and 3 strict positive safety XFAIL. **Independent scoped ACCEPT** of the three rev.4 protocol-only local P1 corrections on fe8a179, not a global ADR-019 formal proof or release authorization. No production source edits by QA.
