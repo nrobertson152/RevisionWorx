@@ -174,7 +174,8 @@ def test_checkin_dialog_large_font_keeps_controls_inside_layout(qapp):
             assert widget.isVisible()
             rect = widget.geometry()
             assert rect.width() > 0 and rect.height() > 0
-            assert dialog.rect().contains(widget.mapTo(dialog, rect.topLeft()))
-            assert dialog.rect().contains(widget.mapTo(dialog, rect.bottomRight()))
+            # mapTo expects widget-local coordinates, not parent-relative geometry.
+            assert dialog.rect().contains(widget.mapTo(dialog, widget.rect().topLeft()))
+            assert dialog.rect().contains(widget.mapTo(dialog, widget.rect().bottomRight()))
     finally:
         dialog.reject()
