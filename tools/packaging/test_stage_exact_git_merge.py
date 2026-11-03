@@ -57,7 +57,13 @@ class LiteralMergeStagingTests(unittest.TestCase):
         write(self.base, "tests/test_qt_gui.py", "common test\n")
         commit(self.base, "base for two divergent inputs")
         for dest in (self.core, self.gui):
-            # Apply LF checkout policy *during* clone, not afterward: Windows Git\n            # may otherwise convert every untouched base file to CRLF and\n            # manufacture false merge conflicts across unrelated files.\n            run("-c", "core.autocrlf=false", "clone", "-q", str(self.base), str(dest))\n            run("-C", str(dest), "config", "core.autocrlf", "false")\n            if run("-C", str(dest), "status", "--porcelain"):\n                raise AssertionError("fresh fixture clone is unexpectedly dirty")
+            # Apply LF checkout policy *during* clone, not afterward: Windows Git
+            # may otherwise convert every untouched base file to CRLF and
+            # manufacture false merge conflicts across unrelated files.
+            run("-c", "core.autocrlf=false", "clone", "-q", str(self.base), str(dest))
+            run("-C", str(dest), "config", "core.autocrlf", "false")
+            if run("-C", str(dest), "status", "--porcelain"):
+                raise AssertionError("fresh fixture clone is unexpectedly dirty")
         write(self.core, "revisionworx/atomicio.py", "corrected writer authority\n")
         write(self.core, "revisionworx/index.py", "authoritative core index\n")
         self.core_sha = commit(self.core, "corrected core")
