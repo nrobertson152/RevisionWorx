@@ -27,6 +27,7 @@ class StartPage(QWidget):
         super().__init__(parent)
         self.ctl = ctl
         self.form = QuickStartForm(folder=default_projects_folder())
+        self.last_created_id: str | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(32, 24, 32, 24)
         title = QLabel("<h2>Welcome to RevisionWorx</h2>"
@@ -62,7 +63,6 @@ class StartPage(QWidget):
         self.preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addRow("Will create", self.preview)
         self.error_label = QLabel(box)
-        self.error_label.setObjectName("formError")
         self.error_label.setStyleSheet("color: #b00020")
         self.error_label.setWordWrap(True)
         form.addRow(self.error_label)
@@ -87,6 +87,9 @@ class StartPage(QWidget):
         for edit in (self.folder_edit, self.name_edit, self.number_edit, self.customer_edit):
             edit.textChanged.connect(lambda *_: self.sync())
             edit.returnPressed.connect(lambda *_: self.create())
+        for name in ("folder_edit", "name_edit", "number_edit", "customer_edit", "preview", "error_label",
+                     "create_btn", "open_btn", "recent"):
+            getattr(self, name).setObjectName("start_" + name)
         self.sync()
         self.fill_recent()
 
@@ -119,7 +122,7 @@ class StartPage(QWidget):
             self.show_error("\n".join(self.form.errors.values()))
             return False
         try:
-            self.form.submit(self.ctl)
+            self.last_created_id = self.form.submit(self.ctl)["id"]
         except Exception as exc:
             self.show_error(describe_error(exc))
             return False

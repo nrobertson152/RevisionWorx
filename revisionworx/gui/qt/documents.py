@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
                                QTableView, QVBoxLayout, QWidget)
 
-from ..controller import Controller, describe_error
+from ..controller import Controller, SavedWithWarning, describe_error
 from ..viewmodels import DocumentListModel, DocumentPanel
 from .dialogs import CheckinDialog, ImportDialog
 from .models import ViewModelTable
@@ -59,7 +59,12 @@ class DocumentsTab(QWidget):
         dl = QVBoxLayout(detail)
         self.summary = QFormLayout()
         dl.addLayout(self.summary)
+        self.ownership = QLabel(detail)
+        self.ownership.setObjectName("ownershipLabel")
+        self.ownership.setWordWrap(True)
+        dl.addWidget(self.ownership)
         self.status = QLabel(detail)
+        self.status.setObjectName("documentStatus")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         dl.addWidget(self.status)
@@ -117,11 +122,16 @@ class DocumentsTab(QWidget):
         hist_split.setStretchFactor(1, 2)
         dl.addWidget(hist_split, 1)
         outer.addWidget(split, 1)
+        for name in ("filter", "import_btn", "register_btn", "notice", "table", "checkout_btn",
+                     "checkin_btn", "cancel_btn", "open_file_btn", "open_dir_btn", "transition_box",
+                     "transition_btn", "export_btn", "compare_btn", "restore_btn", "history",
+                     "revision_detail"):
+            getattr(self, name).setObjectName("documents_" + name)
 
         for keys, slot in (("Ctrl+I", self.import_file), ("Ctrl+K", self.checkout),
-                           ("Ctrl+Shift+K", self.checkin)):
+                           ("Ctrl+Shift+K", self.checkin), ("Ctrl+Shift+F", self.filter.setFocus)):
             sc = QShortcut(QKeySequence(keys), self)
-            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.setContext(Qt.ShortcutContext.WindowShortcut)
             sc.activated.connect(slot)
 
         self.list_vm.subscribe(self.render_list)
@@ -168,6 +178,7 @@ class DocumentsTab(QWidget):
             v = QLabel(value)
             v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.summary.addRow(label, v)
+        self.ownership.setText(p.ownership_text)
         self.status.setText(p.message + ("\n" if p.message else "") + p.status_text)
         self.status.setStyleSheet(SEVERITY_STYLE[p.severity])
         self.checkout_btn.setEnabled(p.can_checkout)
@@ -220,8 +231,14 @@ class DocumentsTab(QWidget):
         self.run(lambda: self.panel.restore(row))
 
     def run(self, fn, refresh: bool = True) -> bool:
+        """Run a quick action. A saved-with-warning outcome is a success shown as a warning, never
+        as an error (CORE_API §4: CommittedNotApplied means the change IS saved)."""
+        from ..workspace import CommittedNotApplied
         try:
             fn()
+        except (SavedWithWarning, CommittedNotApplied) as exc:
+            QMessageBox.warning(self, "Saved with a warning", describe_error(exc))
+            ok = True
         except Exception as exc:
             QMessageBox.critical(self, "RevisionWorx", describe_error(exc))
             ok = False
@@ -234,6 +251,8 @@ class DocumentsTab(QWidget):
     # ------------------------------------------------------------------ actions
     def import_file(self) -> None:
         if not self.list_vm.can_add:
+            return
+        if self.ctl.location is None or not self.list_vm.project_id:
             return
         name = (self.list_vm.project or {}).get("name", "project")
 
@@ -263,11 +282,8 @@ class DocumentsTab(QWidget):
             QMessageBox.information(self, "Busy", "Another task is still running; try again in a moment.")
 
     def checkout(self) -> None:
-        if not self.panel.can_checkout:
-            return
-        if self.run(self.panel.checkout):
-            self.panel.message = "Checked out to you. Edit the working file, save it, then Check in."
-            self.panel.changed()
+        if self.panel.can_checkout:
+            self.run(self.panel.checkout)
 
     def checkin(self) -> None:
         if not self.panel.can_checkin:
@@ -290,6 +306,13 @@ class DocumentsTab(QWidget):
         box.exec()
         if box.clickedButton() in (keep, discard):
             self.run(lambda: self.panel.cancel(revert=box.clickedButton() is discard))
+
+    def refresh(self) -> None:
+        """Reload the list and the selected document, keeping the selection (F5)."""
+        keep = self.panel.doc_id
+        self.list_vm.refresh()
+        if keep and self.selected_doc_id() == keep:
+            self.run(self.panel.reload, refresh=False)
 
     def open_file(self) -> None:
         if self.panel.can_open_file:

@@ -243,3 +243,169 @@ def test_status_column_colours_and_restore_compare_buttons(qapp, ctl, tmp_path, 
     assert tab.table_model.data(tab.table_model.index(0, col), Qt.ItemDataRole.ForegroundRole) is not None
     assert "need attention" in tab.notice.text()
     w.close()
+
+
+# ---------------------------------------------------------------------------- RC usability (PR #14 milestone)
+def _window_with_doc(qapp, ctl, tmp_path, name="X"):
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    home = tmp_path / "home"
+    p = ctl.quick_start(home, name)
+    src = tmp_path / "a.txt"
+    src.write_bytes(b"one")
+    doc, _ = ctl.import_document(p["id"], src)
+    w = MainWindow(ctl)
+    assert w.open_location(home, quiet=True, select_project=p["id"])
+    qapp.processEvents()
+    w.documents_tab.select_document(doc["id"])
+    qapp.processEvents()
+    return w, home, p, doc
+
+
+def test_observable_state_and_object_names_are_stable(qapp, ctl, tmp_path):
+    from PySide6.QtWidgets import QPushButton
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    st = w.observable_state()
+    assert st["contract"] == 1 and st["page"] == "workspace" and st["selected_project"] == p["id"]
+    assert st["selected_document"] == doc["id"] and len(st["history"]) == 1
+    assert st["actions"]["checkout"] and not st["actions"]["checkin"] and not st["read_only"]
+    assert "single user" in st["alpha_banner"]
+    for name in ("start_create_btn", "start_name_edit", "main_new_btn", "documents_import_btn",
+                 "documents_checkout_btn", "documents_checkin_btn", "documents_history"):
+        assert w.findChild(QtWidgets.QWidget, name) is not None, name
+    assert w.findChild(QPushButton, "documents_checkout_btn") is w.documents_tab.checkout_btn
+    w.close()
+
+
+def test_recovery_blocked_makes_gui_read_only_and_f5_recovers(qapp, ctl, tmp_path, no_modal_boxes):
+    import json
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    entry = sorted((home / ".revisionworx" / "journal").glob("*.json"))[-1]
+    original = entry.read_bytes()
+    data = json.loads(original)
+    data["op"] += "-tampered"
+    entry.write_text(json.dumps(data))
+    w.refresh_all()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert st["read_only"] and "RECOVERY BLOCKED" in st["health_banner"] and "READ-ONLY" in st["health_banner"]
+    assert not any(st["actions"][k] for k in ("new_project", "import", "checkout", "checkin", "restore"))
+    assert st["selected_document"] == doc["id"] and st["history"]  # browsing still works
+    w.documents_tab.checkout()  # guarded: no write, no dialog
+    assert not no_modal_boxes
+    entry.write_bytes(original)  # administrator repaired
+    w.refresh_all()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert not st["read_only"] and st["health_banner"] == "" and st["actions"]["checkout"]
+    assert st["selected_document"] == doc["id"]
+    w.close()
+
+
+def test_checkin_saved_with_warning_is_never_shown_as_failure(qapp, ctl, tmp_path, monkeypatch, no_modal_boxes):
+    from revisionworx import documents
+    from revisionworx.workspace import CommittedNotApplied
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.checkout()
+    ctl.working_file(doc["id"]).write_bytes(b"two")
+    real = documents.checkin
+
+    def lagging(ws, *a, **k):
+        rev = real(ws, *a, **k)
+        raise CommittedNotApplied(rev["_rev"], k["txid"], OSError("records lag"))
+    monkeypatch.setattr(documents, "checkin", lagging)
+    tab.panel.start_checkin("Saved but records lag", on_done=lambda _r: tab.list_vm.refresh())
+    pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
+    assert tab.status.text().startswith("Checked in.")
+    assert "8a5300" in tab.status.styleSheet()  # amber warning, not red error
+    assert tab.history_model.rowCount() == 2 and not tab.checkin_btn.isEnabled()
+    assert not [b for b in no_modal_boxes if b[0] == "critical"]
+    w.close()
+
+
+def test_ambiguous_checkin_not_in_journal_shows_error_not_success(qapp, ctl, tmp_path, monkeypatch):
+    from revisionworx import documents
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.checkout()
+    monkeypatch.setattr(documents, "checkin", lambda *a, **k: (_ for _ in ()).throw(OSError(5, "I/O error")))
+    tab.panel.start_checkin("Must not claim success")
+    pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
+    assert "Checked in" not in tab.status.text() and "b00020" in tab.status.styleSheet()
+    assert tab.history_model.rowCount() == 1 and tab.checkin_btn.isEnabled()
+    w.close()
+
+
+def test_selection_is_predictable_after_create_and_import(qapp, ctl, tmp_path):
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    home = tmp_path / "home"
+    ctl.quick_start(home, "Aardvark")  # sorts before the new one
+    w = MainWindow(ctl)
+    sp = w.start_page
+    sp.folder_edit.setText(str(home))
+    sp.name_edit.setText("Zebra")
+    sp.create_btn.click()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert [x["name"] for x in st["projects"]][-1] == "Zebra"
+    assert st["selected_project"] == sp.last_created_id  # the new project, not row 0
+    src = tmp_path / "b.txt"
+    src.write_bytes(b"b")
+    for name in ("a.txt", "c.txt"):
+        (tmp_path / name).write_bytes(name.encode())
+        ctl.import_document(sp.last_created_id, tmp_path / name)
+    w.documents_tab.list_vm.refresh()
+    from revisionworx.gui.qt.dialogs import ImportDialog
+    tab = w.documents_tab
+    dlg = ImportDialog(ctl, tab.list_vm.project_id, "Zebra", tab,
+                       on_done=lambda res: (tab.list_vm.refresh(), tab.select_document(res.value[0]["id"])))
+    dlg.source.setText(str(src))
+    dlg.start()
+    pump(qapp, ctl, lambda: dlg.flow.state == "done")
+    qapp.processEvents()
+    assert w.observable_state()["selected_document"] == dlg.flow.result[0]["id"]  # middle row b.txt
+    w.close()
+
+
+def test_f5_keeps_selection_and_shows_external_changes(qapp, ctl, tmp_path):
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    ctl.working_file(doc["id"]).unlink()
+    w.refresh_all()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert st["selected_project"] == p["id"] and st["selected_document"] == doc["id"]
+    assert st["documents"][0]["file_state"] == "missing" and "missing" in st["document_status"].lower()
+    assert not st["actions"]["open_file"]
+    w.close()
+
+
+def test_empty_and_no_match_states(qapp, ctl, tmp_path):
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    from revisionworx.workspace import Workspace
+    home = tmp_path / "empty"
+    Workspace.create(home, "Empty").close()
+    w = MainWindow(ctl)
+    w.open_location(home, quiet=True)
+    st = w.observable_state()
+    assert "No projects yet" in st["projects_notice"] and st["selected_project"] is None
+    assert "Select a project" in st["documents_notice"]
+    ctl.close_workspace()
+    p = ctl.quick_start(tmp_path / "one", "Only")
+    w.open_location(tmp_path / "one", quiet=True)
+    w.search.setText("zzz-nothing")
+    w.apply_search()
+    assert "No registered project matches" in w.observable_state()["projects_notice"]
+    assert p["name"] == "Only"
+    w.close()
+
+
+def test_shortcuts_registered(qapp, ctl):
+    from PySide6.QtGui import QKeySequence, QShortcut
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    w = MainWindow(ctl)
+    keys = {sc.key().toString() for sc in w.findChildren(QShortcut)}
+    assert {"Ctrl+I", "Ctrl+K", "Ctrl+Shift+K", "Ctrl+Shift+F"} <= keys
+    menu_keys = {a.shortcut().toString() for m in w.menuBar().actions() if m.menu()
+                 for a in m.menu().actions()}
+    assert QKeySequence(QKeySequence.StandardKey.Refresh).toString() in menu_keys
+    w.close()

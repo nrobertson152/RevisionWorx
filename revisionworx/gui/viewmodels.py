@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .. import projects
-from .controller import (ALPHA_NOTICE, Controller, JobResult, Progress, describe_error,
-                         project_folder_name)
+from .controller import (ALPHA_NOTICE, Controller, JobResult, Progress, SavedWithWarning,
+                         describe_error, project_folder_name)
 
 
 def format_bytes(n: int) -> str:
@@ -83,6 +83,23 @@ class ProjectListModel(Observable):
         self.status_text = (f"Page {self.page + 1} · registered projects: {counts} · "
                             f"unmanaged folders are not searched{stale}")
         self.changed()
+
+    @property
+    def notice(self) -> str:
+        """Empty / error state shown above the project table (never blank when nothing is listed)."""
+        if self.error:
+            return f"⚠ {self.error}"
+        if self.ctl.location is None or self.rows:
+            return ""
+        if self.query.strip():
+            return f"No registered project matches “{self.query.strip()}”."
+        return "No projects yet. Create one with Projects › New project (Ctrl+N)."
+
+    def index_of(self, project_id: str | None) -> int | None:
+        for i, r in enumerate(self.rows):
+            if r["id"] == project_id:
+                return i
+        return None
 
     def set_query(self, text: str, include_archived: bool | None = None) -> None:
         self.query = text
@@ -383,7 +400,7 @@ class DocumentListModel(Observable):
     def can_add(self) -> bool:
         p = self.project
         return bool(p and p.get("mode") == "managed" and p.get("status") == "active" and p.get("folder")
-                    and not self.ctl.busy)
+                    and not self.ctl.busy and not self.ctl.read_only)
 
     @property
     def notice(self) -> str:
@@ -422,10 +439,15 @@ class DocumentPanel(Observable):
         self.ctl = ctl
         self.detail: dict | None = None
         self.message = ""
+        self.message_level = "ok"  # ok | warning | error: colours the message, never implies success
+
+    def set_message(self, text: str, level: str = "ok") -> None:
+        self.message, self.message_level = text, level
+        self.changed()
 
     def load(self, doc_id: str | None, verify_hash: bool = False) -> None:
         if not self.detail or doc_id != self.doc_id:
-            self.message = ""
+            self.message, self.message_level = "", "ok"
         self.detail = self.ctl.document_detail(doc_id, verify_hash) if doc_id else None
         self.changed()
 
@@ -444,6 +466,8 @@ class DocumentPanel(Observable):
     @property
     def severity(self) -> str:
         """``ok`` / ``warning`` / ``error`` for colouring the status line."""
+        if self.message and self.message_level != "ok":
+            return self.message_level
         if not self.detail:
             return "ok"
         state = self.detail["status"]["state"]
@@ -525,11 +549,24 @@ class DocumentPanel(Observable):
     @property
     def can_checkout(self) -> bool:
         return bool(self.detail) and self.detail["checkout"] is None and \
-            self.detail["document"]["status"] == "active" and not self.ctl.busy
+            self.detail["document"]["status"] == "active" and not self.ctl.busy and not self.ctl.read_only
 
     @property
     def can_checkin(self) -> bool:
-        return bool(self.detail) and self.detail["mine"] and not self.ctl.busy
+        return bool(self.detail) and self.detail["mine"] and not self.ctl.busy and not self.ctl.read_only
+
+    @property
+    def ownership_text(self) -> str:
+        """Who holds the checkout, stated plainly (shown next to the actions)."""
+        if not self.detail:
+            return ""
+        co = self.detail["checkout"]
+        if not co:
+            return "Not checked out — available."
+        if self.detail["mine"]:
+            return "Checked out by you (this session can check in)."
+        return (f"Checked out by {co['owner'].get('user')}@{co['owner'].get('host')} since {co['acquired']}. "
+                "Read-only for you.")
 
     can_cancel = can_checkin
 
@@ -541,8 +578,14 @@ class DocumentPanel(Observable):
         return [(s, state_name(self.detail["lifecycle"], s)) for s in self.detail["transitions"]]
 
     def checkout(self) -> None:
-        self.ctl.checkout(self.doc_id)
+        try:
+            self.ctl.checkout(self.doc_id)
+        except SavedWithWarning as w:
+            self.reload()
+            self.set_message(w.warning, "warning")
+            return
         self.reload()
+        self.set_message("Checked out to you. Edit the working file, save it, then Check in.")
 
     def can_restore(self, row: int | None) -> bool:
         """Restoring needs this session's checkout and an OLDER revision (row 0 is the latest)."""
@@ -581,8 +624,15 @@ class DocumentPanel(Observable):
         return "\n".join(lines)
 
     def cancel(self, revert: bool) -> None:
-        self.ctl.cancel_checkout(self.doc_id, revert)
+        try:
+            self.ctl.cancel_checkout(self.doc_id, revert)
+        except SavedWithWarning as w:
+            self.reload()
+            self.set_message(w.warning, "warning")
+            return
         self.reload()
+        self.set_message("Checkout released" + ("; working file restored to the latest revision." if revert
+                                                else "; your working file was left as it is."))
 
     def transition_latest(self, state: str, comment: str = "") -> dict:
         latest = self.detail["latest"]
@@ -598,16 +648,26 @@ class DocumentPanel(Observable):
             return False
 
         def done(res: JobResult):
-            self.message = describe_error(res.error) if res.error else f"Checked in revision {res.value['label']}."
-            self.reload() if not res.error else self.changed()
+            if res.error:
+                self.message, self.message_level = describe_error(res.error), "error"
+                try:  # the view must still reflect reality (e.g. file now missing)
+                    self.reload()
+                except Exception:
+                    self.changed()
+            else:
+                if res.warning:
+                    self.message, self.message_level = res.warning, "warning"
+                else:
+                    self.message, self.message_level = f"Checked in revision {res.value['label']}.", "ok"
+                self.reload()
             if on_done:
                 on_done(res)
         started = self.ctl.start_checkin(self.doc_id, message, label=label or None,
                                          allow_unchanged=allow_unchanged, on_done=done)
         if started:
-            self.message = "Checking in…"
+            self.message, self.message_level = "Checking in…", "ok"
         else:
-            self.message = "Another task is still running; try again in a moment."
+            self.message, self.message_level = "Another task is still running; try again in a moment.", "warning"
         self.changed()
         return started
 
@@ -745,6 +805,9 @@ class ImportFlow(Observable):
         def done(res: JobResult) -> None:
             if res.error:
                 self.state, self.message = "error", describe_error(res.error)
+            elif res.warning:  # saved (CommittedNotApplied): success with a caveat, never "failed"
+                self.state, self.result = "done", None
+                self.message = f"Imported (saved) with a warning:\n{res.warning}"
             else:
                 doc, rev = res.value
                 self.state, self.result = "done", res.value
@@ -771,13 +834,13 @@ class AppStatus(Observable):
         super().__init__()
         self.ctl = ctl
         self.alpha_notice = ALPHA_NOTICE
-        self.health: dict = {"ok": True, "blocked": False, "pending_recovery": 0, "message": ""}
+        self.health: dict = {"ok": True, "blocked": False, "problems": [], "message": ""}
 
     def check(self) -> None:
         try:
             self.health = self.ctl.health()
         except Exception as exc:
-            self.health = {"ok": False, "blocked": False, "pending_recovery": 0, "message": describe_error(exc)}
+            self.health = {"ok": False, "blocked": False, "problems": [], "message": describe_error(exc)}
         self.changed()
 
     @property
@@ -786,4 +849,7 @@ class AppStatus(Observable):
 
     @property
     def health_text(self) -> str:
-        return self.health.get("message", "")
+        text = self.health.get("message", "")
+        if self.blocked:
+            text += "\n\nRevisionWorx is READ-ONLY for this workspace: browsing and exporting work; all changes are disabled."
+        return text

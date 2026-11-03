@@ -16,11 +16,13 @@ import queue
 import shutil
 import stat
 import threading
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from .. import atomicio, documents, paths, projects
+from ..lifecycle import allowed_targets
 from ..clientstate import CheckoutTokens
 from ..index import LocalIndex, open_index
 from ..workspace import Workspace
@@ -46,10 +48,29 @@ def config_dir() -> Path:
 
 @dataclass
 class JobResult:
+    """Outcome of a background job. ``warning`` is set when the change IS saved but something
+    secondary failed (core ``CommittedNotApplied``): callers must present that as success."""
     name: str
     value: Any = None
     error: BaseException | None = None
     on_done: Callable[["JobResult"], None] | None = None
+    warning: str | None = None
+
+    @property
+    def saved(self) -> bool:
+        return self.error is None
+
+
+class SavedWithWarning(Exception):
+    """Internal carrier: the operation's change was durably committed, with a caveat."""
+
+    def __init__(self, warning: str, value: Any = None):
+        super().__init__(warning)
+        self.warning, self.value = warning, value
+
+
+class RecoveryBlocked(Exception):
+    """The workspace is recovery-blocked; the GUI is read-only until health is re-checked."""
 
 
 @dataclass
@@ -70,6 +91,7 @@ class Controller:
         self.results: "queue.Queue[JobResult | Progress]" = queue.Queue()
         self._cancel = threading.Event()
         self._busy = threading.Lock()
+        self.blocked_reason: str | None = None  # set by health(); makes the GUI read-only
 
     # ------------------------------------------------------------------ preferences
     def _prefs_path(self) -> Path:
@@ -102,12 +124,18 @@ class Controller:
             info = {"id": ws.id, "name": ws.name}
         self.location = location
         self.workspace_id = info["id"]
+        self.blocked_reason = None
         self._remember(location)
         return info
 
     def close_workspace(self) -> None:
         self.location = None
         self.workspace_id = None
+        self.blocked_reason = None
+
+    @property
+    def read_only(self) -> bool:
+        return self.blocked_reason is not None
 
     def quick_start(self, folder: Path, project_name: str, number: str = "", customer: str = "",
                     workspace_name: str | None = None) -> dict:
@@ -144,24 +172,30 @@ class Controller:
                 root_id=root_id, rel_path=rel, mode="managed"))
 
     def health(self) -> dict:
-        """Read-only check shown at startup. Never repairs anything (repair needs the writer lock
-        and happens automatically on the next write)."""
-        out = {"ok": True, "blocked": False, "pending_recovery": 0, "message": ""}
+        """Read-only check using the public ``Workspace.verify()`` (CORE_API §5). Never repairs.
+
+        ``blocked`` (WorkspaceCorruptError) makes the GUI read-only until checked again; other
+        problems are shown as a warning only."""
+        out = {"ok": True, "blocked": False, "problems": [], "message": ""}
         if self.location is None:
+            self.blocked_reason = None
             return out
         from ..workspace import WorkspaceCorruptError
         try:
             with self._read() as ws:
-                head, applied = ws.head_seq(), ws.applied_seq()
-                _verify_journal(ws)
+                report = ws.verify()
         except WorkspaceCorruptError as exc:
-            return {"ok": False, "blocked": True, "pending_recovery": 0,
-                    "message": describe_error(exc)}
-        if head > applied:
-            out.update(pending_recovery=head - applied,
-                       message=(f"{head - applied} saved change(s) from an interrupted session have not "
-                                "been fully applied yet. They will be completed automatically by your "
-                                "next change."))
+            self.blocked_reason = str(exc)
+            return {"ok": False, "blocked": True, "problems": [], "message": describe_error(exc)}
+        self.blocked_reason = None
+        problems = [p for p in report.get("problems", []) if p.get("problem") != "entry-without-digest"]
+        if problems:
+            first = problems[0]
+            what = ", ".join(f"{k}={v}" for k, v in first.items())
+            out.update(problems=problems, message=(
+                f"Workspace check found {len(problems)} inconsistenc{'y' if len(problems) == 1 else 'ies'} "
+                f"({what}{', …' if len(problems) > 1 else ''}). If RevisionWorx was interrupted, your next "
+                "change completes it automatically; otherwise run 'revisionworx verify' as an administrator."))
         return out
 
     def _read(self) -> Workspace:
@@ -172,6 +206,8 @@ class Controller:
     def _write(self) -> Workspace:
         if self.location is None:
             raise RuntimeError("no workspace is open")
+        if self.blocked_reason is not None:
+            raise RecoveryBlocked(self.blocked_reason)
         return Workspace.open(self.location, writable=True)
 
     def _index(self, ws: Workspace) -> LocalIndex:
@@ -249,21 +285,36 @@ class Controller:
                     "checkout": {k: v for k, v in co.items() if k != "token"} if co else None,
                     "mine": bool(co and self.tokens.get(ws.id, doc_id) == co["token"]),
                     "latest": latest,
-                    "transitions": documents.lc_mod.allowed_targets(lc, latest["state"]) if latest else []}
+                    "transitions": allowed_targets(lc, latest["state"]) if latest else []}
 
     def doctypes(self) -> dict[str, dict]:
         with self._read() as ws:
             return documents.list_doctypes(ws)
 
     def checkout(self, doc_id: str, note: str = "") -> dict:
+        """Raises SavedWithWarning if the checkout was committed but its token could not be
+        returned by core (CommittedNotApplied): the document IS checked out, but this session
+        cannot prove ownership, so an administrator must release it (API request A6)."""
+        from ..workspace import CommittedNotApplied
         with self._write() as ws:
-            co = documents.checkout(ws, doc_id, note)
+            try:
+                co = documents.checkout(ws, doc_id, note)
+            except CommittedNotApplied as exc:
+                raise SavedWithWarning(
+                    f"The checkout was saved, but this session did not receive its ownership token "
+                    f"({exc}). You cannot check in from here; ask an administrator to release the "
+                    "checkout (audited) and check out again.") from exc
             self.tokens.put(ws.id, doc_id, co["token"])
             return {k: v for k, v in co.items() if k != "token"}
 
     def cancel_checkout(self, doc_id: str, revert: bool = False) -> None:
+        from ..workspace import CommittedNotApplied
         with self._write() as ws:
-            documents.cancel_checkout(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", revert=revert)
+            try:
+                documents.cancel_checkout(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", revert=revert)
+            except CommittedNotApplied as exc:
+                self.tokens.forget(ws.id, doc_id)
+                raise SavedWithWarning(f"The checkout was released. {exc}") from exc
             self.tokens.forget(ws.id, doc_id)
 
     def transition(self, rev_id: str, state: str, comment: str, expected_rev: int | None) -> dict:
@@ -321,7 +372,7 @@ class Controller:
             if rec["mode"] != "managed":
                 raise ImportError_(f"project {rec['name']!r} is {rec['mode']} (search only); documents "
                                    "can only be imported into managed projects")
-            _verify_journal(ws)  # fail closed before touching the project folder
+            ws.verify()  # fail closed (WorkspaceCorruptError) before touching the project folder
             base = projects.project_folder(ws, rec)
             rel = paths.normalize_relative("/".join(p for p in (subfolder.strip("/"), source.name) if p))
             dest = paths.resolve_under_root(base, rel)
@@ -391,18 +442,59 @@ class Controller:
 
     def working_file(self, doc_id: str) -> Path:
         with self._read() as ws:
-            return documents.working_path(ws, documents._require_doc(ws, doc_id))
+            doc = ws.get("document", doc_id)
+            if doc is None:
+                raise documents.DocumentError(f"unknown document {doc_id}")
+            return documents.working_path(ws, doc)
 
     def start_checkin(self, doc_id: str, message: str, label: str | None = None,
-                      allow_unchanged: bool = False, on_done=None) -> bool:
-        """Copy + hash can be slow for large CAD files, so it runs in the background."""
+                      allow_unchanged: bool = False, on_done=None, txid: str | None = None) -> bool:
+        """Copy + hash can be slow for large CAD files, so it runs in the background.
+
+        One ``txid`` per user action (CORE_API §4). If the outcome is ambiguous (an unexpected
+        error after the request may have reached the journal), ``transaction_outcome`` decides:
+        committed -> saved with a warning; otherwise the original error stands."""
+        txid = txid or uuid.uuid4().hex
+
         def job():
-            with self._write() as ws:
-                rev = documents.checkin(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", message,
-                                        label=label, allow_unchanged=allow_unchanged)
-                self.tokens.forget(ws.id, doc_id)
-                return rev
+            return self.checkin_now(doc_id, message, label=label, allow_unchanged=allow_unchanged, txid=txid)
         return self._run("checkin", job, on_done)
+
+    def checkin_now(self, doc_id: str, message: str, label: str | None = None,
+                    allow_unchanged: bool = False, txid: str | None = None) -> dict:
+        from ..workspace import CommittedNotApplied
+        txid = txid or uuid.uuid4().hex
+        ws_id = None
+        try:
+            with self._write() as ws:
+                ws_id = ws.id
+                rev = documents.checkin(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", message,
+                                        label=label, allow_unchanged=allow_unchanged, txid=txid)
+        except CommittedNotApplied as exc:
+            self.tokens.forget(ws_id or self.workspace_id, doc_id)
+            raise SavedWithWarning(f"Checked in. {exc}") from exc
+        except (documents.DocumentError, RecoveryBlocked):
+            raise  # validation refusals: nothing was written
+        except Exception as exc:
+            from ..workspace import ConflictError, WorkspaceLockedError
+            if ws_id is None or isinstance(exc, (ConflictError, WorkspaceLockedError)):
+                raise
+            outcome = self.transaction_outcome(txid)
+            if outcome.get("state") == "committed":
+                self.tokens.forget(ws_id, doc_id)
+                raise SavedWithWarning(
+                    f"Checked in (confirmed from the journal, entry {outcome.get('seq')}), but an error "
+                    f"followed: {describe_error(exc)}") from exc
+            raise
+        self.tokens.forget(ws_id, doc_id)
+        return rev
+
+    def transaction_outcome(self, txid: str) -> dict:
+        try:
+            with self._read() as ws:
+                return ws.transaction_outcome(txid)
+        except Exception as exc:  # cannot determine: never report success
+            return {"state": "unknown", "error": str(exc)}
 
     # ------------------------------------------------------------------ background jobs
     @property
@@ -419,8 +511,13 @@ class Controller:
         self._cancel.clear()
 
         def worker():
+            from ..workspace import CommittedNotApplied
             try:
                 self.results.put(JobResult(name, value=fn(), on_done=on_done))
+            except SavedWithWarning as exc:
+                self.results.put(JobResult(name, value=exc.value, warning=exc.warning, on_done=on_done))
+            except CommittedNotApplied as exc:  # the change IS saved (CORE_API §4)
+                self.results.put(JobResult(name, warning=describe_error(exc), on_done=on_done))
             except BaseException as exc:  # reported to the UI, never swallowed
                 self.results.put(JobResult(name, error=exc, on_done=on_done))
             finally:
@@ -473,6 +570,12 @@ def describe_error(exc: BaseException) -> str:
     from ..workspace import (CommittedNotApplied, ConflictError, IdentityUnverifiable, LockLostError,
                              ReadOnlyError, WorkspaceCorruptError, WorkspaceFormatError,
                              WorkspaceLockedError)
+    if isinstance(exc, SavedWithWarning):
+        return exc.warning
+    if isinstance(exc, RecoveryBlocked):
+        return (f"The workspace is read-only because it is recovery-blocked:\n{exc}\n\nNothing was "
+                "written. An administrator must resolve this with the command-line tools; then use "
+                "Workspace \u203a Check workspace health.")
     if isinstance(exc, WorkspaceCorruptError):
         return (f"RECOVERY BLOCKED \u2014 the workspace's saved history failed an integrity check:\n{exc}\n\n"
                 "To protect your data, RevisionWorx refuses all changes. Nothing was written. Do not "
@@ -510,7 +613,7 @@ def describe_error(exc: BaseException) -> str:
     if isinstance(exc, ConflictError):
         return f"{exc}\n\nSomeone else changed this item while you were viewing it. Reload and reapply your change."
     if isinstance(exc, CommittedNotApplied):
-        return f"Your change was saved.\n\n{exc}"
+        return f"Saved. Your change is recorded, but finishing it was delayed:\n{exc}"
     if isinstance(exc, WorkspaceLockedError):
         return (f"{exc}\n\nAnother RevisionWorx session is saving changes. Try again in a moment. "
                 "If that session crashed, an administrator can release the lock with "
@@ -520,15 +623,6 @@ def describe_error(exc: BaseException) -> str:
     if isinstance(exc, OSError):
         return f"File system or network error: {exc}\nThe share may be unavailable."
     return str(exc) or exc.__class__.__name__
-
-
-def _verify_journal(ws: Workspace) -> None:
-    """Raise WorkspaceCorruptError if any journal entry fails its seq/SHA-256 digest check.
-
-    O(journal); acceptable for alpha-sized workspaces. A core read-only health API is requested in
-    the Issue #13 API dependency list so the GUI does not have to do this itself."""
-    for seq in ws.journal_seqs():
-        ws.read_entry(seq)
 
 
 def project_folder_name(name: str, number: str = "") -> str:

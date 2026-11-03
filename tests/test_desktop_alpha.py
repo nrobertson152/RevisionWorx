@@ -297,33 +297,145 @@ def test_permission_error_text():
     assert "Permission denied" in describe_error(PermissionError(13, "denied", "/x/y"))
 
 
-def test_recovery_blocked_workspace_is_reported_and_refuses_writes(started):
-    c, home, project, src = started
-    journal = home / ".revisionworx" / "journal"
-    entry = sorted(journal.glob("*.json"))[-1]
+def _tamper_journal(home):
+    entry = sorted((home / ".revisionworx" / "journal").glob("*.json"))[-1]
     data = json.loads(entry.read_text())
     data["op"] = data["op"] + "-tampered"
     entry.write_text(json.dumps(data))
-    status = AppStatus(c)
-    status.check()
-    assert status.blocked and "RECOVERY BLOCKED" in status.health_text
+
+
+def test_recovery_blocked_workspace_is_reported_and_refuses_writes(started):
+    c, home, project, src = started
+    _tamper_journal(home)
+    # Without a prior health check, import still fails closed BEFORE copying (public verify()).
     with pytest.raises(WorkspaceCorruptError) as ei:
         c.import_document(project["id"], src, "")
     assert "Nothing was written" in describe_error(ei.value)
     assert not (home / "Projects" / "P-100 Bracket" / "bracket.ipt").exists()
+    status = AppStatus(c)
+    status.check()
+    assert status.blocked and "RECOVERY BLOCKED" in status.health_text and "READ-ONLY" in status.health_text
+    assert c.read_only
+    with pytest.raises(ctl_mod.RecoveryBlocked) as ei:  # gate: the lock is never even requested
+        c.import_document(project["id"], src, "")
+    assert "read-only" in describe_error(ei.value)
+    vm = DocumentListModel(c)
+    vm.load(project["id"])
+    assert not vm.can_add  # browsing works, changes are disabled
 
 
-def test_pending_recovery_is_reported_without_repairing(started):
+def test_recovery_blocked_disables_document_actions_and_recheck_clears(started):
     c, home, project, src = started
-    state = home / ".revisionworx" / "state.json"
-    applied = json.loads(state.read_text())["applied_seq"]
-    with Workspace.open(home) as ws:
-        head = ws.head_seq()
-    assert head == applied
-    state.write_text(json.dumps({"applied_seq": applied - 1}))
+    doc, _ = c.import_document(project["id"], src, "")
+    entry = sorted((home / ".revisionworx" / "journal").glob("*.json"))[-1]
+    original = entry.read_bytes()
+    _tamper_journal(home)
+    c.health()
+    panel = DocumentPanel(c)
+    panel.load(doc["id"])  # reading still works
+    assert panel.history and not panel.can_checkout and not panel.can_checkin
+    entry.write_bytes(original)  # an administrator repaired it
+    assert c.health()["ok"] and not c.read_only and panel.can_checkout
+
+
+def test_health_reports_record_problems_read_only_without_repair(started):
+    c, home, project, src = started
+    rec = home / ".revisionworx" / "records" / "project" / f"{project['id']}.json"
+    rec.unlink()
     h = c.health()
-    assert h["ok"] and h["pending_recovery"] == 1 and "automatically" in h["message"]
-    assert json.loads(state.read_text())["applied_seq"] == applied - 1  # health check is read-only
+    assert h["ok"] and not h["blocked"] and h["problems"] and "inconsistenc" in h["message"]
+    assert not rec.exists()  # health never repairs
+    assert not c.read_only
+
+
+# ---------------------------------------------------------------------------- ambiguous outcomes
+def test_checkin_committed_not_applied_is_success_with_warning(started, monkeypatch):
+    """CORE_API §4: CommittedNotApplied means saved. Never shown as failure, token released."""
+    c, home, project, src = started
+    doc, _ = c.import_document(project["id"], src, "")
+    c.checkout(doc["id"])
+    c.working_file(doc["id"]).write_bytes(b"v2")
+    real = documents.checkin
+
+    def committed_then_fail(ws, *a, **k):
+        rev = real(ws, *a, **k)
+        raise CommittedNotApplied(rev["_rev"], k.get("txid") or "tx", OSError("records dir busy"))
+    monkeypatch.setattr(documents, "checkin", committed_then_fail)
+    panel = DocumentPanel(c)
+    panel.load(doc["id"])
+    assert panel.start_checkin("Second revision with lagging records")
+    pump(c, lambda: not panel.message.startswith("Checking in"))
+    assert panel.message.startswith("Checked in.") and panel.message_level == "warning"
+    assert "fail" not in panel.message.lower().split("records")[0]
+    assert panel.detail["document"]["rev_count"] == 2
+    with Workspace.open(home) as ws:
+        assert c.tokens.get(ws.id, doc["id"]) is None
+
+
+def test_checkin_ambiguous_error_resolved_by_transaction_outcome(started, monkeypatch):
+    c, home, project, src = started
+    doc, _ = c.import_document(project["id"], src, "")
+    c.checkout(doc["id"])
+    c.working_file(doc["id"]).write_bytes(b"v2")
+    real = documents.checkin
+
+    def committed_then_crash(ws, *a, **k):
+        real(ws, *a, **k)
+        raise OSError(5, "I/O error after publish")
+    monkeypatch.setattr(documents, "checkin", committed_then_crash)
+    with pytest.raises(ctl_mod.SavedWithWarning) as ei:
+        c.checkin_now(doc["id"], "Committed despite I/O error")
+    assert "confirmed from the journal" in ei.value.warning
+
+
+def test_checkin_ambiguous_error_not_committed_is_reported_as_failure(started, monkeypatch):
+    """No false success: the journal does not contain the txid, so the error stands."""
+    c, home, project, src = started
+    doc, _ = c.import_document(project["id"], src, "")
+    c.checkout(doc["id"])
+    c.working_file(doc["id"]).write_bytes(b"v2")
+
+    def crash_before_publish(*a, **k):
+        raise OSError(5, "I/O error before publish")
+    monkeypatch.setattr(documents, "checkin", crash_before_publish)
+    panel = DocumentPanel(c)
+    panel.load(doc["id"])
+    panel.start_checkin("This must not be reported as checked in")
+    pump(c, lambda: not panel.message.startswith("Checking in"))
+    assert panel.message_level == "error" and "Checked in" not in panel.message
+    assert panel.detail["document"]["rev_count"] == 1 and panel.can_checkin  # still mine, retry possible
+
+
+def test_checkout_committed_not_applied_warns_token_lost(started, monkeypatch):
+    c, home, project, src = started
+    doc, _ = c.import_document(project["id"], src, "")
+    real = documents.checkout
+
+    def committed(ws, *a, **k):
+        co = real(ws, *a, **k)
+        raise CommittedNotApplied(co["_rev"], "tx", OSError("lag"))
+    monkeypatch.setattr(documents, "checkout", committed)
+    panel = DocumentPanel(c)
+    panel.load(doc["id"])
+    panel.checkout()
+    assert panel.message_level == "warning" and "administrator" in panel.message
+    assert panel.detail["checkout"] is not None and not panel.can_checkin
+
+
+def test_import_committed_not_applied_reports_saved(started, monkeypatch):
+    c, home, project, src = started
+    real = documents.register_document
+
+    def committed(ws, *a, **k):
+        doc, rev = real(ws, *a, **k)
+        raise CommittedNotApplied(doc["_rev"], "tx", OSError("lag"))
+    monkeypatch.setattr(documents, "register_document", committed)
+    flow = ImportFlow(c, project["id"])
+    flow.set_source(str(src))
+    flow.start()
+    pump(c, lambda: flow.state in ("done", "error"))
+    assert flow.state == "done" and "saved" in flow.message and "warning" in flow.message
+    assert len(c.documents(project["id"])) == 1
 
 
 # ---------------------------------------------------------------------------- workflow 6
