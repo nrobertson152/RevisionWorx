@@ -350,10 +350,23 @@ def checkin(ws: Workspace, doc_id: str, token: str, description: str, label: str
     With a ``txid``, a retry returns the original revision and captures nothing new (CORE_API 4)."""
     if not description.strip():
         raise DocumentError("a change description is required")
-    if txid is not None:
+    if txid is None:
+        return _checkin(ws, doc_id, token, description, label, allow_unchanged, None)
+    earlier = _earlier_checkin(ws, doc_id, txid, description, label)
+    if earlier is not None:
+        return earlier
+    try:
+        return _checkin(ws, doc_id, token, description, label, allow_unchanged, txid)
+    except (NotCheckedOut, TokenMismatch, StaleCheckout, ConflictError, TxidReuseError):
+        # Another attempt with this txid may have got there while this one was stopped: same answer as a retry.
         earlier = _earlier_checkin(ws, doc_id, txid, description, label)
         if earlier is not None:
             return earlier
+        raise
+
+
+def _checkin(ws: Workspace, doc_id: str, token: str, description: str, label: str | None, allow_unchanged: bool,
+             txid: str | None) -> dict:
     doc = _require_doc(ws, doc_id)
     co = _require_checkout(ws, doc_id, token)
     if doc["latest_rev_id"] != co["base_rev_id"]:

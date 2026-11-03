@@ -110,6 +110,28 @@ def test_checkin_refuses_a_txid_spent_on_a_different_request(world, change):
     assert len(D.history(ws, doc["id"])) == 2
 
 
+def test_a_stopped_checkin_reports_the_retry_that_finished_for_it(world):
+    """Found by systematic exploration: stopped after its first look, the original attempt resumed to find the checkout
+    consumed by its own retry, and reported NotCheckedOut for a change that had been saved."""
+    share, ws, _, doc, path = world
+    co = D.checkout(ws, doc["id"])
+    path.write_bytes(b"IPT v2")
+    txid = uuid.uuid4().hex
+    real, done = D._require_checkout, {}
+
+    def retry_finishes_first(handle, doc_id, token):
+        monkey.setattr(D, "_require_checkout", real)
+        Workspace.break_writer_lock(share, ws._lock_token, "unresponsive")
+        with Workspace.open(share, writable=True) as retry:
+            done["rev"] = D.checkin(retry, doc_id, token, "second", txid=txid)
+        return real(handle, doc_id, token)
+    with pytest.MonkeyPatch.context() as monkey:
+        monkey.setattr(D, "_require_checkout", retry_finishes_first)
+        result = D.checkin(ws, doc["id"], co["token"], "second", txid=txid)
+    assert done and result == done["rev"]
+    ws._lock_token = None
+
+
 def _just_before_choosing_a_sequence(handle, during):
     """Run ``during`` when ``handle`` is past every check and about to pick its journal sequence."""
     real, calls = handle.head_seq, []

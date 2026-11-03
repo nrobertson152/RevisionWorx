@@ -204,8 +204,13 @@ Done:
 
 - `docs/CORE_INVARIANTS.md`: the invariant and failure map, with the test that guards each part.
 
+- `tests/test_lock_protocol_systematic.py`: stateless model checking with context bounding, over the real code. With
+  mutation checks that put the `d2b7a1c` defect back and remove fencing: the explorer must find them, and does. It
+  found one more defect, now fixed: a stopped check-in resumed after its own retry finished and reported `NotCheckedOut`
+  for a saved change.
+
 Not done yet, in priority order:
-1. Systematic, preemption-bounded schedule exploration, with a negative control on `d2b7a1c`.
+1. Exhaustive local run of the systematic explorer, plus its negative control on historical sources.
 2. Sweep old `.<name>.rwx-*.tmp` leftovers next to a working file after a crash.
 3. Claude B's API requests A1-A7 (triage on PR #7).
 
