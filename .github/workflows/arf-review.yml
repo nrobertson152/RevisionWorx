@@ -68,13 +68,21 @@ jobs:
           DEFAULT: ${{ github.event.repository.default_branch }}
         run: |
           mkdir -p "$RUNNER_TEMP/arf-base"
-          git archive "origin/$DEFAULT" tools .agents | tar -x -C "$RUNNER_TEMP/arf-base"
+          if git archive "origin/$DEFAULT" tools/arf.py .agents > "$RUNNER_TEMP/arf-base.tar" 2>/dev/null; then
+            tar -x -C "$RUNNER_TEMP/arf-base" -f "$RUNNER_TEMP/arf-base.tar"
+          fi
       - name: Gate and prepare context
         id: prep
         env:
           GH_TOKEN: ${{ github.token }}
           ARF_STATUS_TOKEN: ${{ github.token }}
-        run: python3 -I "$RUNNER_TEMP/arf-base/tools/arf.py" prepare-review --event "$GITHUB_EVENT_PATH"
+        run: |
+          if [ ! -f "$RUNNER_TEMP/arf-base/tools/arf.py" ]; then
+            echo "::notice::ARF is not on the default branch yet (this is the install PR); skipping review."
+            printf 'skip=ARF not installed on the default branch\nsilent=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 -I "$RUNNER_TEMP/arf-base/tools/arf.py" prepare-review --event "$GITHUB_EVENT_PATH"
       - uses: actions/upload-artifact@v4
         if: steps.prep.outputs.skip == ''
         with:
