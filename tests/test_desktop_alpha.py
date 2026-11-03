@@ -276,7 +276,7 @@ def test_externally_modified_file_is_flagged(started):
     c.working_file(doc["id"]).write_bytes(b"edited without checkout!")
     panel = DocumentPanel(c)
     panel.load(doc["id"])
-    assert panel.severity == "warning" and "WITHOUT a checkout" in panel.status_text
+    assert panel.severity == "warning" and "without a checkout" in panel.status_title
 
 
 @pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),

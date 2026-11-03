@@ -584,12 +584,12 @@ class DocumentPanel(Observable):
         r = self.history[row]
         from ..lifecycle import state_name
         lc = self.detail["lifecycle"]
-        lines = [f"Revision {r['label']} (#{r['number']}) — {state_name(lc, r['state'])}",
+        lines = [r.get("description", ""), "",
+                 f"Revision {r['label']} (#{r['number']})  ·  {state_name(lc, r['state'])}",
                  f"Checked in {r['created']} by {r['author'].get('user', '?')}@{r['author'].get('host', '?')}",
-                 f"Size {format_bytes(r['size'])} · SHA-256 {r['sha256']}",
-                 "", r.get("description", "")]
+                 f"Size {format_bytes(r['size'])}  ·  SHA-256 {r['sha256']}"]
         if r.get("restored_from"):
-            lines.insert(2, "Restored from an earlier revision.")
+            lines.append("Restored from an earlier revision.")
         if r.get("transitions"):
             lines += ["", "State changes:"]
             lines += [f"  {t['time']}  {state_name(lc, t['from'])} → {state_name(lc, t['to'])}  "

@@ -53,13 +53,14 @@ def focus_chain(start) -> list[str]:
 def test_tab_order_follows_the_screen(setup):
     """Regression: Tab went through the whole document panel before the paging buttons under the project list."""
     w, *_ = setup
-    w.prev_btn.setEnabled(True)
-    w.next_btn.setEnabled(True)
+    for btn in (w.prev_btn, w.next_btn):
+        btn.setVisible(True)
+        btn.setEnabled(True)
     chain = focus_chain(w.search)
-    order = ["main_search", "main_archived", "main_adopt_btn", "main_new_btn", "main_table", "main_prev_btn",
-             "main_next_btn", "main_open_btn", "main_archive_btn", "documents_filter", "documents_table",
-             "documents_checkout_btn", "documents_checkin_btn", "documents_transition_box",
-             "documents_compare_btn", "documents_history", "documents_revision_detail"]
+    order = ["main_search", "main_new_btn", "main_table", "main_prev_btn", "main_next_btn", "main_archived",
+             "main_help_btn", "documents_import_btn", "main_project_menu_btn", "documents_filter_all", "documents_filter",
+             "documents_table", "documents_checkout_btn", "documents_open_file_btn", "documents_more_btn",
+             "documents_state_btn", "documents_history"]
     assert [n for n in chain if n in order] == order
 
 
@@ -143,7 +144,7 @@ def test_arrow_keys_change_the_selected_document(qapp, setup, tmp_path):
     tab = w.documents_tab
     tab.list_vm.refresh()
     tab.table.setFocus()
-    tab.table.setCurrentIndex(tab.table.model().index(0, 0))
+    tab.table.selectRow(0)
     QTest.keyClick(tab.table, Qt.Key.Key_Down)
     qapp.processEvents()
     assert w.observable_state()["selected_document"] == other["id"]

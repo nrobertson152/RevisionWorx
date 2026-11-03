@@ -246,6 +246,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget(main)
         tabs.tabBar().hide()  # the project menu opens the other pages; each has its own way back
         tabs.setDocumentMode(True)
+        tabs.setAccessibleName("Project contents")
         self.tabs = tabs
         tabs.addTab(self.documents_tab, "Documents")
         files_page = QWidget(tabs)
@@ -506,6 +507,7 @@ class MainWindow(QMainWindow):
         self.status_vm.check()
         self.list_vm.set_query(self.search.text(), self.archived.isChecked())
         self.select_project(select_project)
+        self.documents_tab.table.setFocus()  # where work starts; arrow keys and Enter act on the list
         return True
 
     def select_project(self, project_id: str | None) -> None:

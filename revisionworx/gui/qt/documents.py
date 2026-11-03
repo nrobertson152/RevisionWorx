@@ -106,7 +106,7 @@ class DocumentsTab(QWidget):
         ll.setContentsMargins(12, 8, 12, 8)
         ll.setSpacing(2)
         heads = QHBoxLayout()
-        heads.setContentsMargins(PAD, 2, PAD + 10, 4)
+        heads.setContentsMargins(PAD, 2, PAD, 4)
         heads.setSpacing(GAP)
         for text, width in (("Document", 0), ("Number", NUMBER_W), ("Rev", REV_W), ("State", STATE_W)):
             head = QLabel(text, left)
@@ -132,7 +132,7 @@ class DocumentsTab(QWidget):
         self.no_match.setContentsMargins(PAD, 8, PAD, 8)
         self.no_match.hide()
         ll.addWidget(self.no_match)
-        left.setMinimumWidth(440)
+        left.setMinimumWidth(420)
 
         self.detail_host = QWidget(split)
         self.detail_host.setMinimumWidth(320)
@@ -225,7 +225,7 @@ class DocumentsTab(QWidget):
 
         # The contract's other buttons do the same jobs from the More menu and the history.
         self.cancel_btn = QPushButton("&Cancel checkout…", self.body)
-        self.open_dir_btn = QPushButton("Show in fo&lder", self.body)
+        self.open_dir_btn = QPushButton("Show in folder", self.body)
         self.transition_box = QComboBox(self.body)
         self.transition_box.setAccessibleName("Next lifecycle state")
         self.transition_btn = QPushButton("Change &state", self.body)

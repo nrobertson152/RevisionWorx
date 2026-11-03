@@ -12,7 +12,7 @@ from PySide6.QtCore import QByteArray, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QGuiApplication, QIcon, QImage, QPainter, QPalette,
                            QPixmap)
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QProxyStyle, QStyle
 
 LIGHT = {
     "ground": "#F2F4F7", "surface": "#FFFFFF", "hover": "#E8EBF0", "tint": "#E6EFFC", "tintHover": "#DCE8FA",
@@ -63,6 +63,15 @@ BASE_PX = 14
 current: dict[str, str] = LIGHT
 current_name = "light"
 _fonts_loaded = False
+
+
+class _AppStyle(QProxyStyle):
+    """Fusion, without a permanent underline under every shortcut letter. Alt keys still work."""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: N802 - Qt API
+        if hint == QStyle.StyleHint.SH_UnderlineShortcut:
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
 
 
 def fonts_dir() -> Path:
@@ -119,7 +128,7 @@ def install(name: str | None = None) -> dict[str, str]:
         return current  # restyling is costly: it repolishes every widget in the application
     app.setProperty("revisionworxTheme", current_name)
     load_fonts()
-    app.setStyle("Fusion")
+    app.setStyle(_AppStyle("Fusion"))
     app.setFont(ui_font())
     app.setPalette(palette(current))
     app.setStyleSheet(stylesheet(current))
@@ -153,7 +162,6 @@ QWidget {{ color: {t['ink']}; }}
 QMainWindow, QDialog, QMessageBox, QStackedWidget, QSplitter {{ background: {t['surface']}; }}
 QMessageBox {{ messagebox-text-interaction-flags: 3; }}
 QFrame#sidebar {{ background: {t['ground']}; border-right: 1px solid {t['line']}; }}
-QFrame#sidebar QLabel {{ background: transparent; }}
 QFrame#card {{ background: {t['surface']}; border: 1px solid {t['line']}; border-radius: 12px; }}
 QFrame#dropZone {{ border: 2px dashed {t['lineStrong']}; border-radius: 12px; }}
 QFrame#revisionCard {{ background: {t['ground']}; border-radius: 8px; }}

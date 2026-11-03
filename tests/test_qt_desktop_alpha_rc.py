@@ -116,8 +116,8 @@ def test_history_and_actions_are_usable_at_default_and_minimum_size(qapp, ctl, t
     tab = w.documents_tab
     assert _row_capacity(tab.history) >= 3, tab.history.viewport().height()
     assert _row_capacity(tab.table) >= 3, tab.table.viewport().height()
-    for btn in (tab.checkout_btn, tab.checkin_btn, tab.cancel_btn, tab.open_file_btn, tab.open_dir_btn,
-                tab.transition_btn, tab.export_btn, tab.compare_btn, tab.restore_btn):
+    assert tab.checkout_btn.isVisible() and not tab.checkin_btn.isVisible()  # one main button at a time
+    for btn in (tab.checkout_btn, tab.open_file_btn, tab.more_btn, tab.state_btn):
         assert btn.isVisible() and btn.height() >= btn.minimumSizeHint().height(), btn.text()
         assert btn.width() >= btn.minimumSizeHint().width(), btn.text()
         right = btn.mapTo(tab, btn.rect().bottomRight())
@@ -429,7 +429,8 @@ def test_recovery_blocked_disables_every_write_action(qapp, ctl, tmp_path, boxes
     assert st["read_only"] and st["selected_document"] == docs[0]["id"]
     assert not any(st["actions"][k] for k in ("new_project", "import", "register", "checkout", "checkin",
                                               "cancel_checkout", "restore", "change_state", "archive", "adopt"))
-    assert not tab.transition_btn.isEnabled() and not w.archive_btn.isEnabled()
+    assert not tab.transition_btn.isEnabled() and not tab.state_btn.isEnabled() and not w.archive_btn.isEnabled()
+    assert not w.act_archive.isEnabled()
     for text in WRITE_MENU:
         assert not _menu_action(w, text).isEnabled(), text
     assert tab.export_btn.isEnabled()  # browsing and export still work
@@ -795,6 +796,9 @@ def test_default_window_leaves_room_for_the_title_bar(qapp, ctl, monkeypatch):
     class Screen:
         def availableGeometry(self):
             return QRect(0, 0, 1366, 768)
+
+        def devicePixelRatio(self):
+            return 1.0
     monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: Screen()))
     w = MainWindow(ctl)
     assert w.height() <= 768 - 30 and w.width() <= 1366
@@ -845,3 +849,142 @@ def test_crash_lock_message_names_the_real_folder(qapp, ctl, tmp_path, boxes):
         holder.close()
     assert f'-w "{home}"' in boxes[0][1][1]
     w.close()
+
+
+# ---------------------------------------------------------------------------- redesigned screens
+def test_one_main_button_follows_the_document_state(qapp, ctl, tmp_path):
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    w.show()
+    tab.select_document(docs[0]["id"])
+    qapp.processEvents()
+    visible = lambda: [b for b in (tab.checkout_btn, tab.checkin_btn, tab.restore_file_btn) if b.isVisible()]
+    assert visible() == [tab.checkout_btn] and tab.status_title.text() == "Available"
+    tab.checkout()
+    qapp.processEvents()
+    assert visible() == [tab.checkin_btn] and tab.status_title.text() == "Checked out by you"
+    ctl.working_file(docs[0]["id"]).write_bytes(b"edited")
+    tab.refresh()
+    qapp.processEvents()
+    assert visible() == [tab.checkin_btn] and tab.status_title.text() == "You changed this file"
+    w.close()
+
+
+def test_restore_file_brings_back_a_missing_file_without_a_new_revision(qapp, ctl, tmp_path, boxes):
+    w, _home, _p, docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    w.show()
+    tab.select_document(docs[0]["id"])
+    path = ctl.working_file(docs[0]["id"])
+    original = path.read_bytes()
+    path.unlink()
+    tab.refresh()
+    qapp.processEvents()
+    assert tab.restore_file_btn.isVisible() and not tab.checkout_btn.isVisible() and tab.panel.tone == "danger"
+    tab.restore_file_btn.click()
+    qapp.processEvents()
+    assert path.read_bytes() == original and not boxes
+    assert tab.history_model.rowCount() == 1 and tab.panel.detail["checkout"] is None
+    assert "Restored revision" in tab.status.text() and tab.checkout_btn.isVisible()
+    assert docs[0]["id"] not in ctl.my_checkouts()
+    w.close()
+
+
+def test_filters_count_and_show_the_right_documents(qapp, ctl, tmp_path):
+    w, _home, _p, docs = window(qapp, ctl, tmp_path, ("a.txt", "b.txt", "c.txt"))
+    tab = w.documents_tab
+    ctl.checkout(docs[0]["id"])
+    ctl.working_file(docs[1]["id"]).unlink()
+    tab.list_vm.refresh()
+    assert tab.filter_buttons["mine"].text().endswith("1") and tab.filter_buttons["attention"].text().endswith("1")
+    tab.set_show("mine")
+    assert [r["id"] for r in tab.list_vm.rows] == [docs[0]["id"]] and tab.panel.doc_id == docs[0]["id"]
+    tab.set_show("attention")
+    assert [r["id"] for r in tab.list_vm.rows] == [docs[1]["id"]] and tab.panel.doc_id == docs[1]["id"]
+    assert tab.list_vm.row_tag(0) == ("File missing", "danger")
+    tab.set_show("all")
+    assert len(tab.list_vm.rows) == 3 and tab.filter_buttons["all"].isChecked()
+    w.close()
+
+
+def test_project_list_counts_your_checkouts(qapp, ctl, tmp_path):
+    w, _home, p, docs = window(qapp, ctl, tmp_path)
+    assert w.checkout_count == {}
+    w.documents_tab.select_document(docs[0]["id"])
+    w.documents_tab.checkout()
+    assert w.checkout_count == {p["id"]: 1}
+    w.close()
+
+
+def test_empty_project_invites_the_first_file(qapp, ctl, tmp_path):
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    p = ctl.quick_start(tmp_path / "home", "Empty")
+    w = MainWindow(ctl)
+    w.show()
+    assert w.open_location(tmp_path / "home", quiet=True, select_project=p["id"])
+    qapp.processEvents()
+    tab = w.documents_tab
+    assert tab.pages.currentWidget() is tab.empty_box and tab.choose_btn.isVisible() and not tab.filter_row.isVisible()
+    (tmp_path / "a.txt").write_bytes(b"a")
+    ctl.import_document(p["id"], tmp_path / "a.txt")
+    tab.list_vm.refresh()
+    qapp.processEvents()
+    assert tab.pages.currentWidget() is not tab.empty_box and tab.filter_row.isVisible()
+    w.close()
+
+
+def test_adding_a_file_already_in_the_project_registers_it_in_place(qapp, ctl, tmp_path):
+    """One Add files action: the app works out whether to copy or register. Nothing is moved."""
+    w, _home, p, docs = window(qapp, ctl, tmp_path)
+    inside = ctl.working_file(docs[0]["id"]).parent / "in_place.txt"
+    inside.write_bytes(b"here")
+    doc, rev = ctl.import_document(p["id"], inside)
+    assert doc["rel_path"] == "in_place.txt" and rev and inside.read_bytes() == b"here"
+    w.close()
+
+
+def test_dropping_a_file_opens_the_add_dialog(qapp, ctl, tmp_path):
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDropEvent
+    w, _home, _p, _docs = window(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    src = tmp_path / "dropped.ipt"
+    src.write_bytes(b"x")
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(src))])
+    tab.dropEvent(QDropEvent(QPointF(5, 5), Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.NoModifier))
+    assert tab.dialogs and tab.dialogs[-1].source.text().endswith("dropped.ipt")
+    tab.dialogs[-1].close()
+    w.close()
+
+
+def test_menu_bar_is_hidden_but_its_shortcuts_still_work(qapp, ctl, tmp_path, monkeypatch):
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    w = MainWindow(ctl)
+    assert w.menuBar().isHidden()
+    window_actions = {a.text() for a in w.actions()}
+    assert {"Open workspace…", "Close workspace", "Refresh", "Quit", "New project…"} <= window_actions
+    assert w.workspace_btn.menu() is w.workspace_menu and w.help_btn.menu() is w.help_menu
+    w.close()
+
+
+def test_new_project_dialog_offers_an_existing_folder(qapp, ctl, tmp_path):
+    from revisionworx.gui.qt.dialogs import NewProjectDialog
+    w, *_ = window(qapp, ctl, tmp_path)
+    dlg = NewProjectDialog(ctl, w)
+    link = next(b for b in dlg.findChildren(QtWidgets.QPushButton) if "existing folder" in b.text())
+    link.click()
+    assert dlg.result() == NewProjectDialog.USE_EXISTING_FOLDER
+    w.close()
+
+
+def test_friendly_time_reads_like_a_person_wrote_it():
+    from datetime import datetime, timedelta
+    from revisionworx.gui.viewmodels import friendly_time
+    now = datetime(2026, 11, 2, 21, 0).astimezone()
+    assert friendly_time(now.replace(hour=9, minute=5).isoformat(), now) == "Today at 9:05 AM"
+    assert friendly_time((now - timedelta(days=1)).isoformat(), now) == "Yesterday at 9:00 PM"
+    assert friendly_time(now.replace(month=10, day=30, hour=16, minute=12).isoformat(), now) == "Oct 30 at 4:12 PM"
+    assert friendly_time(now.replace(year=2025, month=3, day=4).isoformat(), now) == "Mar 4, 2025"
+    assert friendly_time("not a date", now) == "not a date"

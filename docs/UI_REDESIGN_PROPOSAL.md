@@ -1,8 +1,8 @@
 # RevisionWorx UI redesign proposal
 
-**Status: the Director reviewed the mockup on 2026-11-02 ("that's awesome, great job"). Being built on `feature/ui-redesign`, stacked on `feature/desktop-alpha`, so the alpha merge testing is not disturbed.**
+**Status: PAUSED by the Director on 2026-11-02 so the GUI work can focus on integration conflicts and alpha acceptance. Do not resume without the Director's go-ahead.**
 
-This approves the direction. It is not a merge or release approval. D1, D3, D4 and D6 below were not answered individually, so the build follows the recommendations, and the Director told they can overrule them: side by side, dark mode follows the system, no menu bar, one Add files action. D5, the logo, is still needed.
+The Director liked the mockup ("that's awesome, great job"), which approved the direction but not a merge or release. Work so far is on `feature/ui-redesign`, stacked on `feature/desktop-alpha`, and is not part of the alpha. It is unfinished: see the status of the last commit on that branch. D1, D3, D4 and D6 below were not answered individually, so the build followed the recommendations. D5, the logo, is still needed.
 
 The Director reviewed the working GUI and said it looks cluttered and outdated, and asked for a very intuitive design. Everything up to `d4e3623` fixed behaviour and made the screens fit. None of it was visual design.
 

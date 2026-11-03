@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMessageBox, QPushButton, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from ..controller import ALPHA_NOTICE, Controller, describe_error
 from ...workspace import CommittedNotApplied
@@ -30,9 +30,17 @@ class StartPage(QWidget):
         self.ctl = ctl
         self.form = QuickStartForm(folder=default_projects_folder())
         self.last_created_id: str | None = None
-        page = QHBoxLayout(self)
+        scroll = QScrollArea(self)  # never forces the window taller than a small screen
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(scroll)
+        inner = QWidget(scroll)
+        scroll.setWidget(inner)
+        page = QHBoxLayout(inner)
         page.addStretch(1)
-        column = QWidget(self)
+        column = QWidget(inner)
         column.setMaximumWidth(480)
         column.setMinimumWidth(380)
         outer = QVBoxLayout(column)
@@ -84,6 +92,7 @@ class StartPage(QWidget):
         self.number_edit.setPlaceholderText("e.g. P-1042")
         self.number_edit.setAccessibleName("Project number")
         self.customer_edit = QLineEdit(box)  # set later, in the project's details
+        self.customer_edit.setAccessibleName("Customer")
         self.customer_edit.setVisible(False)
         field("Project &name", self.name_edit)
         field("Project n&umber (optional)", self.number_edit)
@@ -165,8 +174,10 @@ class StartPage(QWidget):
         self.form.name = self.name_edit.text()
         self.form.number = self.number_edit.text()
         self.form.customer = self.customer_edit.text()
-        self.preview.setText(self.form.project_path_preview or "—")
-        self.preview.setToolTip(self.form.project_path_preview)
+        path = self.form.project_path_preview
+        self.preview.setText(f"Will create {path}" if path else "")
+        self.preview.setToolTip(path)
+        self.preview.setVisible(bool(path))
 
     def browse(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Folder for your RevisionWorx projects", self.folder_edit.text())
