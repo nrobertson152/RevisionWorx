@@ -51,5 +51,13 @@ run project list > "$scratch/projects.json"
 jq -e 'all(.[]; .name != "Denied")' "$scratch/projects.json" >/dev/null
 run doc verify --id "$doc" > "$scratch/after-denial.json"
 jq -e '. == []' "$scratch/after-denial.json" >/dev/null
+# A frozen revision must remain readable after a fresh CLI process opens
+# the same installed workspace. The two exported generations must match their
+# respective source snapshots even after an unrelated denied operation.
+run rev export "$first_revision" "$scratch/reopened-original.txt" > "$scratch/reopened-export.json"
+test "$(sha256sum "$scratch/reopened-original.txt" | cut -d ' ' -f1)" = "$original"
+second_revision=$(jq -er '.id | select(type == "string" and length > 0)' "$scratch/revision.json")
+run rev export "$second_revision" "$scratch/reopened-current.txt" > "$scratch/reopened-current-export.json"
+test "$(sha256sum "$scratch/reopened-current.txt" | cut -d ' ' -f1)" = "$revised"
 echo 'OFFLINE_LIFECYCLE_EVIDENCE project=create document=register revisions=2 checkout=restart checkin=verified reopen=verified permission_denial=verified'
 echo 'LIMITATION: process restarts are not crash injection or interactive GUI acceptance.'
