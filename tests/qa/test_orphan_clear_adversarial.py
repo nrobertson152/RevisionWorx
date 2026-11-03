@@ -97,6 +97,7 @@ def _overlap_admin_requests(root, monkeypatch):
     """Nest B after A's lookup but before A publishes, without test scheduler races."""
     publish = Workspace._publish_admin_entry
     entered = False
+    conflicts = []
 
     def interleaved(cls, meta, op, data, revokes=None, **kwargs):
         nonlocal entered
@@ -107,9 +108,16 @@ def _overlap_admin_requests(root, monkeypatch):
 
     with monkeypatch.context() as patch:
         patch.setattr(Workspace, "_publish_admin_entry", classmethod(interleaved))
-        Workspace.clear_orphaned_release(root, NAME, "administrator A")
+        try:
+            Workspace.clear_orphaned_release(root, NAME, "administrator A")
+        except WorkspaceError as exc:
+            if type(exc).__name__ != "OrphanClearConflict":
+                raise
+            conflicts.append(exc)  # rev.3 correctly refuses the competing reason
     assert entered, "overlapping operation was not injected"
-    return _audits(root), list((root / ".revisionworx" / "locks").glob("writer.lock.orphaned-*"))
+    return (_audits(root),
+            list((root / ".revisionworx" / "locks").glob("writer.lock.orphaned-*")),
+            conflicts)
 
 
 def test_p1_unsafe_reproducer_original_hash_does_not_bind_moved_bytes(tmp_path, monkeypatch):
@@ -161,7 +169,8 @@ def test_p2_unsafe_reproducer_two_admins_publish_same_orphan_twice(tmp_path, mon
     if not _vulnerable_admin_lookup():
         pytest.skip("original unserialized audit lookup absent")
     root, _, orphan = _setup(tmp_path)
-    audits, evidence = _overlap_admin_requests(root, monkeypatch)
+    audits, evidence, conflicts = _overlap_admin_requests(root, monkeypatch)
+    assert not conflicts  # old unsafe implementation silently merges incompatible requests
     assert len(audits) == 2
     assert {a["reason"] for a in audits} == {"administrator A", "administrator B"}
     assert len({a["file_sha256"] for a in audits}) == 1
@@ -177,7 +186,9 @@ def test_p2_safety_overlapping_admins_have_unique_consistent_audit(
             strict=True, raises=AssertionError,
             reason="366d435 concurrent admins publish divergent audits for same orphan"))
     root, _, orphan = _setup(tmp_path)
-    audits, evidence = _overlap_admin_requests(root, monkeypatch)
+    audits, evidence, conflicts = _overlap_admin_requests(root, monkeypatch)
+    if hasattr(Workspace, "_authorise_orphan_clear"):
+        assert len(conflicts) == 1, "different administrator reason must produce explicit conflict"
     assert len(audits) <= 1, "duplicate durable dispositions for the same orphan and digest"
     for audit in audits:
         custody = orphan.parent / audit["evidence"]
@@ -213,7 +224,10 @@ def test_crash_just_after_custody_rename_retains_audit_and_exact_bytes(
     assert audits[0]["file_sha256"] == hashlib.sha256(ORIGINAL).hexdigest()
     # Rev. 2 moves directly to evidence; rev. 3 moves first to blocking custody.
     assert moves[0].name == audits[0]["evidence"] or moves[0].name.startswith(".clearing-")
-    Workspace.clear_orphaned_release(root, NAME, "idempotent restart retry")
+    # Rev.3 identity includes the exact reason and actor; only identical retries are allowed.
+    retry_reason = ("former writer verified stopped" if hasattr(Workspace, "_authorise_orphan_clear")
+                    else "idempotent restart retry")
+    Workspace.clear_orphaned_release(root, NAME, retry_reason)
     assert len(_audits(root)) == 1
     evidence = orphan.parent / audits[0]["evidence"]
     assert evidence.read_bytes() == ORIGINAL
