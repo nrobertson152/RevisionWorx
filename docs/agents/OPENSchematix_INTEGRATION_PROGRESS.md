@@ -946,8 +946,7 @@ focused module/Qt tests PASS, full
 CLI help for all three modules PASS. Synthetic Git commit
 `6c9950baa65fa802c614d25289a7748ec7eec066`, three
 real two-parent merges, core-only blobs unchanged, 114 changed paths.
-**Windows full regression job was still executing at this progress
-checkpoint; no completion/success claimed.**
+**Windows job is now confirmed SUCCESS** on the same synthetic Git commit and inputs: 11 stage tests PASS; 24 focused BOM/change-control/GUI tests PASS; full `python -m pytest -q -ra` **1,139 PASS / 4 SKIP / 0 FAIL** (Windows Python 3.11; exact [CI 41583331179](https://github.com/nrobertson152/RevisionWorx/actions/runs/41583331179)).
 First workflow [41583177025](https://github.com/nrobertson152/RevisionWorx/actions/runs/41583177025)
 failed because staging test file had not yet been committed; fixed by
 the next source/test commit before the above run.
