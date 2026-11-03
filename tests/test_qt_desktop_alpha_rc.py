@@ -687,6 +687,9 @@ def test_typing_a_path_gives_the_file_name_as_title(qapp, ctl, tmp_path):
     assert dlg.title.text() == "bracket"
     dlg.start()
     pump(qapp, ctl, lambda: dlg.flow.state == "done" and not ctl.busy)
+    # Diagnostic only: a "done" import with no result is the saved-with-a-warning path (e.g. the Windows
+    # writer-lock release gave up). Show the flow's own message so CI logs say which outcome it was.
+    assert dlg.flow.result is not None, f"import ended {dlg.flow.state!r} without a result: {dlg.flow.message}"
     assert dlg.flow.result[0]["title"] == "bracket"
     w.close()
 
