@@ -40,6 +40,8 @@ jobs:
       - name: Checkout independent tests
         uses: actions/checkout@v4
         with:
+          # Frozen fixture source audited by QA; do not float with PR merge HEAD.
+          ref: ba51686f0f0db77373c771ab17121668a8648e3b
           path: independent
           persist-credentials: false
       - name: Checkout exact corrected Phase 2 production source
@@ -60,7 +62,9 @@ jobs:
           actual="$(git -C production rev-parse HEAD)"
           test "$actual" = "3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194"
           echo "PRODUCTION_SHA=$actual"
-          echo "TEST_SHA=$(git -C independent rev-parse HEAD)"
+          fixture_sha="$(git -C independent rev-parse HEAD)"
+          test "$fixture_sha" = "ba51686f0f0db77373c771ab17121668a8648e3b"
+          echo "TEST_SHA=$fixture_sha"
           for name in test_core_independent_journal_shape.py test_core_crash_integrity_readonly.py test_core_adr017_ordered_checks_restart.py test_core_readonly_derived_integrity.py test_core_revision_chain_cad_refs.py test_core_unicode_cad_provenance.py; do
             test -f "independent/tests/$name"
             cp "independent/tests/$name" production/tests/
