@@ -178,3 +178,39 @@ def test_changed_csv_payload_reusing_txid_must_not_be_reported_as_identical_retr
     assert store.seq == seq
     assert len(svc.scan()[0]) == 2
     assert svc.request(first[0].id).title == "First"
+
+
+@pytest.mark.parametrize("field,changed", [
+    ("title", "Changed title after commit"),
+    ("reason", "Changed reason after commit"),
+    ("number", "CR-221"),
+])
+def test_csv_txid_replay_rejects_changed_semantic_fields(field, changed):
+    """Strict independent identity gate: every committed import input is bound to its txid."""
+    svc, _, _, store = service()
+    original = {"title": "First", "reason": "Needed", "number": "CR-220"}
+    text = "title,reason,number\\n{title},{reason},{number}\\n".format(**original)
+    first = exchange.import_requests_csv(svc, text, txid=TXID)
+    assert len(first) == 1
+    seq = store.seq
+    altered = dict(original)
+    altered[field] = changed
+    changed_csv = "title,reason,number\\n{title},{reason},{number}\\n".format(**altered)
+    with pytest.raises(changes.ReplayRefused):
+        exchange.import_requests_csv(svc, changed_csv, txid=TXID)
+    assert store.seq == seq, "rejected replay must not publish another journal entry"
+    assert len(svc.scan()[0]) == 1
+    assert svc.request(first[0].id).title == original["title"]
+
+
+def test_csv_txid_replay_rejects_changed_row_order():
+    """A row permutation must not silently claim the previously committed import."""
+    svc, _, _, store = service()
+    text = "title,reason,number\\nFirst,Needed,CR-220\\nSecond,Required,CR-221\\n"
+    first = exchange.import_requests_csv(svc, text, txid=TXID)
+    seq = store.seq
+    swapped = "title,reason,number\\nSecond,Required,CR-221\\nFirst,Needed,CR-220\\n"
+    with pytest.raises(changes.ReplayRefused):
+        exchange.import_requests_csv(svc, swapped, txid=TXID)
+    assert store.seq == seq
+    assert [svc.request(c.id).title for c in first] == ["First", "Second"]
