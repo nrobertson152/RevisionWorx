@@ -115,3 +115,14 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Implementation inspected:** `revisionworx/content.py` on `phase2-documents`, with `ContentStore.read_verified`, `export`, `ContentTooLarge`, and `WorkspaceCorruptError`. No production changes or shared format changes.
 - **Execution:** NOT RUN, no Linux/Windows/Python counts or new CI link. This commit is test-only; exact `python -m pytest -q -ra tests/test_core_bounded_content_integrity.py` must run on Ubuntu/Windows Python 3.11/3.13 against a pinned corrected production SHA before acceptance. Four test cases per environment planned; 0 observed pass/fail/skip/xfail.
 - **Remaining:** arrange immutable-fixture exact-SHA CI, inspect native logs, QA review; separately test concurrent CAD rename and malformed-journal precommit abort; Windows `.releasing-*` and multi-host gates remain open. Prior frozen corrected-source 88-pass run 41707814032 does NOT include these four new tests.
+
+
+## 2026-11-03 — Bounded content integrity native CI dispatch
+
+- **Checkout:** issue #29 trust-based comment protocol; no atomic-ref lock.
+- **Four independent tests:** `tests/test_core_bounded_content_integrity.py` frozen at `b93c012d18783c24dde4da5273a53b98aa9cc4f7` (original test-only implementation).
+- **Corrected production:** `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`, checked out and asserted by full SHA.
+- **New workflow:** `.github/workflows/core-a-bounded-content-integrity.yml` at `49ce403d6799ffbc5b92db996df888041bcf8fe6`. Independent fixture and production checkouts use immutable full SHAs, printed and checked before copying one test file. Matrix: native Ubuntu/Windows, CPython 3.11/3.13. Exact command: `python -m pytest -q -ra tests/test_core_bounded_content_integrity.py`. Four cases/job, 16 planned executions.
+- **Observed execution:** no associated PR workflow runs returned immediately after commit; this lookup is PR-only/first-page and does not prove no push workflow. **0 observed PASS/FAIL/SKIP/XFAIL; no positive acceptance claim.**
+- **Scope:** verified exact content bytes, same-size object corruption blocks read/export, bounded read fails typed, missing object fails closed, and no read-only workspace mutation. This does not exercise concurrent source replacement, Windows release permission transitions, journal precommit abort or cross-host filesystem behavior.
+- **Next:** inspect four native logs and both printed SHA values; classify actual pytest results, hand off to QA #31; if any fixture fails, repair only Core A branch and rerun. Continue adversarial source-replacement and journal-abort fixtures without duplicating Claude A production implementation.
