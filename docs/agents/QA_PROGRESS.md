@@ -1,5 +1,12 @@
 # QA Engineer — Independent QA Progress Log
 
+## 2026-11-03 — journal precommit four-platform execution harness
+
+- New workflow `.github/workflows/qa-journal-precommit-exact-source.yml` at QA commit `368f540c7594059348875363e71d0e8f4bcab88f` stages exact corrected production `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194` and the event's immutable QA commit. It asserts both SHA identities before copying only `tests/qa/test_journal_precommit_fail_closed.py` into a disposable checkout.
+- Matrix: native Ubuntu/Windows, Python 3.11/3.13; command `python -m pytest -q -ra tests/qa/test_journal_precommit_fail_closed.py`. Four strict assertions check malformed top-level journal evidence and no journal mutation after refused writable open.
+- **Execution pending**: no new raw job logs inspected at this checkpoint; 0 independently observed PASS/FAIL/SKIP/XFAIL. A workflow commit is not acceptance. Next: inspect each native log, fix test/harness defects on QA branch only, then establish historical-negative oracle and CAD rename race. Production/release HOLD.
+
+
 **Assignment:** RevisionWorx quality assurance, integrity regression tests, verification planning.
 **Working branch:** `qa/testing-infrastructure`
 **Pull request:** https://github.com/nrobertson152/RevisionWorx/pull/3 (draft; base `phase1-foundation`)
