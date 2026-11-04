@@ -15,8 +15,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: core-${{ github.ref }}
-  cancel-in-progress: false  # every pushed SHA gets its full result: reports must cite exact-SHA evidence
+  # Grouped by SHA, not branch: within one group GitHub keeps a single pending run and cancels older pending ones even with
+  # cancel-in-progress off, which lost a345825's run. Reports must cite exact-SHA evidence, so every pushed SHA gets a full run.
+  group: core-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   tests:
