@@ -1,0 +1,40 @@
+name: Distributed CAD In-Place Snapshot Research
+
+on:
+  push:
+    branches:
+      - research/shared-filesystem-protocol
+    paths:
+      - "prototype/test_core_96f9_cad_inplace_source_mutation.py"
+      - ".github/workflows/distributed-cad-inplace.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-identity:
+    name: In-place preserved metadata (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: 96f9c368a11fd43c0440d404c7258c7dfeacabf6
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Observe actual in-place CAD rewrite under stable file ID, size and mtime
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_core_96f9_cad_inplace_source_mutation
