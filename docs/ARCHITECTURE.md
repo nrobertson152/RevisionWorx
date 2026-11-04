@@ -1,9 +1,11 @@
 # RevisionWorx — Architecture
 
-**Status:** Phase 1 foundation **implemented and tested** on Linux (local filesystem) in branch
-`phase1-foundation`, hardened after the 2026-11-01 reliability review (ADR-008); GUI migrated to
-PySide6 (ADR-009, Qt widgets not yet executed). Phase 2 lives on `phase2-documents`. Sections are marked **IMPLEMENTED** (code + automated tests exist),
-**PROPOSED** (designed, not built) or **OPEN** (decision pending). Keep this file in step with the code.
+**Status (1.0.0):** core (workspace, journal, fencing, recovery), documents and revisions, lifecycle,
+check-out/check-in, doctor, BOM (files) and change control are **implemented and tested** on Linux and Windows
+local disks, with the PySide6 desktop window run offscreen and on a real X display in CI. Multi-computer use of a
+shared network folder remains **unverified** (ADR-014, issue #5). Sections are marked **IMPLEMENTED** (code +
+automated tests exist), **PROPOSED** (designed, not built) or **OPEN** (decision pending). Keep this file in step
+with the code.
 
 ## System map
 
