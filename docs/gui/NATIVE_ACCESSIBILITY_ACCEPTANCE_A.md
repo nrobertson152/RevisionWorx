@@ -1,6 +1,6 @@
 # Desktop GUI A — native accessibility and release-smoke acceptance protocol
 
-Status: **NOT EXECUTED**. This is a reproducible operator test protocol, not evidence that the application passes it. Owner: Desktop GUI A; independent signoff: QA and Integration. Scope: single-user, local-disk, offline. No SMB/NFS or multi-host safety claim.
+Status: **AUTOMATED OFFSCREEN GATES PASS AT PINNED PR MERGE; NATIVE GATES NOT EXECUTED**. This is a reproducible operator test protocol, not evidence that the application passes native desktop acceptance. Owner: Desktop GUI A; independent signoff: QA and Integration. Scope: single-user, local-disk, offline. No SMB/NFS or multi-host safety claim.
 
 ## Evidence and prerequisites
 
@@ -35,6 +35,28 @@ On each OS, install or launch the actual produced artifact from a clean, non-dev
 `QT_QPA_PLATFORM=offscreen python -m pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py tests/test_qt_desktop_alpha_rc.py`
 
 At GUI A SHA `4a6427ccff85124338cd14a39fe551072cc34975`, GitHub Actions run 41711104288: Ubuntu Python 3.11.17, Qt 6.12.0, 9 accessibility PASS and 66 desktop PASS; Windows Python 3.11.9, Qt 6.12.0, 9 accessibility PASS, 65 desktop PASS, **1 desktop FAIL** (`test_checkin_saved_with_warning_is_never_shown_as_failure`), 0 SKIP/XFAIL in these steps. This is a **cross-platform HOLD**, not green acceptance. The Windows state-file permission failure is assigned for production-owner investigation; GUI A does not alter Claude B's branch.
+
+## Pinned automated acceptance evidence (2026-11-03 UTC)
+
+The latest verified run is [GitHub Actions 41736947002](https://github.com/nrobertson152/RevisionWorx/actions/runs/41736947002), PR #35's **synthetic merge commit** `18ff3be` (GUI A head `d4bc0157d5b0938def7bfc465872a415e48004d9` merged into Claude B GUI base `ce00ac450405b1e37b354c51302f3b9c4b1c70f4`). This distinction matters: the result verifies that combined checkout, not an isolated source-branch test or a packaged build.
+
+| Runner / job ID | Runtime | Independent offscreen command | Existing Qt command | Fail / skip / xfail |
+| --- | --- | --- | --- | --- |
+| Ubuntu / 126268757745 | Python 3.11, PySide6 6.12.0, Qt 6.12.0 | `python -m pytest -q -ra -m qt tests/test_qt_gui_accessibility_a.py`: **9 passed** | `python -m pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py tests/test_qt_desktop_alpha_rc.py`: **66 passed** | 0 / 0 / 0 in both steps |
+| Windows / 126268757513 | Python 3.11, PySide6 6.12.0, Qt 6.12.0 | Same command: **9 passed** | Same command: **66 passed** | 0 / 0 / 0 in both steps |
+
+The recursive all-file journal snapshot introduced at `d4bc015` is included in the passing nine-test independent suite. The earlier Windows `state.json` PermissionError at `4a6427c` (run 41711104288) **did not recur** in this run; intermittent defect root cause and repeated-Windows evidence remain open. This does not demonstrate that the race is fixed. CI is not a native keyboard, display scaling, screen-reader, or installed-artifact test.
+
+| Acceptance gate | Evidence | Disposition |
+| --- | --- | --- |
+| Offscreen keyboard/modal/restart/cancellation regressions | Run 41736947002, synthetic merge `18ff3be` | PASS on Ubuntu and Windows, scoped to nine tests |
+| Existing offscreen desktop regression suite | Same run | PASS on Ubuntu and Windows, scoped to 66 tests |
+| Native keyboard-only journey (K) | No recorded physical-desktop walkthrough for GUI A head | NOT RUN |
+| Real DPI/text scaling (D) | No native 100/150/200% evidence | NOT RUN |
+| Narrator/Orca accessibility | No screen-reader evidence | NOT RUN |
+| Packaged application and clean-machine launch (P) | No artifact SHA or native launch evidence | BLOCKED pending artifacts and Integration |
+| Intermittent Windows saved-with-warning state access | One earlier FAIL, latest PASS | OPEN; not independently root-caused |
+| Independent QA/Integration signoff | No complete signoff for GUI A head | PENDING |
 
 ## Handoff and decision
 
