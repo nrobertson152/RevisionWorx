@@ -379,3 +379,18 @@ def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(q
     assert tab.checkin_btn.isEnabled(), "Escape must retain the checkout"
     assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
     assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_before
+
+    # A second keyboard activation must remain connected to the production
+    # handler after the first modal is rejected. This catches accidental
+    # one-shot signal disconnection and disabled-button regressions.
+    seen.clear()
+    tab.checkin_btn.setFocus()
+    qapp.processEvents()
+    assert tab.checkin_btn.hasFocus()
+    QTimer.singleShot(0, cancel_modal)
+    QTest.keyClick(tab.checkin_btn, Qt.Key.Key_Space)
+    qapp.processEvents()
+    assert seen == [True], "Repeated Space must reopen the production modal"
+    assert tab.checkin_btn.isEnabled()
+    assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
+    assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_before
