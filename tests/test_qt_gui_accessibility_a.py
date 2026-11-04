@@ -355,7 +355,9 @@ def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(q
     assert tab.checkin_btn.isEnabled()
     before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
     journal = home / ".revisionworx" / "journal"
-    journal_before = {p.name: p.read_bytes() for p in journal.glob("*.json")}
+    journal_before = {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()}
+    managed = home / ".revisionworx" / "objects"
+    objects_before = {str(p.relative_to(managed)): p.read_bytes() for p in managed.rglob("*") if p.is_file()} if managed.exists() else {}
     tab.checkin_btn.setFocus()
     qapp.processEvents()
     assert tab.checkin_btn.hasFocus(), "Check-in button must accept keyboard focus"
@@ -378,7 +380,8 @@ def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(q
     assert seen == [True], "Space on focused production button must open CheckinDialog"
     assert tab.checkin_btn.isEnabled(), "Escape must retain the checkout"
     assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
-    assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_before
+    assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_before
+    assert ({str(p.relative_to(managed)): p.read_bytes() for p in managed.rglob("*") if p.is_file()} if managed.exists() else {}) == objects_before
 
     # A second keyboard activation must remain connected to the production
     # handler after the first modal is rejected. This catches accidental
@@ -393,4 +396,5 @@ def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(q
     assert seen == [True], "Repeated Space must reopen the production modal"
     assert tab.checkin_btn.isEnabled()
     assert tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"]) == before
-    assert {p.name: p.read_bytes() for p in journal.glob("*.json")} == journal_before
+    assert {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()} == journal_before
+    assert ({str(p.relative_to(managed)): p.read_bytes() for p in managed.rglob("*") if p.is_file()} if managed.exists() else {}) == objects_before
