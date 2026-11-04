@@ -1000,3 +1000,14 @@ branches.
 - Corrected JSON manifest version validation: Python `True == 1` previously admitted `"version": true` as v1. Explicit `type(...) is int` now rejects boolean versions. Added a deterministic negative regression and updated native workflow discovery gate from 17 to 18 tests.
 - Verification: GitHub contents commits/readback only; **0 tests executed**, PASS/FAIL/SKIP/XFAIL unknown on Linux and Windows. Linux checkout attempt failed DNS resolution for github.com. GitHub connector's commit workflow lookup is PR-trigger-only; no push-triggered native logs verified. These changes are **not accepted** until both OS Python 3.11 jobs run against the exact SHA.
 - Remaining: obtain actual push-triggered Actions run/job logs and 18-test results; restore and reopen a closed authoritative workspace and compare immutable revision exports; QA/Director release gates remain HOLD. No merge or release.
+
+
+## Native backup CI verification — 2026-11-04 02:53 UTC
+
+**Exact tested branch SHA:** `c1eef9bed1617a4b0f91b81ccca1d6ddabb2bf9e` (`integration/openschematix`). **Run:** https://github.com/nrobertson152/RevisionWorx/actions/runs/41756871208 (push, completed success, attempt 1). Unlike the PR-only commit-run lookup, the repository Actions runs endpoint exposes push-triggered executions. Both native job logs were fetched and independently inspected.
+
+- **Ubuntu-latest, Python 3.11.17:** job https://github.com/nrobertson152/RevisionWorx/actions/runs/41756871208/job/126334926323 — `python -m py_compile tools/packaging/offline_backup_rehearsal.py tests/test_offline_backup_rehearsal.py` PASS; `python -m unittest discover -s tests -p test_offline_backup_rehearsal.py -v`: **19 run, 19 pass, 0 fail, 0 error, 0 skip, 0 xfail** (0.356s); CLI `--help` PASS.
+- **Windows-latest, Python 3.11.9:** job https://github.com/nrobertson152/RevisionWorx/actions/runs/41756871208/job/126334926036 — same compile PASS, unittest **19 run, 18 pass, 0 fail, 0 error, 1 skip, 0 xfail** (0.512s); CLI `--help` PASS. Skipped `test_casefold_collision_in_source_refused` because filesystem does not support distinct case variants; Linux ran it successfully.
+- Per-OS downloadable test-log artifacts were uploaded successfully, IDs `13288507915` (Ubuntu) and `13288308495` (Windows). These are genuine native CI executions, not merely configured jobs.
+
+**Acceptance boundary:** the synthetic closed-workspace tree-copy test passes, but the test itself explicitly states it does **not** prove authoritative core reopen acceptance. No actual RevisionWorx workspace journal reopen/immutable revision SHA end-to-end verification, real installer, live snapshot consistency, cross-host SMB/NFS or independent QA approval is established. Release remains HOLD. Next: implement copy-only authoritative workspace restore/reopen with verified immutable revision SHA, pin supported core source SHA and rerun native CI.
