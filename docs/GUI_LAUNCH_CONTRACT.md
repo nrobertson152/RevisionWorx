@@ -82,6 +82,10 @@ The method is read-only. It returns a JSON-serialisable dict and performs no I/O
 - **Export:** runs in the background. `document_status` says where the file went, or `message_level == "error"`. A registered working file and anything inside `.revisionworx` are refused, whatever the save dialog confirmed.
 - **Document unreadable:** `selected_document` is `None`, `message_level == "error"`, and the status starts with "⚠ Cannot read this document". No document actions are enabled. F5 retries.
 - **Recovery-blocked:** `read_only` is true, `health_banner` contains "RECOVERY BLOCKED" and "READ-ONLY", and every write action is disabled, including the menu items. Browsing, history and export still work. F5 clears this only after an administrator has repaired the workspace.
+- **Workspace unavailable** (folder moved, drive disconnected, reads refused): `read_only` is true, `health_banner` says it cannot be read, and every write action is disabled. F5 clears it once the workspace can be read. It is not recovery-blocked and needs no administrator.
+- **Opening a second workspace fails:** `open_location` returns `False` and the current workspace stays on screen and open, with a modal error. The start page appears only when nothing is open.
+- **Switching or closing a workspace** closes its Import and Adopt windows. A flow still held after that refuses to start and changes nothing.
+- **Damaged or unwritable preferences:** never stop the application. A damaged file reads as an empty recent list. If the list cannot be saved, the workspace still opens and `ctl.preferences_warning` holds the reason.
 - **Background jobs:** while `busy` is true, every write action is disabled. Poll `ctl.drain()` together with `app.processEvents()` until `busy` is false. **Changed after `2a6a7bd`: `busy` stays true until the result is delivered**, and `drain()` is what ends it, so a loop that waits on `busy` without draining (or without a running `MainWindow`) never finishes. When `busy` turns false, history, messages and actions have already settled; no further wait is needed.
 
 ## 5. What automated runs do NOT show
