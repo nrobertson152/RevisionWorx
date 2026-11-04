@@ -138,3 +138,12 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Total:** 16 PASS, 0 FAIL, 0 SKIP, 0 XFAIL, based on independently fetched native job logs, not just green workflow status. This is positive evidence for four bounded-content cases at the pinned corrected SHA, not broader release acceptance.
 - **Other workflow caution:** at this same role head, crash-integrity read-only run `41736330311` and historical independent regression evidence run `41736330220` report failure; those must be triaged independently, not counted as green. Phase 1 PR #6 malformed-journal P0 remains HOLD (QA run 41730782278).
 - **Next:** QA review of frozen fixtures; investigate failing workflows' exact production SHA and negative-control expectations; adversarial precommit-abort and concurrent source replacement gates; no SMB/NFS or release safety claim.
+
+
+## 2026-11-04 — Deterministic CAD source rename-race gate
+
+- **Task:** issue #29 milestone 2, test-only regression; no Claude A production edits.
+- **Commit:** `4bc8c235deffd1139ae94763fc753dff143d60d8` on `core/independent-journal-schema-regressions`; new `tests/test_core_cad_source_rename_race.py`.
+- **Exact corrected production under review:** `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`; the fixture uses its internal `_hash_pinned` boundary to deterministically simulate an editor's save-by-rename after the first capture read and before the second independent read. It retains the original file size and mtime, changes the inode/content, and requires `SourceChangedError`, no published content and no staging debris. Separate unchanged-source control requires verified SHA-256 bytes.
+- **Verification:** NOT EXECUTED; 0 observed PASS/FAIL/SKIP/XFAIL on Linux or Windows, Python 3.11/3.13. Intended command: `python -m pytest -q -ra tests/test_core_cad_source_rename_race.py`. CI workflow not yet added; QA must run the frozen fixture on exact corrected SHA and verify historical negative control where feasible. The injection is at a private helper boundary; it proves detection of this specific race, not all concurrent file mutations or multi-host guarantees. Windows native test required to establish `os.replace` semantics.
+- **Remaining:** pin and run native matrix, independently review fixture and positive/negative controls, investigate malformed-journal precommit behavior, Windows `.releasing-*` and actual SMB/NFS cross-host safety. Release HOLD.
