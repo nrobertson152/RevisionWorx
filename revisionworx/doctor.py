@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import atomicio, documents
 from .content import ContentStore, hash_file
-from .workspace import FORMAT_NAME, FORMAT_VERSION, Workspace, WorkspaceCorruptError, WorkspaceError
+from .workspace import FORMAT_NAME, FORMAT_VERSION, Workspace, WorkspaceCorruptError, WorkspaceError, journal_gaps
 
 ERROR, WARNING, INFO = "error", "warning", "info"
 _PASSES = 5
@@ -46,10 +46,11 @@ class _Report:
     def add(self, code: str, severity: str, subject: str, message: str, action: str = "") -> None:
         self.findings.append(Finding(code, severity, subject, message, action))
 
-    def result(self, location: Path) -> dict:
+    def result(self, location: Path, settled: bool = True) -> dict:
         order = {ERROR: 0, WARNING: 1, INFO: 2}
         found = sorted(self.findings, key=lambda f: (order[f.severity], f.code, f.subject))
-        return {"workspace": str(location), "ok": not any(f.severity != INFO for f in found),
+        # Fail closed: without a consistent view nobody knows it is healthy, even if this pass found nothing.
+        return {"workspace": str(location), "ok": settled and not any(f.severity != INFO for f in found), "settled": settled,
                 "errors": sum(f.severity == ERROR for f in found), "warnings": sum(f.severity == WARNING for f in found),
                 "checked": self.checked, "skipped": self.skipped, "findings": [asdict(f) for f in found]}
 
@@ -91,10 +92,15 @@ def _check_journal(ws: Workspace, out: _Report) -> bool:
         if not (_SEQ_NAME.match(path.name) or path.name.endswith(".tmp")):
             out.add("J004", WARNING, f"journal/{path.name}", "a file that is not a journal entry", "move it out of the journal")
     seqs = ws.journal_seqs()
-    missing = sorted(set(range(1, (seqs[-1] if seqs else 0) + 1)) - set(seqs))
-    for seq in missing:
+    if seqs and seqs[0] < 1:
         whole = False
-        out.add("J001", ERROR, f"journal entry {seq}", "is missing, so history has a gap; writes and opens are refused", _RESTORE)
+        out.add("J006", ERROR, f"journal/{seqs[0]:020d}.json", "numbering starts at 1, so this is not a real entry; writes and "
+                "opens are refused", "move it out of the journal if it is stray")
+    for first, last in journal_gaps(seqs):
+        whole = False
+        what = f"journal entry {first}" if first == last else f"journal entries {first} to {last}"
+        out.add("J001", ERROR, what, "missing, so history has a gap; writes and opens are refused. If the entry after the gap looks "
+                "stray, moving it out of the journal may be the whole fix", _RESTORE)
     for seq in seqs:
         try:
             ws.read_entry(seq)
@@ -127,7 +133,7 @@ def _check_journal(ws: Workspace, out: _Report) -> bool:
     if applied > head:
         out.add("S002", ERROR, "state.json", f"says entry {applied} was applied but the journal ends at {head}: the journal is "
                 "older than the rest of the workspace (a partial restore?)", "restore the whole workspace from one backup")
-    elif applied < head:
+    elif applied < head and whole:
         out.add("S003", INFO, "state.json", f"{head - applied} saved change(s) are not materialised yet",
                 "none: the next writer finishes this")
     return whole
@@ -322,12 +328,15 @@ def examine(location: Path, hash_content: bool = True) -> dict:
         out = _examine_once(meta, info, hash_content)
         if _head(meta) == before:
             return out.result(meta)
-    out.skipped.append("a consistent view: writers kept publishing throughout, so findings here may be momentary; run this again")
-    return out.result(meta)
+    out.skipped.append("a consistent view: writers kept publishing throughout, so findings here may be momentary and nothing is proven healthy; run this again")
+    return out.result(meta, settled=False)
 
 
 def render(report: dict) -> str:
-    lines = [f"{report['workspace']}: " + ("healthy" if report["ok"] else f"{report['errors']} error(s), {report['warnings']} warning(s)")]
+    summary = "healthy" if report["ok"] else f"{report['errors']} error(s), {report['warnings']} warning(s)"
+    if not report["settled"]:
+        summary = f"inconclusive, {summary}"
+    lines = [f"{report['workspace']}: {summary}"]
     for f in report["findings"]:
         lines.append(f"  {f['severity'].upper():<7} {f['code']} {f['subject']}: {f['message']}")
         if f["action"]:

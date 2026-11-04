@@ -100,6 +100,9 @@ Each was reproduced on `673bec2` first. `tests/test_malformed_files_fail_closed.
 - A pass counts only if the journal did not change during it, so a concurrent writer does not produce false errors (retries up to 5 times, then says so).
 - `tests/test_doctor.py`: one fixture per kind of damage, each asserting the exact codes and an unchanged tree (bytes and mtimes);
   races injected deterministically; a real concurrent writer; and the advice followed through the real CLI.
+- Independent review of `673bec2` (PR #7 comment 6621726996, test-only PR #38) found two real defects, both fixed here and now covered by that
+  file, copied unchanged: (1) gap detection built a set of every implied number, so one stray file named `00000000010000000000.json` attempted a ten-billion-element
+  allocation in `doctor`, `health` and every `Workspace.open`; this predates the doctor. (2) A doctor pass with no consistent view returned `ok=True`. It now returns `ok=False`, `settled=False` and exit 1.
 - Limits: it cannot tell a live lock holder from a dead one, and nothing here was run on SMB, NFS or a second host.
 
 ### 2026-11-03 (session 15) — the filesystem refuses, the process survives

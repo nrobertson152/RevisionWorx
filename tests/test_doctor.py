@@ -12,7 +12,7 @@ import pytest
 
 from revisionworx import atomicio, cli, doctor, documents as D, projects
 from revisionworx.projects import NewProject
-from revisionworx.workspace import REV_FIELD, RecordDelete, RecordPut, Workspace, entry_digest
+from revisionworx.workspace import REV_FIELD, RecordDelete, RecordPut, Workspace, WorkspaceCorruptError, entry_digest, journal_gaps
 
 
 def tree(root: Path) -> dict:
@@ -236,6 +236,44 @@ def test_every_code_in_the_module_is_documented_and_has_a_test():
     assert not {c for c in used if f'"{c}"' not in tests}
 
 
+def _stray_high_entry(world) -> Path:
+    path = world["meta"] / "journal" / "00000000010000000000.json"
+    path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def test_a_stray_high_numbered_file_is_one_finding_not_ten_billion(world):
+    _stray_high_entry(world)
+    report = doctor.examine(world["root"])
+    gaps = [f for f in report["findings"] if f["code"] == "J001"]
+    assert len(gaps) == 1 and "to 9999999999" in gaps[0]["subject"]
+    assert not any(f["code"] == "S003" for f in report["findings"]), "those are not saved changes waiting"
+
+
+def test_a_stray_high_numbered_file_refuses_opens_quickly_and_moving_it_recovers(world):
+    stray = _stray_high_entry(world)
+    for writable in (False, True):
+        with pytest.raises(WorkspaceCorruptError, match="missing entries"):
+            Workspace.open(world["root"], writable=writable)
+    stray.unlink()
+    with Workspace.open(world["root"], writable=True):
+        pass
+    assert doctor.examine(world["root"])["ok"]
+
+
+def test_an_entry_numbered_zero_is_refused_by_name(world):
+    (world["meta"] / "journal" / ("0" * 20 + ".json")).write_text("{}", encoding="utf-8")
+    with pytest.raises(WorkspaceCorruptError, match="numbered 0"):
+        Workspace.open(world["root"])
+    assert "J006" in codes(world)
+
+
+@pytest.mark.parametrize("seqs,gaps", [([], []), ([1], []), ([1, 2, 3], []), ([2], [(1, 1)]), ([1, 3, 6], [(2, 2), (4, 5)]),
+                                       ([1, 10 ** 19], [(2, 10 ** 19 - 1)])])
+def test_journal_gaps(seqs, gaps):
+    assert journal_gaps(seqs) == gaps
+
+
 def test_one_bad_entry_does_not_hide_a_second(world):
     entries = sorted((world["meta"] / "journal").glob("*.json"))
     entries[1].write_bytes(b"null")
@@ -342,6 +380,7 @@ def test_a_workspace_that_never_settles_says_so(world, monkeypatch):
     monkeypatch.setattr(doctor, "_head", lambda meta: next(n))
     report = doctor.examine(world["root"])
     assert any("consistent view" in s for s in report["skipped"])
+    assert report["ok"] is False and report["settled"] is False and "inconclusive" in doctor.render(report)
 
 
 def test_real_writer_never_produces_a_false_error(world):

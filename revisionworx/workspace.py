@@ -166,6 +166,18 @@ REQUEST_IDENTITY_VERSION = 2
 _REQUEST_DOMAIN = b"revisionworx/commit-request/v2\x00"
 
 
+def journal_gaps(seqs: list[int]) -> list[tuple[int, int]]:
+    """Missing numbers in a sorted journal as inclusive ranges. Work and memory follow the number of files, not the
+    numbers in their names: one stray file named 00000000010000000000.json is ten billion missing entries."""
+    gaps = []
+    previous = 0
+    for seq in seqs:
+        if seq > previous + 1:
+            gaps.append((previous + 1, seq - 1))
+        previous = seq
+    return gaps
+
+
 def request_identity(op: str, ops: list, blob_refs: list[str] | None) -> str:
     """Versioned digest of the COMPLETE commit request (ADR-021).
 
@@ -1100,9 +1112,13 @@ class Workspace:
 
     def _check_journal(self) -> None:
         seqs = self.journal_seqs()
-        if seqs and seqs != list(range(1, len(seqs) + 1)):
-            missing = sorted(set(range(1, seqs[-1] + 1)) - set(seqs))[:10]
-            raise WorkspaceCorruptError(f"journal has gaps (missing entries {missing}); writes refused")
+        if seqs and seqs[0] < 1:
+            raise WorkspaceCorruptError("the journal has an entry numbered 0, and numbering starts at 1; writes refused")
+        gaps = journal_gaps(seqs)
+        if gaps:
+            first, last = gaps[0]
+            more = f" and {len(gaps) - 1} more gap(s)" if len(gaps) > 1 else ""
+            raise WorkspaceCorruptError(f"journal has gaps (missing entries {first} to {last}{more}); writes refused")
 
     def head_seq(self) -> int:
         seqs = self.journal_seqs()
