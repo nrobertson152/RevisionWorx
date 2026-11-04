@@ -347,7 +347,7 @@ def test_saved_checkin_stays_saved_when_the_refresh_is_denied(qapp, ctl, tmp_pat
     monkeypatch.setattr(documents, "checkin", lagging)
     monkeypatch.setattr(ctl, "document_detail", detail)
     tab.panel.start_checkin("Saved, refresh refused", on_done=lambda _r: tab.list_vm.refresh())
-    pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
+    pump(qapp, ctl, lambda: not ctl.busy)
     qapp.processEvents()
     st = w.observable_state()
     assert tab.status.text().startswith("Checked in."), tab.status.text()
@@ -361,6 +361,48 @@ def test_saved_checkin_stays_saved_when_the_refresh_is_denied(qapp, ctl, tmp_pat
     st = w.observable_state()
     assert st["selected_document"] == doc["id"] and len(st["history"]) == 2
     assert tab.status.text().startswith("Checked in.") and "Press F5" not in tab.status.text()
+    w.close()
+
+
+def test_starting_a_job_does_not_read_the_workspace_on_the_gui_thread(qapp, ctl, tmp_path, monkeypatch, no_modal_boxes):
+    """Root cause of Windows CI 41711104288. When ``busy`` turned true, poll() rebuilt the document list,
+    which lost the selection, reselected the row and re-read the document on the GUI thread just as the
+    worker was replacing state.json. Windows refused that read, and "Checking in…" became "Cannot read"."""
+    import threading
+    from revisionworx import documents
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.checkout()
+    ctl.working_file(doc["id"]).write_bytes(b"two")
+    w.timer.stop()  # poll() is called by hand, at known moments
+    real, real_detail = documents.checkin, ctl.document_detail
+    holding, release = threading.Event(), threading.Event()
+    reads = []
+
+    def held(ws, *a, **k):
+        holding.set()
+        assert release.wait(30)
+        return real(ws, *a, **k)
+
+    def detail(*a, **k):
+        reads.append(threading.current_thread().name)
+        raise PermissionError(13, "Permission denied", "state.json")
+    monkeypatch.setattr(documents, "checkin", held)
+    monkeypatch.setattr(ctl, "document_detail", detail)
+    assert tab.panel.start_checkin("Mid-job read")
+    assert holding.wait(30)
+    w.poll()  # busy has just turned true
+    qapp.processEvents()
+    assert reads == []
+    assert tab.status.text().startswith("Checking in") and not tab.checkin_btn.isEnabled()
+    monkeypatch.setattr(ctl, "document_detail", real_detail)
+    release.set()
+    pump(qapp, ctl, lambda: not ctl.busy)
+    w.poll()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert tab.status.text().startswith("Checked in revision") and st["message_level"] == "ok"
+    assert len(st["history"]) == 2 and st["actions"]["checkout"]
     w.close()
 
 
@@ -379,7 +421,7 @@ def test_saved_checkin_stays_saved_when_the_list_cannot_be_read(qapp, ctl, tmp_p
         return real(*a, **k)
     monkeypatch.setattr(ctl, "documents", documents)
     tab.panel.start_checkin("Saved, list refused", on_done=lambda _r: tab.list_vm.refresh())
-    pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
+    pump(qapp, ctl, lambda: not ctl.busy)
     qapp.processEvents()
     assert tab.status.text().startswith("Checked in revision"), tab.status.text()
     assert "Cannot read" not in tab.status.text() and "Press F5" in tab.status.text()
