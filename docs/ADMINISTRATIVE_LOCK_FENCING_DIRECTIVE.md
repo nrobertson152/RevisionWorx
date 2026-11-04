@@ -1,7 +1,7 @@
 # Architecture Decision — Administrative Lock Override and Fencing
 
 **Status:** Project Director directive; mandatory for future lock/check-out and revision publication design.
-**Owners:** Lead Architect (implementation), Distributed Systems Engineer (protocol review and independent tests), QA Engineer (regression verification).
+**Owners:** Coder (Claude or ChatGPT, implementation and tests); independent ChatGPT Reviewer (protocol, race and regression verification); Engineering Coordinator (tracking and handoff). Director approves architecture and release decisions.
 **Scope:** RevisionWorx authoritative shared-folder writer locks, checkouts, transaction publication, and recovery.
 
 ## Decision
@@ -25,9 +25,9 @@
 - Local multiprocess tests and actual SMB/NFS cross-host tests are reported separately; unexecuted tests are explicitly labeled.
 
 ## Implementation and coordination
-- **Lead Architect:** Incorporate this decision into the Phase 1/2 authoritative store and checkout architecture. Preserve the administrator override workflow and reason/audit requirements.
-- **Distributed Systems Engineer:** Specify a concrete fencing and atomic-publication protocol compatible with the actual Phase 1 implementation, assess the filesystem guarantees, prototype and test it independently, and document remaining limitations.
-- **QA Engineer:** Add deterministic race, crash-recovery, and stale-writer regression tests, and identify network-share certification gaps.
+- **Coder (Claude or ChatGPT):** Incorporate this decision into the authoritative store and checkout architecture; specify and implement a concrete fencing and atomic-publication protocol compatible with the actual code, preserve administrative override and audit requirements, and add deterministic race/crash/stale-writer regression tests.
+- **Independent ChatGPT Reviewer:** Assess the proposed protocol, verify regression tests and filesystem assumptions independently, attempt adversarial concurrency/failure cases, and identify network-share certification gaps.
+- **Engineering Coordinator:** Track issue/PR ownership, exact-SHA evidence, unresolved safety blockers and required Director decisions; do not implement or approve the protocol.
 - Coordinate technical findings through GitHub issues and pull requests. Do not merge or release without Project Director approval.
 - Update relevant architecture, concurrency, failure-recovery and progress documentation with the decision and verified outcomes.
 
