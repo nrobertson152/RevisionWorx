@@ -1,3 +1,10 @@
+## 2026-11-03 — Historical-negative oracle assertion hardening (scheduled QA)
+
+- Source QA branch before work: `d283420d4d66b6ed10a62804f08baba5b2dd838b`. Updated only `.github/workflows/qa-journal-precommit-historical-negative.yml` in commit `ad25d68a9e68e6ca0ac69b34c1002b2b8d3de451`.
+- The historical-negative wrapper previously accepted any four pytest failures plus four occurrences of `DID NOT RAISE`, potentially misclassifying unrelated errors as the intended regression. It now requires one distinct `FAILED` summary line for each parameterized case (`null`, `array`, `string`, `number`), with `DID NOT RAISE` on that same line and no additional failed cases. It still requires pytest exit 1 and four failures. This is negative control evidence, **never corrected-source acceptance**.
+- Execution: code review and GitHub file update only. Local `git ls-remote` failed DNS resolution of github.com; no native pytest jobs executed or raw logs retrieved in this run. PASS/FAIL/SKIP/XFAIL observed in this run: 0/0/0/0. CI on new SHA pending.
+- Next: inspect four native historical-negative jobs and separately the corrected-source positive jobs; if output format differs, fix the oracle without weakening case-specific evidence. Continue independent CAD rename-replacement race fixture. Release HOLD.
+
 # QA Engineer — Independent QA Progress Log
 
 ## 2026-11-03 — journal precommit four-platform execution harness
