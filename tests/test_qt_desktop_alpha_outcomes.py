@@ -283,6 +283,24 @@ def test_import_keeps_the_copy_once_the_journal_has_moved(ctl, tmp_path, monkeyp
     assert (tmp_path / "home" / "Projects" / "Proj" / "a.txt").read_bytes() == b"a"
 
 
+def test_import_stopped_by_the_interpreter_leaves_the_copy_to_register(ctl, tmp_path, monkeypatch):
+    """Found by QA's interrupted-import test: only a reported failure cleans up, so an interrupted
+    import looks the same whether or not the process lived."""
+    p = ctl.quick_start(tmp_path / "home", "Proj")
+    src = tmp_path / "a.txt"
+    src.write_bytes(b"a")
+
+    def stopped(*a, **k):
+        raise SystemExit("stopped between copy and register")
+    with monkeypatch.context() as patch:
+        patch.setattr(documents, "register_document", stopped)
+        with pytest.raises(SystemExit):
+            ctl.import_document(p["id"], src)
+    assert (tmp_path / "home" / "Projects" / "Proj" / "a.txt").read_bytes() == b"a"
+    with pytest.raises(Exception, match="already exists"):
+        ctl.import_document(p["id"], src)
+
+
 def test_import_keeps_the_copy_when_the_journal_cannot_be_read(ctl, tmp_path, monkeypatch):
     """Nothing is deleted on a guess."""
     p = ctl.quick_start(tmp_path / "home", "Proj")

@@ -595,9 +595,12 @@ class Controller:
             except BaseException as exc:
                 # Remove our copy only when it is certain that nothing was committed: the copy itself
                 # failed, or the journal has not moved (this handle is the only writer). Otherwise the
-                # file may already be the registered working file, so it stays.
+                # file may already be the registered working file, so it stays. So does anything left by
+                # the interpreter being stopped (not an Exception): a real crash could not clean up either,
+                # and the same recovery applies, Register file.
                 from ..workspace import CommittedNotApplied
-                if not registering or (not isinstance(exc, CommittedNotApplied) and self._head_is(ws, before)):
+                if isinstance(exc, Exception) and (not registering or (
+                        not isinstance(exc, CommittedNotApplied) and self._head_is(ws, before))):
                     try:
                         os.unlink(dest)  # ours: created exclusively above and not registered
                     except OSError:
