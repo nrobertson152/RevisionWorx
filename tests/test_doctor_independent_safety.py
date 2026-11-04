@@ -12,7 +12,7 @@ import itertools
 
 import pytest
 
-from revisionworx import cli, doctor, documents, projects, workspace
+from revisionworx import atomicio, cli, doctor, documents, projects, workspace
 from revisionworx.projects import NewProject
 from revisionworx.workspace import Workspace
 
@@ -60,8 +60,10 @@ def test_doctor_reports_sparse_high_seq_without_unbounded_allocation(populated_w
 def test_workspace_health_fails_closed_on_sparse_high_seq(populated_workspace, monkeypatch):
     _create_extreme_sequence_name(populated_workspace)
     monkeypatch.setattr(workspace, "range", _guard_large_range, raising=False)
-    with Workspace.open(populated_workspace) as ws:
-        report = ws.health()
+    meta = Workspace.meta_dir_for(populated_workspace)
+    info = atomicio.read_json(meta / "workspace.json")
+    ws = Workspace(meta, info, False, None)
+    report = ws.health()
     assert report["ok"] is False
     assert report["reason"]
 
