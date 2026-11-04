@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Core A CAD source replacement pinned positive matrix
+
+on:
+  push:
+    branches: [core/independent-journal-schema-regressions]
+    paths:
+      - '.github/workflows/core-a-cad-source-rename-pinned.yml'
+      - 'tests/test_core_cad_source_rename_race.py'
+  pull_request:
+    paths:
+      - '.github/workflows/core-a-cad-source-rename-pinned.yml'
+      - 'tests/test_core_cad_source_rename_race.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-rename:
+    name: source rename / ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - name: Checkout immutable regression fixture
+        uses: actions/checkout@v4
+        with:
+          ref: 4bc8c235deffd1139ae94763fc753dff143d60d8
+          path: independent
+          persist-credentials: false
+      - name: Checkout immutable corrected Phase 2
+        uses: actions/checkout@v4
+        with:
+          ref: 3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194
+          path: production
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Assert immutable identities and stage fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          production_sha="$(git -C production rev-parse HEAD)"
+          test_sha="$(git -C independent rev-parse HEAD)"
+          test "$production_sha" = "3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194"
+          test "$test_sha" = "4bc8c235deffd1139ae94763fc753dff143d60d8"
+          echo "PRODUCTION_SHA=$production_sha"
+          echo "TEST_SHA=$test_sha"
+          test -f independent/tests/test_core_cad_source_rename_race.py
+          cp independent/tests/test_core_cad_source_rename_race.py production/tests/
+      - name: Strict source replacement and unchanged-source controls
+        working-directory: production
+        run: python -m pytest -q -ra tests/test_core_cad_source_rename_race.py

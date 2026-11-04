@@ -1,0 +1,81 @@
+name: Core A corrected Phase 2 pinned positive regression matrix
+
+# Independent positive qualification, not historical expected-RED negative controls.
+# This deliberately tests the immutable corrected source rather than branch HEAD.
+on:
+  push:
+    branches: [core/independent-journal-schema-regressions]
+    paths:
+      - .github/workflows/core-a-corrected-pinned-ci.yml
+      - tests/test_core_independent_journal_shape.py
+      - tests/test_core_crash_integrity_readonly.py
+      - tests/test_core_adr017_ordered_checks_restart.py
+      - tests/test_core_readonly_derived_integrity.py
+      - tests/test_core_revision_chain_cad_refs.py
+      - tests/test_core_unicode_cad_provenance.py
+  pull_request:
+    paths:
+      - .github/workflows/core-a-corrected-pinned-ci.yml
+      - tests/test_core_independent_journal_shape.py
+      - tests/test_core_crash_integrity_readonly.py
+      - tests/test_core_adr017_ordered_checks_restart.py
+      - tests/test_core_readonly_derived_integrity.py
+      - tests/test_core_revision_chain_cad_refs.py
+      - tests/test_core_unicode_cad_provenance.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corrected-source:
+    name: corrected 3cc42e1 / ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - name: Checkout independent tests
+        uses: actions/checkout@v4
+        with:
+          # Frozen fixture source audited by QA; do not float with PR merge HEAD.
+          ref: ba51686f0f0db77373c771ab17121668a8648e3b
+          path: independent
+          persist-credentials: false
+      - name: Checkout exact corrected Phase 2 production source
+        uses: actions/checkout@v4
+        with:
+          ref: 3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194
+          path: production
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Assert production identity and overlay unchanged independent fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C production rev-parse HEAD)"
+          test "$actual" = "3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194"
+          echo "PRODUCTION_SHA=$actual"
+          fixture_sha="$(git -C independent rev-parse HEAD)"
+          test "$fixture_sha" = "ba51686f0f0db77373c771ab17121668a8648e3b"
+          echo "TEST_SHA=$fixture_sha"
+          for name in test_core_independent_journal_shape.py test_core_crash_integrity_readonly.py test_core_adr017_ordered_checks_restart.py test_core_readonly_derived_integrity.py test_core_revision_chain_cad_refs.py test_core_unicode_cad_provenance.py; do
+            test -f "independent/tests/$name"
+            cp "independent/tests/$name" production/tests/
+          done
+      - name: Strict positive regression suites (no expected-failure reinterpretation)
+        working-directory: production
+        run: >-
+          python -m pytest -q -ra
+          tests/test_core_independent_journal_shape.py
+          tests/test_core_crash_integrity_readonly.py
+          tests/test_core_adr017_ordered_checks_restart.py
+          tests/test_core_readonly_derived_integrity.py
+          tests/test_core_revision_chain_cad_refs.py
+          tests/test_core_unicode_cad_provenance.py

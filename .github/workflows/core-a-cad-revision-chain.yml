@@ -1,0 +1,43 @@
+name: Core A CAD revision-chain regression (pinned Phase 2)
+on:
+  push:
+    branches: [core/independent-journal-schema-regressions]
+  pull_request:
+    paths:
+      - tests/test_core_revision_chain_cad_refs.py
+      - .github/workflows/core-a-cad-revision-chain.yml
+  workflow_dispatch:
+jobs:
+  cad-revision-chain:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - name: Checkout independent test source
+        uses: actions/checkout@v4
+        with:
+          path: independent
+      - name: Checkout immutable Phase 2 baseline
+        uses: actions/checkout@v4
+        with:
+          ref: f01b37d345c5208ab0fa520588a2abe8c66c894a
+          path: production
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Copy exact independent fixture
+        shell: bash
+        run: |
+          cp independent/tests/test_core_revision_chain_cad_refs.py production/tests/
+          echo "TEST_SHA=$(git -C independent rev-parse HEAD)"
+          echo "PRODUCTION_SHA=$(git -C production rev-parse HEAD)"
+          test "$(git -C production rev-parse HEAD)" = "f01b37d345c5208ab0fa520588a2abe8c66c894a"
+      - name: Execute restart and CAD-reference tests
+        working-directory: production
+        run: python -m pytest -q -ra tests/test_core_revision_chain_cad_refs.py
