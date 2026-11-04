@@ -48,6 +48,10 @@ def _register_document(ctl, project_id, path, qapp):
             break
         time.sleep(0.01)
     assert len(docs) == 1, f"registration did not complete: {errors}"
+    # The record is visible once the journal commits; the job slot frees when its result is delivered.
+    assert ctl.wait_idle(20)
+    qapp.processEvents()
+    assert not errors, errors
     return docs[0]["id"]
 
 
