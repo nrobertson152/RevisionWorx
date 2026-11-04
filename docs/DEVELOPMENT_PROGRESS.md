@@ -114,6 +114,7 @@ Each was reproduced on `673bec2` first. `tests/test_malformed_files_fail_closed.
   file, copied unchanged: (1) gap detection built a set of every implied number, so one stray file named `00000000010000000000.json` attempted a ten-billion-element
   allocation in `doctor`, `health` and every `Workspace.open`; this predates the doctor. (2) A doctor pass with no consistent view returned `ok=True`. It now returns `ok=False`, `settled=False` and exit 1.
 - Core CI was grouped by branch, so a run still pending when a newer SHA was pushed got cancelled: `a345825` has no run of its own (run 41769632439 cancelled, no jobs). Now grouped by SHA.
+- Evidence at `3cf7265` (Core CI run 41770433432, all four jobs green): Ubuntu 3.11 and 3.13 731 passed, 3 skipped; Windows 3.11 and 3.13 728 passed, 6 skipped. Includes `c94155c`, the doctor, the reviewer's four tests and `3299bbc`/`96fc57a` from another Claude A session.
 - Limits: it cannot tell a live lock holder from a dead one, and nothing here was run on SMB, NFS or a second host.
 
 ### 2026-11-03 (session 15) — the filesystem refuses, the process survives
