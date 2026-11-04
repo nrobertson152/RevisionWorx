@@ -1,0 +1,50 @@
+# GPL-3.0-or-later
+# Independent ChatGPT GUI regression gate. Does not modify Claude B's workflow.
+name: GUI accessibility A
+
+on:
+  push:
+    branches:
+      - chatgpt/gui-accessibility-regressions
+  pull_request:
+    paths:
+      - 'tests/test_qt_gui_accessibility_a.py'
+      - '.github/workflows/gui-accessibility-a.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-accessibility-a-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offscreen-qt:
+    name: ${{ matrix.os }} / Python 3.11 / Qt regressions
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Linux Qt runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0
+      - name: Install project and GUI test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Record runtime versions
+        run: python -c "import sys, PySide6, PySide6.QtCore as c; print(sys.version); print('PySide6', PySide6.__version__, 'Qt', c.qVersion())"
+      - name: Run independent offscreen GUI tests
+        run: python -m pytest -q -ra -m qt tests/test_qt_gui_accessibility_a.py
+      - name: Run existing desktop Qt regression suite
+        run: python -m pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py tests/test_qt_desktop_alpha_rc.py
