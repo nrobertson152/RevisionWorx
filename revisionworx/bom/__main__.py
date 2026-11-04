@@ -70,8 +70,8 @@ def _find_item(snap: BomSnapshot, number: str) -> str:
     return matches[0]
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m revisionworx.bom", description=__doc__.splitlines()[0])
+def main(argv: list[str] | None = None, prog: str | None = None) -> int:
+    ap = argparse.ArgumentParser(prog=prog or "python -m revisionworx.bom", description=__doc__.splitlines()[0])
     ap.add_argument("--layout", choices=["auto", "parent-child", "indented", "json"], default="auto")
     ap.add_argument("--root", default="", help="part number of the top-level item when the file has several")
     ap.add_argument("-o", "--output", help="write to this file (all-or-nothing) instead of stdout")

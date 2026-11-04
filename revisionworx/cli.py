@@ -559,17 +559,17 @@ def _delegate(argv: list[str]) -> int | None:
     rest = argv[i + 1:]
     if argv[i] == "bom":
         from .bom.__main__ import main as bom_main
-        return bom_main(rest)
+        return bom_main(rest, prog="revisionworx bom")
     from .changes.__main__ import main as change_main
     if rest and rest[0] in ("-h", "--help"):
-        return change_main(["--help"])
+        return change_main(["--help"], prog="revisionworx [-w WORKSPACE] change")
     if rest and rest[0] == "verify-package":
-        return change_main(["-", *rest])
+        return change_main(["-", *rest], prog="revisionworx change")
     workspace = workspace or os.environ.get("REVISIONWORX_WORKSPACE")
     if not workspace:
         print("error: no workspace: use -w FOLDER or set REVISIONWORX_WORKSPACE", file=sys.stderr)
         return 2
-    return change_main([workspace, *rest])
+    return change_main([workspace, *rest], prog="revisionworx change")
 
 
 def main(argv: list[str] | None = None) -> int:
