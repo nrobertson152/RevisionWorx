@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
                                QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
                                QWidget)
 
-from ..controller import Controller, describe_error
+from ..controller import Controller, SavedWithWarning, describe_error
 from ...workspace import CommittedNotApplied
 from ..viewmodels import QuickStartForm
 from .models import elastic
@@ -126,7 +126,7 @@ class StartPage(QWidget):
             return False
         try:
             self.last_created_id = self.form.submit(self.ctl)["id"]
-        except CommittedNotApplied as exc:  # saved (CORE_API §4): open it, never invite a second try
+        except (CommittedNotApplied, SavedWithWarning) as exc:  # saved (CORE_API §4): open it, never invite a second try
             self.last_created_id = None
             QMessageBox.warning(self, "Saved with a warning", describe_error(exc))
         except Exception as exc:

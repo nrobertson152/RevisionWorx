@@ -363,20 +363,40 @@ class MainWindow(QMainWindow):
         """Open a workspace; on failure stay on (or return to) the start page with the reason."""
         if self.refuse_while_busy(quiet):
             return False
+        previous = self.ctl.location
         try:
             info = self.ctl.open_workspace(location)
         except Exception as exc:
+            if previous is not None:  # still open, and what every action targets: it stays on screen
+                if not quiet:
+                    QMessageBox.critical(self, "Cannot open workspace",
+                                         f"Cannot open {location}:\n{describe_error(exc)}\n\n"
+                                         f"{previous} is still open.")
+                return False
             self.show_start(f"Cannot open {location}:\n{describe_error(exc)}")
             if not quiet:
                 self.error("Cannot open workspace", exc)
             return False
+        if previous != Path(location):
+            self.close_workspace_windows()
         self.setWindowTitle(f"RevisionWorx {__version__} (Alpha) — {info['name']}")
         self._fill_recent()
         self.stack.setCurrentWidget(self.workspace_page)
         self.status_vm.check()
         self.list_vm.set_query(self.search.text(), self.archived.isChecked())
         self.select_project(select_project)
+        if self.ctl.preferences_warning:
+            self.statusBar().showMessage(self.ctl.preferences_warning, 15000)
         return True
+
+    def close_workspace_windows(self) -> None:
+        """Dialogs that are not modal belong to the workspace they were opened for. Left open, their
+        next action would write to whichever workspace is open by then."""
+        windows = [*self.adopt_dialogs, *self.documents_tab.dialogs]
+        self.adopt_dialogs.clear()
+        self.documents_tab.dialogs.clear()
+        for dlg in windows:
+            dlg.reject()
 
     def select_project(self, project_id: str | None) -> None:
         """Predictable selection: the given project, else the first row, else nothing."""
@@ -413,6 +433,7 @@ class MainWindow(QMainWindow):
     def close_ws(self) -> None:
         if self.refuse_while_busy():
             return
+        self.close_workspace_windows()
         self.ctl.close_workspace()
         self.setWindowTitle(f"RevisionWorx {__version__} (Alpha)")
         self.list_vm.refresh()
@@ -454,8 +475,11 @@ class MainWindow(QMainWindow):
                 self.error("Cannot add root", exc)
 
     def rebuild(self) -> None:
-        self.ctl.start_rebuild_index(on_done=lambda r: self.error("Rebuild failed", r.error) if r.error
-                                     else self.list_vm.refresh())
+        if self.ctl.location is None:
+            return
+        if not self.ctl.start_rebuild_index(on_done=lambda r: self.error("Rebuild failed", r.error) if r.error
+                                            else self.list_vm.refresh()):
+            QMessageBox.information(self, "Busy", "Another task is still running; try again in a moment.")
 
     def apply_search(self) -> None:
         self.list_vm.set_query(self.search.text(), self.archived.isChecked())
@@ -473,7 +497,10 @@ class MainWindow(QMainWindow):
     def filter_files(self) -> None:
         self.detail_vm.file_filter = self.file_filter.text()
         if self.detail_vm.project:
-            self.detail_vm.load(self.detail_vm.project["id"])
+            try:
+                self.detail_vm.load(self.detail_vm.project["id"])
+            except Exception as exc:
+                self.error("Cannot filter files", exc)
 
     def open_folder(self) -> None:
         if self.detail_vm.can_open_folder:
@@ -484,6 +511,8 @@ class MainWindow(QMainWindow):
             self.detail_vm.toggle_archive()
         except Exception as exc:
             self.error("Cannot change status", exc)
+            if isinstance(exc, (CommittedNotApplied, SavedWithWarning)):  # saved: show the new status
+                self.selection_changed()
         self.list_vm.refresh()
 
     def new_project(self) -> None:
@@ -493,7 +522,11 @@ class MainWindow(QMainWindow):
             return
         if self.ctl.read_only:
             return
-        dlg = NewProjectDialog(self.ctl, self)
+        try:
+            dlg = NewProjectDialog(self.ctl, self)
+        except Exception as exc:
+            self.error("Cannot create a project", exc)
+            return
         if dlg.exec():
             self.list_vm.refresh()
             self.select_project(dlg.result_record["id"] if dlg.result_record else None)

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from .. import atomicio, documents, paths, projects
+from .. import workspace as workspace_module
 from ..lifecycle import allowed_targets
 from ..clientstate import CheckoutTokens
 from ..index import LocalIndex, open_index
@@ -103,26 +104,37 @@ class Controller:
         # True when the block was found by a refused change rather than by the read-only check. The
         # read-only check cannot see such causes (e.g. the lock namespace), so it may not clear them.
         self._block_found_by_write = False
+        self.preferences_warning: str | None = None  # the recent list could not be saved; nothing else is affected
 
     # ------------------------------------------------------------------ preferences
     def _prefs_path(self) -> Path:
         return self.cfg_dir / "preferences.json"
 
-    def recent_workspaces(self) -> list[str]:
-        try:
-            return list(atomicio.read_json(self._prefs_path()).get("recent", []))
-        except (OSError, ValueError):
-            return []
-
-    def _remember(self, location: Path) -> None:
-        self.cfg_dir.mkdir(parents=True, exist_ok=True)
-        recent = [str(location)] + [r for r in self.recent_workspaces() if r != str(location)]
+    def _preferences(self) -> dict:
+        """Per-user convenience data. Damage here never stops the application: it reads as empty."""
         try:
             prefs = atomicio.read_json(self._prefs_path())
         except (OSError, ValueError):
-            prefs = {}
+            return {}
+        return prefs if isinstance(prefs, dict) else {}
+
+    def recent_workspaces(self) -> list[str]:
+        recent = self._preferences().get("recent")
+        return [r for r in recent if r and isinstance(r, str)] if isinstance(recent, list) else []
+
+    def _remember(self, location: Path) -> None:
+        """Failing to record a convenience list is not a failure to open the workspace."""
+        recent = [str(location)] + [r for r in self.recent_workspaces() if r != str(location)]
+        prefs = self._preferences()
         prefs["recent"] = recent[:10]
-        atomicio.atomic_write_json(self._prefs_path(), prefs)
+        try:
+            self.cfg_dir.mkdir(parents=True, exist_ok=True)
+            atomicio.atomic_write_json(self._prefs_path(), prefs)
+        except OSError as exc:
+            self.preferences_warning = (f"The recent workspaces list could not be saved in {self.cfg_dir}: "
+                                        f"{exc.strerror or exc}")
+        else:
+            self.preferences_warning = None
 
     # ------------------------------------------------------------------ workspace access
     def create_workspace(self, location: Path, name: str) -> None:
@@ -215,6 +227,15 @@ class Controller:
         except WorkspaceCorruptError as exc:
             self._set_block(str(exc))
             return {**out, "ok": False, "blocked": True, "message": describe_error(exc)}
+        except (OSError, workspace_module.WorkspaceError) as exc:
+            # Moved, disconnected, or refused: nothing can be established, so nothing is offered. A job
+            # still writing can cause a refusal by itself, and it must not leave a lasting block.
+            message = (f"This workspace cannot be read right now: {exc}\nIts folder may have been moved or "
+                       f"its drive disconnected ({self.location}).")
+            if self.busy:
+                return {**out, "ok": False, "message": message}
+            self._set_block(message)
+            return {**out, "ok": False, "blocked": True, "unavailable": True, "message": message}
         self._set_block(None)
         problems = [p for p in report.get("problems", []) if p.get("problem") != "entry-without-digest"
                     and (p.get("kind"), p.get("id")) not in pending_keys]
@@ -309,8 +330,8 @@ class Controller:
             raise RecoveryBlocked(self.blocked_reason)
         try:
             ws = Workspace.open(self.location, writable=True)
-            start = ws.head_seq()
             try:
+                start = ws.head_seq()
                 yield ws
             except BaseException as exc:
                 # Release, but never let a release failure replace the change's own outcome: that
@@ -321,16 +342,20 @@ class Controller:
                     if hasattr(exc, "add_note"):
                         exc.add_note(f"Also, releasing the writer lock failed: {close_exc}")
                 raise
-            end = ws.head_seq()
+            try:
+                end = ws.head_seq()
+            except OSError:
+                end = None  # the block returned normally, so whatever it committed succeeded
             try:
                 ws.close()
-            except WorkspaceCorruptError:
-                raise
             except Exception as close_exc:
                 if end == start:
                     raise  # nothing was committed: a plain failure
                 # Committed (single writer: only this handle can have advanced the journal), so the
-                # change is saved; only the lock release failed. Never report that as a failure.
+                # change is saved; only the lock release failed. Never report that as a failure, even
+                # when the release found a reason to refuse further changes.
+                if isinstance(close_exc, WorkspaceCorruptError):
+                    self._set_block(str(close_exc), found_by_write=True)
                 raise SavedWithWarning(
                     f"Saved, but releasing the workspace writer lock then failed: {close_exc} Until it is "
                     "released, further changes are refused; an administrator can break the lock "
@@ -549,6 +574,7 @@ class Controller:
                     raise ImportError_(f"{source.name} is already in the project; use Register file")
             except FileNotFoundError:
                 pass
+            before = ws.head_seq()
             dest.parent.mkdir(parents=True, exist_ok=True)
             try:
                 out = open(dest, "xb")
@@ -568,19 +594,22 @@ class Controller:
                     revision_description=description.strip() or "Initial revision")
             except BaseException as exc:
                 # Remove our copy only when it is certain that nothing was committed: the copy itself
-                # failed, or registration was refused by validation before the journal write. An
-                # ambiguous commit failure (e.g. CommittedNotApplied) keeps the file, because it
-                # may already be the registered working file.
-                from ..workspace import CommittedNotApplied, ConflictError
-                pre_commit = (not registering) or (
-                    isinstance(exc, (documents.DocumentError, paths.PathValidationError, ConflictError))
-                    and not isinstance(exc, CommittedNotApplied))
-                if pre_commit:
+                # failed, or the journal has not moved (this handle is the only writer). Otherwise the
+                # file may already be the registered working file, so it stays.
+                from ..workspace import CommittedNotApplied
+                if not registering or (not isinstance(exc, CommittedNotApplied) and self._head_is(ws, before)):
                     try:
                         os.unlink(dest)  # ours: created exclusively above and not registered
                     except OSError:
                         pass
                 raise
+
+    @staticmethod
+    def _head_is(ws: Workspace, seq: int) -> bool:
+        try:
+            return ws.head_seq() == seq
+        except OSError:  # cannot tell: treat as moved
+            return False
 
     def start_import(self, project_id: str, source: Path, subfolder: str = "", on_done=None, **kw) -> bool:
         return self._run("import", lambda: self.import_document(project_id, source, subfolder, **kw), on_done)
@@ -768,6 +797,11 @@ def describe_error(exc: BaseException) -> str:
         return (f"RevisionWorx could not confirm whether this check-in was saved: {exc}\n\nCheck the "
                 "disk, close and reopen the workspace, and look at the revision history before "
                 "trying again.")
+    busy_release = getattr(workspace_module, "LockReleaseBusyError", None)  # not in every supported core
+    if busy_release is not None and isinstance(exc, busy_release):
+        return (f"{exc}\n\nNothing was written, and this is not a sign of damage. Another RevisionWorx session, "
+                "or a program such as a virus scanner or backup tool, has the file open. Wait a moment and try "
+                "again. If it keeps happening, close other RevisionWorx windows and run 'revisionworx verify'.")
     if isinstance(exc, RecoveryBlocked):
         return (f"The workspace is read-only because it is recovery-blocked:\n{exc}\n\nNothing was "
                 "written. An administrator must resolve this with the command-line tools; then use "

@@ -240,6 +240,10 @@ class NewProjectForm:
         return ctl.create_project(self.to_new_project())
 
 
+WORKSPACE_REPLACED = ("This window belongs to a workspace that is no longer open, and another workspace "
+                      "may be open now. Nothing was changed. Close this window and start again.")
+
+
 # ---------------------------------------------------------------------------- adopt workflow
 class AdoptFlow(Observable):
     """State machine: idle -> previewing -> previewed -> adopting -> adopted (or error)."""
@@ -257,6 +261,7 @@ class AdoptFlow(Observable):
         self.report_text = "Choose a folder, then Preview. Preview scans only that folder and changes nothing."
         self.progress_text = ""
         self.result: dict | None = None
+        self.workspace_id = ctl.workspace_id  # this window belongs to one workspace
 
     def set_folder(self, folder: str) -> None:
         from pathlib import Path
@@ -283,7 +288,7 @@ class AdoptFlow(Observable):
 
     def preview(self) -> bool:
         from pathlib import Path
-        if not self.can_preview:
+        if not self.can_preview or self._workspace_replaced():
             return False
         if not self.ctl.start_preview(Path(self.folder), on_done=self._preview_done):
             self.progress_text = "Another background task is running."
@@ -304,12 +309,22 @@ class AdoptFlow(Observable):
             self.progress_text = "Preview complete. Nothing has been changed."
         self.changed()
 
+    def _workspace_replaced(self) -> bool:
+        if self.ctl.workspace_id == self.workspace_id:
+            return False
+        self.progress_text = WORKSPACE_REPLACED
+        self.changed()
+        return True
+
     def adopt(self) -> bool:
         from pathlib import Path
-        if not self.can_adopt:
+        if not self.can_adopt or self._workspace_replaced():
             return False
-        self.ctl.start_adopt(Path(self.folder), self.name, self.mode, self.number, self.customer,
-                             on_done=self._adopt_done)
+        if not self.ctl.start_adopt(Path(self.folder), self.name, self.mode, self.number, self.customer,
+                                    on_done=self._adopt_done):
+            self.progress_text = "Another background task is running; try again in a moment."
+            self.changed()
+            return False
         self.state, self.progress_text = "adopting", "Recording baseline…"
         self.changed()
         return True
@@ -822,6 +837,7 @@ class ImportFlow(Observable):
         self.message = ""
         self.result: tuple | None = None
         self.errors: dict[str, str] = {}
+        self.workspace_id = ctl.workspace_id  # this window belongs to one workspace
         try:
             self.subfolders = ctl.project_subfolders(project_id)
         except Exception as exc:
@@ -864,6 +880,10 @@ class ImportFlow(Observable):
 
     def start(self, on_done=None) -> bool:
         from pathlib import Path
+        if self.ctl.workspace_id != self.workspace_id:
+            self.state, self.message = "error", WORKSPACE_REPLACED
+            self.changed()
+            return False
         if not self.validate():
             self.message = "\n".join(self.errors.values())
             self.changed()
@@ -924,6 +944,9 @@ class AppStatus(Observable):
     @property
     def health_text(self) -> str:
         text = self.health.get("message", "")
-        if self.blocked:
+        if self.health.get("unavailable"):
+            text += ("\n\nAll changes are disabled until it can be read. Put it back or reconnect the drive, "
+                     "then press F5.")
+        elif self.blocked:
             text += "\n\nRevisionWorx is READ-ONLY for this workspace: browsing and exporting work; all changes are disabled."
         return text
