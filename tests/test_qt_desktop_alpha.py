@@ -55,7 +55,8 @@ def test_window_starts_on_start_page_with_alpha_banner(qapp, ctl):
     assert w.stack.currentWidget() is w.start_page
     assert "local disk" in w.alpha_banner.text() and "backups" in w.alpha_banner.text()
     assert not w.alpha_banner.isHidden()
-    assert "Alpha" in w.windowTitle()
+    from revisionworx import __version__
+    assert w.windowTitle() == f"RevisionWorx {__version__}"
     w.close()
 
 

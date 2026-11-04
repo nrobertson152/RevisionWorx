@@ -48,6 +48,7 @@ jobs:
       - name: Qt widget tests (must not be skipped)
         run: python -m pytest -q -ra -m qt
       - name: Full suite
+        if: success() || failure()   # still report everything when the Qt step failed
         run: python -m pytest -q -ra --durations=15
       - name: Windows contention, repeated (real sharing violations)
         if: runner.os == 'Windows'
