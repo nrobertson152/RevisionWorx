@@ -389,7 +389,22 @@ def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(q
     seen.clear()
     tab.checkin_btn.setFocus()
     qapp.processEvents()
-    assert tab.checkin_btn.hasFocus()
+    focus = qapp.focusWidget()
+    active = qapp.activeWindow()
+    modal = qapp.activeModalWidget()
+    assert tab.checkin_btn.hasFocus(), (
+        "Second activation focus not restored after Escape: "
+        f"focus={type(focus).__name__ if focus else None} "
+        f"focus_name={focus.objectName() if focus else None!r} "
+        f"active={type(active).__name__ if active else None} "
+        f"active_name={active.objectName() if active else None!r} "
+        f"modal={type(modal).__name__ if modal else None} "
+        f"modal_visible={modal.isVisible() if modal else None} "
+        f"window_active={win.isActiveWindow()} "
+        f"button_visible={tab.checkin_btn.isVisible()} "
+        f"button_enabled={tab.checkin_btn.isEnabled()} "
+        f"button_focus_policy={tab.checkin_btn.focusPolicy()}"
+    )
     QTimer.singleShot(0, cancel_modal)
     QTest.keyClick(tab.checkin_btn, Qt.Key.Key_Space)
     qapp.processEvents()
