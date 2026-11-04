@@ -20,6 +20,7 @@ Guarantees (tested in tests/test_changes_*.py):
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
@@ -40,6 +41,13 @@ NEEDS_IMPLEMENTATION = frozenset({ProposedAction.REVISE, ProposedAction.CREATE, 
 _EDITABLE_ECR_FIELDS = ("title", "reason", "description", "category", "priority", "project_ids",
                         "affected", "dependencies")
 _EDITABLE_ECO_FIELDS = ("title", "description", "category", "priority")
+
+
+def _input_digest(specs: list[dict]) -> str:
+    """Canonical digest of what a user action asked for, bound to its txid so a retry is recognised only
+    when it asks for exactly the same thing (same rows, same order, same fields)."""
+    canon = json.dumps(specs, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
 def _derived_id(prefix: str, txid: str, salt: str) -> str:
@@ -82,8 +90,9 @@ class _Pending:
 class _Tx:
     """Collects one operation's writes. Changes touched twice keep their first expectation."""
 
-    def __init__(self, svc: "ChangeService", op: str, txid: str | None):
+    def __init__(self, svc: "ChangeService", op: str, txid: str | None, input_digest: str | None = None):
         self.svc, self.op, self.txid = svc, op, txid
+        self.input_digest = input_digest if txid else None
         self.changes: dict[str, _Pending] = {}
         self.order: list[str] = []
         self.extra: list[Put] = []
@@ -101,7 +110,9 @@ class _Tx:
         ev = audit.make_event(new.id, new.kind.value, n, new.event_head, event, svc.actor(), svc.clock(),
                               from_status=base.status.value if base else None, to_status=new.status.value,
                               comment=comment, details={**(details or {}),
-                                                        **({"txid": self.txid} if self.txid else {})})
+                                                        **({"txid": self.txid} if self.txid else {}),
+                                                        **({"input": self.input_digest}
+                                                           if self.input_digest else {})})
         final = replace(new, event_count=n, event_head=ev["digest"], modified=ev["time"])
         data = final.to_dict()
         try:
@@ -206,8 +217,24 @@ class ChangeService:
         return self.catalog.describe(item) if self.catalog else None
 
     # ================================================================== plumbing
+    def _replayable(self, txid: str, replay_id: str, input_digest: str | None) -> Change:
+        """The change a committed ``txid`` created or changed, if this call is a true retry of it. A txid
+        names one user action: reusing it with different input is refused, never mapped onto the original."""
+        try:
+            change = self.get(replay_id)
+        except NotFound:
+            raise ReplayRefused(f"txid {txid} was already used for a different change") from None
+        mine = [ev for ev in self.history(replay_id) if (ev.get("details") or {}).get("txid") == txid]
+        if not mine:
+            raise ReplayRefused(f"txid {txid} was already used for a different change")
+        recorded = (mine[0].get("details") or {}).get("input")
+        if input_digest is not None and recorded is not None and recorded != input_digest:
+            raise ReplayRefused(f"txid {txid} was already used for this change with different input; "
+                                "nothing was changed. Start again with a new txid")
+        return change
+
     def _run(self, op: str, txid: str | None, replay_id: str | None,
-             build: Callable[[_Tx], Change]) -> Change:
+             build: Callable[[_Tx], Change], input_digest: str | None = None) -> Change:
         check_txid(txid)
         self.last_replayed = False
         if txid is not None:
@@ -218,15 +245,10 @@ class ChangeService:
             if outcome["state"] == "committed":
                 if replay_id is None:
                     raise ReplayRefused(f"txid {txid} was already used")
-                try:
-                    change = self.get(replay_id)
-                except NotFound:
-                    raise ReplayRefused(f"txid {txid} was already used for a different change") from None
-                if not any((ev.get("details") or {}).get("txid") == txid for ev in self.history(replay_id)):
-                    raise ReplayRefused(f"txid {txid} was already used for a different change")
+                change = self._replayable(txid, replay_id, input_digest)
                 self.last_replayed = True
                 return change
-        tx = _Tx(self, op, txid)
+        tx = _Tx(self, op, txid, input_digest)
         result = build(tx)
         try:
             seq = self.store.commit(tx.build(), txid)
@@ -464,7 +486,7 @@ class ChangeService:
             ecr = replace(ecr, number=self._reserve(tx, "ecr", number, cid, policy, counter))
             self._save_counter(tx, "ecr", counter)
             return tx.record(None, ecr, "created", details={"number": ecr.number})
-        return self._run("change.ecr.create", txid, cid, build)
+        return self._run("change.ecr.create", txid, cid, build, _input_digest([{**spec, "number": number}]))
 
     def create_requests(self, specs: list[dict], txid: str | None = None) -> list[ChangeRequest]:
         """Create several draft ECRs in ONE commit (bulk import): all are created or none."""
@@ -472,9 +494,18 @@ class ChangeService:
         if not specs:
             raise ValidationError("nothing to create")
         ids = [self._new_change_id("ecr", txid, f":{i}") for i in range(len(specs))]
+        digest = _input_digest(specs)
         if txid is not None and self.store.outcome(txid)["state"] != "not-found":
-            return [self._run("change.ecr.bulk", txid, ids[0], lambda tx: None)] + [self.get(i) for i in ids[1:]]
-        tx = _Tx(self, "change.ecr.bulk", txid)
+            first = self._run("change.ecr.bulk", txid, ids[0], lambda tx: None, digest)
+            rest = []
+            for i in ids[1:]:
+                try:
+                    rest.append(self._replayable(txid, i, digest))
+                except ReplayRefused:
+                    raise ReplayRefused(f"txid {txid} was already used for an import with different rows; "
+                                        "nothing was changed. Start again with a new txid") from None
+            return [first] + rest
+        tx = _Tx(self, "change.ecr.bulk", txid, digest)
         policy, counter = self.policy(), self._counter("ecr")
         made = []
         for i, (cid, spec) in enumerate(zip(ids, specs)):
