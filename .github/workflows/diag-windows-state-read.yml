@@ -1,0 +1,45 @@
+name: Diagnostic - Windows state read after replace
+on:
+  push:
+    branches: [diag/claude-b-windows-state-read]
+jobs:
+  probe:
+    name: "${{ matrix.core }}"
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        core: [gui-branch-core, merged-2282a59]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Merge candidate core (runner only, not accepted)
+        if: matrix.core == 'merged-2282a59'
+        shell: bash
+        run: |
+          git -c user.name=ci -c user.email=ci@invalid merge --no-commit --no-ff 2282a591e1b39cc224ca665e31acc393ff642e27
+          git log -1 --format=%H
+      - run: python -m pip install -e ".[dev]"
+      - name: Refused reads straight after replace
+        run: python tools/diag/state_read_probe.py 20000
+      - name: The failing test and its regressions, 25 times
+        shell: bash
+        env: { QT_QPA_PLATFORM: offscreen }
+        run: |
+          fail=0
+          for i in $(seq 25); do
+            python -m pytest -q --tb=short -p no:cacheprovider -m qt tests/test_qt_desktop_alpha.py -k "saved" > out.txt 2>&1 || { fail=$((fail+1)); grep -E '^(E  +|FAILED)' out.txt | cut -c1-220 | head -8; }
+          done
+          echo "pytest repeats: 25, failing repeats: $fail"
+      - name: Whole Qt desktop file, 10 times
+        shell: bash
+        env: { QT_QPA_PLATFORM: offscreen }
+        run: |
+          fail=0
+          for i in $(seq 10); do
+            python -m pytest -q --tb=short -p no:cacheprovider -m qt tests/test_qt_desktop_alpha.py > out.txt 2>&1 || { fail=$((fail+1)); grep -E '^(E  +|FAILED)' out.txt | cut -c1-220 | head -8; }
+          done
+          echo "pytest repeats: 10, failing repeats: $fail"
