@@ -181,6 +181,10 @@ def restore(src: Path, dst: Path) -> int:
         shutil.copyfile(src / name, target, follow_symlinks=False)
     if files_under(dst) != expected:
         raise BackupError("restored files failed digest verification")
+    # A source archive can change after the pre-copy verification. Recheck it
+    # before reporting success; the destination remains disposable on failure.
+    if verify(src) != expected:
+        raise BackupError("backup archive changed during restore")
     return len(expected)
 
 
