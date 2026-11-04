@@ -118,6 +118,63 @@ journal, `ok` is False when writes would be refused, and `pending` entries are s
 `ws.verify() -> {"problems": [...]}` is the full check: show problems read-only. Repair is an administrator action. A problem
 with `severity: "info"`, such as `fenced-entry`, needs no action and can never be cleared.
 
+### Integrity check: `revisionworx doctor [--quick] [--json]`, `doctor.examine(location, hash_content=True) -> dict`
+
+Strictly read-only: no lock, no recovery, no repair, no index, no temp file, and it works on a damaged journal that `Workspace.open`
+would refuse, reporting every bad entry rather than the first. Exit code 0 when `ok` (nothing above `info`), 1 otherwise, 2 if it could not run.
+
+The result is `{workspace, ok, errors, warnings, checked: [..], skipped: [..], findings: [{code, severity, subject, message, action}]}`.
+`skipped` says what was not judged and why; an absent finding means nothing about anything listed there. Findings are sorted by severity, code, subject.
+
+A pass counts only if no journal entry appeared while it ran, because every change that could cause a false alarm is published first. It tries up to 5 times. If writers keep
+publishing, `skipped` says there was no consistent view. It cannot tell a live lock holder from a dead one, and `--quick` skips hashing content.
+It proves nothing about SMB, NFS or other hosts: it reads what this machine sees.
+
+Codes are stable; scripts can rely on them.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `W001` | error | No workspace here |
+| `W002` | error | `workspace.json` unreadable or not a workspace file |
+| `W003` | error | Workspace format is newer than this RevisionWorx |
+| `J001` | error | Journal entry missing (gap) |
+| `J002` | error | Journal entry torn, malformed or changed after writing |
+| `J003` | warning | Entry has no digest (old version), so changes to it are undetectable |
+| `J004` | warning | A file in the journal folder is not an entry |
+| `J005` | info | Fenced entry: published after its writer lost the lock, never took effect |
+| `S001` | info/warning | `state.json` missing (info) or unreadable (warning): only a cache |
+| `S002` | error | `state.json` is ahead of the journal: a partial restore |
+| `S003` | info | Saved changes not materialised yet |
+| `L001` | info | Writer lock held |
+| `L002` | info | Writer lock held by a revoked writer; the next writer clears it |
+| `L003` | error | `writer.lock` unreadable |
+| `L004` | warning | Displaced lock or interrupted release; the next writer handles it |
+| `L005` | error | Orphan unreadable; writers refused until `lock clear-orphan` |
+| `L006` | warning | Administrative clear did not finish |
+| `L007` | error | Lock archived with its token not revoked: invariant W2 violated |
+| `L008` | error | Audited clear evidence missing or altered |
+| `R001` | warning | Record differs from the journal |
+| `R002` | warning | Record missing |
+| `R003` | warning | Record the journal never wrote |
+| `R004` | warning | Record should have been deleted |
+| `R005` | warning | Record unreadable |
+| `B001` | error | Blob an entry refers to is missing |
+| `C001` | error | Content a revision needs is missing, or the hash is invalid |
+| `C002` | error | Content does not match its hash |
+| `C003` | warning | Content could not be read |
+| `C004` | info | Content no revision uses |
+| `C005` | info | Temp file from an interrupted store |
+| `D001` | error | Document's revision chain does not hold together |
+| `D003` | error | Checkout of a document that does not exist |
+| `D004` | error | Revision of a document that does not exist |
+| `D005` | error | Document of a project that does not exist |
+| `D006` | error | Document names a released revision that does not exist |
+| `D007` | warning | Revision in a state the lifecycle does not have |
+| `D010` | error | Immutable revision field changed in the journal |
+| `D011` | error | Revision transition history rewritten |
+| `D012` | error | Revision deleted |
+| `X001` | error | A check could not finish; it appears in `skipped` |
+
 ## 6. Administrator-only operations (CLI, not for the alpha UI)
 
 `revisionworx lock show | break | clear-orphan` (ADR-015/019). These are deliberately absent from
@@ -176,6 +233,7 @@ A new kind is added to this table and to the collision test on PR #7 before use.
 - 2026-11-02: `MissingFileError` and `CommittedNotApplied.result` are new (Claude B's A4 and A6). `verify` marks `fenced-entry` with
   `severity: info`, and the CLI no longer exits 1 for it alone. `doc verify` also audits the journal for changed revisions.
   `read_writer_lock` reports an unreadable lock as `{"token": "?", "unreadable": True}` instead of raising `ValueError`.
+- 2026-11-03 (doctor): `revisionworx doctor` and `revisionworx.doctor` are new (§5). Nothing else changed.
 - 2026-11-04: §8 Subsystem persistence (Provisional) is new: documents what BOM (PR #21) and change control (PR #20) already use, plus the kind registry. No code changed.
 - 2026-11-03 (ADR-019 rev. 5): `LockReleaseBusyError` is new. `Workspace.open(writable=True)` raises it, not `WorkspaceCorruptError`, when a `.releasing-*`/`.fencing-*` file stays access-denied (Windows delete-pending or a held file); if that file has gone, the open now succeeds. No signature changed.
 - 2026-11-02 (`feffbcf`): `checkin(txid=...)` retries now return the original revision, as this page always said.

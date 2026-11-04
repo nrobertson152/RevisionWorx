@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, atomicio, documents, projects
+from . import __version__, atomicio, doctor, documents, projects
 from .clientstate import CheckoutTokens
 from .index import open_index
 from .workspace import CommittedNotApplied, Workspace, WorkspaceError
@@ -181,6 +181,13 @@ def cmd_verify(args):
         lines.append("Records were rebuilt from the journal; displaced files are in .revisionworx/quarantine/.")
     _emit(args, report, "\n".join(lines))
     if any(p.get("severity") != "info" for p in report["problems"]) and not report["repaired"]:
+        raise SystemExit(1)
+
+
+def cmd_doctor(args):
+    report = doctor.examine(_ws_location(args), hash_content=not args.quick)
+    _emit(args, report, doctor.render(report))
+    if not report["ok"]:
         raise SystemExit(1)
 
 
@@ -453,6 +460,9 @@ def build_parser() -> argparse.ArgumentParser:
     ix = sub.add_parser("index").add_subparsers(dest="sub", required=True)
     ix.add_parser("rebuild").set_defaults(fn=cmd_index_rebuild)
 
+    s = sub.add_parser("doctor", help="read-only integrity check of the whole workspace; changes nothing")
+    s.add_argument("--quick", action="store_true", help="check content objects are present without hashing them")
+    s.set_defaults(fn=cmd_doctor)
     s = sub.add_parser("verify", help="check records against the journal (admin)")
     s.add_argument("--repair", action="store_true", help="rebuild records from the journal")
     s.set_defaults(fn=cmd_verify)

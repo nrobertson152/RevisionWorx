@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-03 (session 15: failure injection across core operations)
+**Updated:** 2026-11-03 (session 15: failure injection; read-only integrity doctor)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -72,6 +72,14 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | GUI | `gui/viewmodels.py`, `gui/qt/documents.py` | View-models tested headless; Qt Documents tab **not executed** |
 
 ## Session log
+
+### 2026-11-03 (session 15) — read-only integrity doctor (#28 item 11)
+- `revisionworx doctor [--quick] [--json]` and `revisionworx/doctor.py`. Stable codes are in `docs/CORE_API.md` §5.
+  Takes no lock and changes nothing; keeps going past damage so one bad entry does not hide another; says what it did not check.
+- A pass counts only if the journal did not change during it, so a concurrent writer does not produce false errors (retries up to 5 times, then says so).
+- `tests/test_doctor.py`: one fixture per kind of damage, each asserting the exact codes and an unchanged tree (bytes and mtimes);
+  races injected deterministically; a real concurrent writer; and the advice followed through the real CLI.
+- Limits: it cannot tell a live lock holder from a dead one, and nothing here was run on SMB, NFS or a second host.
 
 ### 2026-11-03 (session 15) — the filesystem refuses, the process survives
 - New `tests/test_fault_injection_matrix.py`: each filesystem change of each core operation fails in turn (disk full, read-only,
