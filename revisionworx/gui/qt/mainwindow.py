@@ -518,7 +518,7 @@ class MainWindow(QMainWindow):
             self._was_busy = busy
             self.busy_label.setText("Working… (copying and hashing)" if busy else "")
             self.update_write_actions()
-            self.documents_tab.render_list()
+            self.documents_tab.update_add_actions()  # no list rebuild: that re-reads the workspace mid-write
             self.documents_tab.render_panel()
         for ev in events:
             if isinstance(ev, Progress):

@@ -198,8 +198,7 @@ class DocumentsTab(QWidget):
         self.notice.setText(self.list_vm.notice)
         self.notice.setToolTip(self.list_vm.notice)
         self.notice.setVisible(bool(self.list_vm.notice))
-        self.import_btn.setEnabled(self.list_vm.can_add)
-        self.register_btn.setEnabled(self.list_vm.can_add)
+        self.update_add_actions()
         if keep:
             if any(r["id"] == keep for r in self.list_vm.rows):
                 self.select_document(keep)
@@ -207,6 +206,10 @@ class DocumentsTab(QWidget):
                 self.panel.report_unreadable(keep, self.list_vm.error)
             else:  # no longer listed: its actions must not stay available
                 self.panel.load_or_report(None)
+
+    def update_add_actions(self) -> None:
+        self.import_btn.setEnabled(self.list_vm.can_add)
+        self.register_btn.setEnabled(self.list_vm.can_add)
 
     def render_panel(self) -> None:
         p = self.panel
