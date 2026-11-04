@@ -1,64 +1,125 @@
 # RevisionWorx
-A FOSS PDM software that integrates seamlessly with OpenSchematix.
 
-RevisionWorx is an offline, accountless, telemetry-free engineering Product Data Management tool for
-small and medium engineering departments, for Windows and Linux. Licensed GPL-3.0-or-later.
+Offline, accountless engineering Product Data Management (PDM) for small engineering teams, on Windows and
+Linux. No cloud, no subscription, no telemetry. Free software under the GNU GPL v3 or later.
 
-> **Status: pre-alpha.**
-> - **Tested on Linux:** workspaces, engineering roots, folder templates, project creation, opt-in
->   adoption, a local search index and (on the `phase2-documents` branch) document registration,
->   immutable SHA-256 revisions, lifecycle states, and check-out/check-in.
-> - **Not implemented yet:** parts, BOMs, Where Used, Before You Revise and native CAD reference
->   extraction.
-> - **Desktop window:** written for PySide6 but not yet run. Multi-user writes on network shares are **not yet
-> verified**: use one writer at a time. See `docs/DEVELOPMENT_PROGRESS.md`.
-> - **Use only on one computer's local disk, with disposable test data.** This pre-alpha is single-user and
->   local-only, and is not suitable for irreplaceable data. Other programs and people must not change files
->   inside `.revisionworx/locks` or `.revisionworx/journal`; RevisionWorx cannot protect its data if they do.
+RevisionWorx keeps your existing project folders exactly where they are and adds revision control, check-out /
+check-in, lifecycle states and engineering change control on top, recorded in a crash-safe journal inside a
+`.revisionworx` folder next to your projects.
 
-## What works today
-- A shared `.revisionworx` metadata folder with a crash-safe ordered journal (your project folders are
-  never reorganised and nothing is copied into them).
-- Engineering roots with separate Windows/Linux paths for the same share.
-- New projects from configurable folder templates (import/export as JSON).
-- **Adopt Existing Project**: read-only preview, then registration with a SHA-256 baseline inventory.
-  Never modifies the folder, never follows links, never invents history. Old projects stay untouched
-  until you adopt them; nothing scans your whole archive.
-- Fast local search of registered projects and their inventoried files (SQLite FTS5).
-- Recognition of Inventor, SolidWorks, STEP/IGES, DXF/DWG, PDF and OpenSchematix files; OpenSchematix
-  files are verified by content.
+## What RevisionWorx 1.0 is for
 
-## Running from source
-Python 3.10+. The core and command line have no other runtime dependencies. The desktop window
-needs PySide6 (Qt 6, LGPL-3.0): `pip install "PySide6-Essentials>=6.5"`.
+**Supported:** one computer's local disk. Several RevisionWorx windows or command-line sessions on that
+computer are safe together: only one can change the workspace at a time, the others wait or are refused, and an
+interrupted change is completed or rolled forward the next time the workspace is opened.
+
+**Shared network folders (SMB/NFS):** you may keep a workspace in a network folder, but **let only one computer
+make changes at a time**. Several computers writing to the same network folder at the same time has not been
+verified, and RevisionWorx shows a warning when a workspace is in a network folder. See
+[Known limitations](docs/KNOWN_LIMITATIONS.md).
+
+Keep regular backups of your project folders and their `.revisionworx` folder, as with any engineering data.
+
+## Features
+
+- **Workspaces and projects.** Engineering roots (with separate Windows and Linux paths for the same share),
+  new projects from configurable folder templates, and **Adopt existing project**: a read-only preview, then
+  registration with a SHA-256 inventory. Your folders are never reorganised, and nothing scans your archive
+  until you adopt a project.
+- **Documents and revisions.** Register or import files; every check-in is an immutable revision with a
+  SHA-256 hash, author, time and description. To go back, restore an older revision's content into your
+  working file and check it in as a new revision; history is never rewritten.
+- **Check-out / check-in.** Edit files in place with your CAD tool. Only the session that checked a document
+  out can check it in; conflicting edits are detected and your working file is never overwritten.
+  An administrator can release an abandoned checkout (`revisionworx doc release-checkout`, audited).
+- **Lifecycle.** Work in Progress, In Review, Approved, Released, Superseded, Obsolete, with audited
+  transitions.
+- **Engineering change control.** Change requests (ECR) and change orders (ECO): review and approval
+  signoffs, actions, the revision that implements each affected document, impact reports, and a tamper-evident
+  audit chain per change.
+- **BOM tools.** Validate, explode, roll up, compare and convert BOMs from CSV, XLSX or JSON; cycle and
+  quantity checks; purchasing lists; change impact.
+- **Integrity tools.** `revisionworx doctor` checks the whole workspace read-only; `revisionworx verify`
+  checks records against the journal. Damage is reported and writing stops (fail closed) rather than guessing.
+- **Search.** A fast local index of projects, files and documents (a disposable cache, rebuilt from the
+  journal whenever needed).
+- Recognises Inventor, SolidWorks, STEP/IGES, DXF/DWG, PDF and OpenSchematix files (OpenSchematix files are
+  checked by content). Native CAD files are stored and versioned byte-for-byte; RevisionWorx does not rewrite
+  CAD references.
+
+## Install
+
+**Standalone (no Python needed).** Download `RevisionWorx-1.0.0-windows-x64.zip` or
+`RevisionWorx-1.0.0-linux-x86_64.tar.gz`, check it against its `.sha256` file, and unpack it anywhere.
+Run `revisionworx-gui` (the desktop window) or `revisionworx` (the command line) from the unpacked folder.
+On Linux, some systems need Qt's runtime libraries; on Ubuntu:
+`sudo apt install libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0`.
+
+**With Python 3.10 or later:**
 
 ```bash
-python -m revisionworx --help                       # command line
-python -m revisionworx.gui.app [WORKSPACE_FOLDER]   # desktop window (PySide6)
-python -m revisionworx verify                       # check records against the journal
+python -m pip install "revisionworx-1.0.0-py3-none-any.whl[gui]"   # or, from a source checkout: pip install ".[gui]"
+revisionworx-gui            # desktop window
+revisionworx --help         # command line (standard library only; works without the [gui] extra)
 ```
 
-Example:
+To check that a copy works: `revisionworx-gui --self-test report.txt` creates a project in a temporary folder,
+imports a file, reopens it, and writes `self-test PASSED` to `report.txt`.
+
+## Getting started
+
+Desktop: start `revisionworx-gui`, choose an empty folder, enter a project name, and click **Create project**.
+Add files with **Import file…** (Ctrl+I) or **Register file…**, then use **Check out** / **Check in…** as you edit them.
+
+Command line:
+
 ```bash
-export REVISIONWORX_WORKSPACE=/mnt/eng            # folder that will hold .revisionworx
-python -m revisionworx init /mnt/eng --name "Engineering"
-python -m revisionworx root add Projects /mnt/eng/Projects --other-platform-path 'P:\'
-python -m revisionworx project new --name "Pump skid" --number J-2001 --customer Acme
-python -m revisionworx project preview "/mnt/eng/Projects/Acme/2019/J-1100"
-python -m revisionworx project adopt   "/mnt/eng/Projects/Acme/2019/J-1100" --name "Lift table"
-python -m revisionworx project list pump
-python -m revisionworx status
-python -m revisionworx doc register PROJECT_ID "/mnt/eng/Projects/Acme/J-2001 Pump skid/03 Drawings/Native/frame.idw" --number DWG-1
-python -m revisionworx doc checkout DOC_ID      # edit the file in place with your CAD tool
-python -m revisionworx doc checkin DOC_ID -m "Add weld symbols"
-python -m revisionworx rev transition REV_ID in_review
-python -m revisionworx doc register-report PROJECT_ID --csv register.csv
+export REVISIONWORX_WORKSPACE=/data/eng           # folder that holds .revisionworx (or use -w FOLDER)
+revisionworx init /data/eng --name "Engineering"
+revisionworx root add Projects /data/eng/Projects
+revisionworx project new --name "Pump skid" --number J-2001 --customer Acme
+revisionworx project preview "/data/eng/Projects/Acme/2019/J-1100"     # read-only
+revisionworx project adopt   "/data/eng/Projects/Acme/2019/J-1100" --name "Lift table"
+revisionworx doc register PROJECT_ID "/data/eng/Projects/J-2001 Pump skid/03 Drawings/Native/frame.idw" --number DWG-1
+revisionworx doc checkout DOC_ID                  # edit the file in place with your CAD tool
+revisionworx doc checkin DOC_ID -m "Add weld symbols"
+revisionworx rev transition REV_ID in_review
+revisionworx doctor                               # read-only health check
 ```
+
+Engineering changes:
+
+```bash
+revisionworx change new-request "Thicken base plate" --reason "Cracks in fatigue test" --doc DWG-1
+revisionworx change submit ECR-0001 && revisionworx change review ECR-0001 && revisionworx change approve ECR-0001
+revisionworx change new-order ECR-0001 --action "Update drawing"
+revisionworx change show ECO-0001                 # item keys and action ids
+revisionworx change signoff ECO-0001 approve && revisionworx change start ECO-0001
+#   ... check out, edit and check in DWG-1 as revision B ...
+revisionworx change implement ECO-0001 document:DOC_ID --rev B
+revisionworx change action-done ECO-0001 ACTION_ID
+revisionworx change implemented ECO-0001 && revisionworx change signoff ECO-0001 approve
+revisionworx change close ECO-0001
+```
+
+BOM files: `revisionworx bom validate bom.csv`, `revisionworx bom explode bom.xlsx`, `revisionworx bom diff old.csv new.csv`
+(`revisionworx bom -h` lists all commands).
+
+More: [User guide](docs/USER_GUIDE.md) · [Known limitations](docs/KNOWN_LIMITATIONS.md) ·
+[Changelog](CHANGELOG.md) · [Architecture](docs/ARCHITECTURE.md) · [Core API](docs/CORE_API.md) ·
+[Change control](docs/CHANGE_CONTROL.md) · [BOM API](docs/bom/BOM_API.md)
 
 ## Development
+
 ```bash
-pip install pytest "PySide6-Essentials>=6.5"
-QT_QPA_PLATFORM=offscreen python -m pytest   # Qt tests are skipped (not passed) without PySide6
+python -m pip install -e ".[dev]"
+QT_QPA_PLATFORM=offscreen python -m pytest -q -ra     # Qt tests are skipped (not passed) without PySide6
 ```
-Read `CLAUDE.md` and `docs/` before contributing: requirements, architecture decisions and the
-verified progress log live there.
+
+CI runs the full suite on Linux (Python 3.10, 3.13) and Windows (3.11, 3.13), installs the built wheel in a
+clean environment, drives the window with real keystrokes on an X display, and builds and self-tests the
+standalone packages. Read [AGENTS.md](AGENTS.md) and `docs/` before contributing.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE). The desktop window uses Qt for Python (PySide6), LGPL-3.0.

@@ -39,8 +39,65 @@ def exception_reporter(log=None):
     return report
 
 
+def self_test(report: Path) -> int:
+    """``--self-test REPORT``: start the real window offscreen-capable, create a project in a temporary
+    folder, import a file, reopen the workspace, close, and write the result to REPORT. Used to prove that
+    an installed or packaged copy really starts (a windowed Windows executable has no console). Touches
+    only a fresh temporary folder and a temporary profile. Exit code 0 means every step passed."""
+    import os
+    import shutil
+    import tempfile
+    lines: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="rwx-selftest-"))
+    for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
+        os.environ[var] = str(tmp / "profile" / var)
+    ok = False
+    try:
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication
+
+        from .. import __version__
+        from .controller import Controller
+        from .qt.mainwindow import MainWindow
+        app = QApplication.instance() or QApplication([sys.argv[0]])
+        window = MainWindow(Controller())
+        window.show()
+        result: dict = {}
+
+        def drive() -> None:
+            try:
+                home = tmp / "SelfTest"
+                project = window.ctl.quick_start(home, "Self test", number="ST-1")
+                src = tmp / "part.txt"
+                src.write_bytes(b"RevisionWorx self-test")
+                window.ctl.import_document(project["id"], src)
+                result["opened"] = window.open_location(home, quiet=True, select_project=project["id"])
+                result["documents"] = len(window.ctl.documents(project["id"]))
+                result["title"] = window.windowTitle()
+            except BaseException as exc:  # noqa: BLE001 - reported below
+                result["error"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            finally:
+                window.close()
+                app.quit()
+        QTimer.singleShot(0, drive)
+        app.exec()
+        lines.append(f"version {__version__}")
+        lines += [f"{k}: {v}" for k, v in result.items()]
+        ok = (not result.get("error") and result.get("opened") is True and result.get("documents") == 1
+              and __version__ in str(result.get("title", "")))
+    except BaseException as exc:  # noqa: BLE001
+        lines.append("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    lines.append("self-test " + ("PASSED" if ok else "FAILED"))
+    Path(report).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if len(argv) == 2 and argv[0] == "--self-test":
+        return self_test(Path(argv[1]))
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError:

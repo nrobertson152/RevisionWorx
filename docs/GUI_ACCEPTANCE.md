@@ -1,45 +1,28 @@
-# RevisionWorx 0.1.0 Alpha: GUI acceptance
+# RevisionWorx 1.0.0: GUI acceptance
 
 **Status: not yet performed.** No person has run this yet. Everything automated is listed in [What automation already covers](#what-automation-already-covers), and it does not replace these steps.
 
-**Who runs it:** the Director, or someone the Director names. **Time:** about 30 minutes.
+**Who runs it:** the Director, or someone the Director names, before the 1.0.0 release decision. **Time:** about 30 minutes.
 
-**Scope:** alpha Tier 1 only, meaning one user, a local disk and disposable test data. Passing this does not make the GUI suitable for real engineering data or shared folders. It also does not approve a merge or a release. Those are the Director's separate decisions.
+**Scope:** RevisionWorx 1.0 on one computer's local disk. Use test data, not a real project folder. Passing this does not approve the release; that is the Director's separate decision.
 
-**The visual redesign is paused.** This checks the current screens for correct behaviour. Judge whether things work and are understandable, not how modern they look. The redesign work is kept on `feature/ui-redesign`.
+## Which build to test
 
-## Which commit to test
-
-An acceptance applies only to the exact commit tested.
-
-- **Now (optional):** test the head of `feature/desktop-alpha` to catch usability problems early. This branch does not contain the final core yet.
-- **For PR #14 (required):** repeat on the merge commit that brings in the core candidate accepted by QA. That commit does not exist yet.
+An acceptance applies only to the exact build tested. Test the standalone package built by the **Package**
+workflow for the release-candidate commit (Actions › Package › the run for that commit › Artifacts), and record
+the commit SHA and the archive's SHA-256 in the results.
 
 ## Set up
 
-Use a copy of a file you can lose. Don't use a real project folder.
+**Windows.** Download `standalone-windows-x64`, unzip it (for example to `C:\RwxTest`), check the zip against
+its `.sha256` file (`Get-FileHash RevisionWorx-1.0.0-windows-x64.zip`), and run
+`C:\RwxTest\RevisionWorx-1.0.0-windows-x64\revisionworx-gui.exe`.
 
-**Windows (PowerShell).** Needs Python 3.11 ([python.org](https://www.python.org/downloads/)) and Git.
+**Linux.** Download `standalone-linux-x86_64`, check it (`sha256sum -c RevisionWorx-1.0.0-linux-x86_64.tar.gz.sha256`),
+unpack it (`tar -xzf ... -C ~/rwxtest`) and run `~/rwxtest/RevisionWorx-1.0.0-linux-x86_64/revisionworx-gui`.
+Some systems need Qt's runtime libraries; on Ubuntu those are `libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0`.
 
-```powershell
-git clone --branch feature/desktop-alpha https://github.com/nrobertson152/RevisionWorx.git C:\RwxTest\src
-cd C:\RwxTest\src
-git rev-parse HEAD                       # record this in the results
-py -3.11 -m venv C:\RwxTest\venv
-C:\RwxTest\venv\Scripts\python -m pip install ".[gui]"
-C:\RwxTest\venv\Scripts\revisionworx-gui
-```
-
-**Linux.** Needs Python 3.11 and Git. Some systems also need Qt's runtime libraries; on Ubuntu those are `libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0`.
-
-```bash
-git clone --branch feature/desktop-alpha https://github.com/nrobertson152/RevisionWorx.git ~/rwxtest/src
-cd ~/rwxtest/src
-git rev-parse HEAD                       # record this in the results
-python3.11 -m venv ~/rwxtest/venv
-~/rwxtest/venv/bin/python -m pip install ".[gui]"
-~/rwxtest/venv/bin/revisionworx-gui
-```
+In the steps below, `revisionworx` means the command-line program in the same unpacked folder.
 
 **Starting from nothing:** if you have run RevisionWorx before, it reopens your last workspace. To see the first-run screen, rename the preferences folder first: `%APPDATA%\RevisionWorx` on Windows or `~/.config/revisionworx` on Linux.
 
@@ -53,7 +36,7 @@ Mark each step Pass or Fail. If a step fails, note what you saw, keep going if y
 
 | # | Do | Expect |
 |---|---|---|
-| 1 | Turn off Wi-Fi or unplug the network, then start the app. | It opens with no account or sign-in prompt. The amber notice says single user, local disk only, not suitable for irreplaceable data. The window title says (Alpha). |
+| 1 | Turn off Wi-Fi or unplug the network, then start the app. | It opens with no account or sign-in prompt. The amber notice says RevisionWorx 1.0 is made for one computer's local disk, that in shared network folders only one computer should make changes at a time, and to keep backups. The window title says RevisionWorx 1.0.0. |
 | 2 | On the start page, choose a new empty folder as `F`. Enter name `Test Bracket` and number `T-1`. Click **Create project**. | The project opens. `F\Projects\T-1 Test Bracket` exists on disk. |
 
 ### Workflow 2: import and browse
@@ -94,11 +77,11 @@ Mark each step Pass or Fail. If a step fails, note what you saw, keep going if y
 | 19 | Close the app. Create an empty text file named `.releasing-deadbeef` containing only `{}` in `F\.revisionworx\locks`. Start the app and click **Check out**. | An error explains the block. A red banner says RECOVERY BLOCKED and READ-ONLY. Every write action is disabled, but you can still browse history and export. |
 | 20 | Run `revisionworx -w "F" lock clear-orphan .releasing-deadbeef --reason acceptance`, then press F5 in the app. | The banner clears and Check out works again. |
 
-### Workflow 6: alpha marking
+### Workflow 6: scope notice
 
 | # | Do | Expect |
 |---|---|---|
-| 21 | Move around the screens: start page, project, documents and a dialog. | The alpha notice stays visible on the main window. Nothing suggests shared folders or production use are supported. |
+| 21 | Move around the screens: start page, project, documents and a dialog. | The scope notice stays visible on the main window. Nothing suggests that several computers may change a shared folder at once. |
 
 ### Worth judging while you go
 
