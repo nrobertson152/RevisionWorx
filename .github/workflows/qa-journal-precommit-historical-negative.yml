@@ -77,14 +77,13 @@ jobs:
           expected = {'null', 'array', 'string', 'number'}
           observed = set()
           for line in failure_lines:
-              match = re.search(r'test_corrupt_journal_rejects_writer_without_publishing\\[([^]]+)\\]', line)
+              match = re.search(r'test_corrupt_journal_rejects_writer_without_publishing\[([^]]+)\]', line)
               assert match is not None, 'Unexpected failure: ' + line
               assert 'DID NOT RAISE' in line, 'Wrong failure mechanism: ' + line
               assert match.group(1) not in observed, 'Duplicate case: ' + line
               observed.add(match.group(1))
           assert observed == expected, 'Missing or unexpected historical cases: ' + repr(observed)
           assert len(failure_lines) == 4, 'Unexpected failure count: ' + repr(failure_lines)
-          assert not re.search(r'\\b(?:errors?|passed|skipped|xfailed|xpassed)\\b',
-                               completed.stdout.split('short test summary info')[-1].split('=')[0]), \\
-              'Unexpected non-failure test outcome'
+          assert not re.search(r'\b(?:errors?|passed|skipped|xfailed|xpassed)\b',
+                               completed.stdout.split('short test summary info')[-1].split('=')[0]), 'Unexpected non-failure test outcome'
           print('HISTORICAL_NEGATIVE_CONFIRMED: all four named cases failed to raise WorkspaceCorruptError; NOT production acceptance')
