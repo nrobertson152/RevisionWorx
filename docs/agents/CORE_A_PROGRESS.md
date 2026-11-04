@@ -147,3 +147,14 @@ Claude A: correct `Workspace.read_entry` shape validation and ensure `health()` 
 - **Exact corrected production under review:** `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`; the fixture uses its internal `_hash_pinned` boundary to deterministically simulate an editor's save-by-rename after the first capture read and before the second independent read. It retains the original file size and mtime, changes the inode/content, and requires `SourceChangedError`, no published content and no staging debris. Separate unchanged-source control requires verified SHA-256 bytes.
 - **Verification:** NOT EXECUTED; 0 observed PASS/FAIL/SKIP/XFAIL on Linux or Windows, Python 3.11/3.13. Intended command: `python -m pytest -q -ra tests/test_core_cad_source_rename_race.py`. CI workflow not yet added; QA must run the frozen fixture on exact corrected SHA and verify historical negative control where feasible. The injection is at a private helper boundary; it proves detection of this specific race, not all concurrent file mutations or multi-host guarantees. Windows native test required to establish `os.replace` semantics.
 - **Remaining:** pin and run native matrix, independently review fixture and positive/negative controls, investigate malformed-journal precommit behavior, Windows `.releasing-*` and actual SMB/NFS cross-host safety. Release HOLD.
+
+
+## 2026-11-04 — Immutable CAD source replacement CI gate
+
+- **Issue/branch:** #29 / `core/independent-journal-schema-regressions`; checked out under PR #22 simple comment protocol.
+- **Workflow:** `.github/workflows/core-a-cad-source-rename-pinned.yml`, commit `63e614b88e0a1578cf8319a0a93cf3f00493071b`.
+- **Immutable corrected production:** `3cc42e13c442d0b8ce7ad9e9d8ee85b4615af194`; **immutable test fixture:** `4bc8c235deffd1139ae94763fc753dff143d60d8`. Both identities asserted and printed before tests.
+- **Matrix/command:** Ubuntu and Windows, Python 3.11/3.13; `python -m pytest -q -ra tests/test_core_cad_source_rename_race.py`; two tests per job, eight planned executions.
+- **Verification:** workflow committed; no native CI logs inspected at this point. **0 observed PASS / 0 observed FAIL / 0 observed SKIP / 0 observed XFAIL.** A workflow definition is not a test result.
+- **Scope:** controlled save-by-rename with equal size/mtime at `_hash_pinned` boundary, expected typed `SourceChangedError`, no published object/staging, and an unchanged-source verified control. Synthetic CAD bytes only. Does not establish multi-host safety, real CAD application behavior, or Windows permission-race acceptance.
+- **Next:** inspect all four native logs, classify any failures, request independent QA fixture review, then select nonoverlapping malformed-journal precommit failure tests. No production edits or merge.
