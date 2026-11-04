@@ -70,5 +70,21 @@ jobs:
           print('HISTORICAL_NEGATIVE_PYTEST_EXIT=' + str(completed.returncode))
           assert completed.returncode == 1, 'Historical negative unexpectedly did not fail as expected'
           assert re.search(r'\b4 failed\b', completed.stdout), 'Expected four strict historical failures'
-          assert completed.stdout.count('DID NOT RAISE') >= 4, 'Expected fail-open evidence for all four structures'
-          print('HISTORICAL_NEGATIVE_CONFIRMED: 4 expected failures; this is NOT a positive acceptance result')
+          # A wrapper must not go green for four unrelated failures (for example,
+          # import errors or broken fixtures). Check each parameterized oracle.
+          failure_lines = [line for line in completed.stdout.splitlines()
+                           if line.startswith('FAILED ')]
+          expected = {'null', 'array', 'string', 'number'}
+          observed = set()
+          for line in failure_lines:
+              match = re.search(r'test_corrupt_journal_rejects_writer_without_publishing\\[([^]]+)\\]', line)
+              assert match is not None, 'Unexpected failure: ' + line
+              assert 'DID NOT RAISE' in line, 'Wrong failure mechanism: ' + line
+              assert match.group(1) not in observed, 'Duplicate case: ' + line
+              observed.add(match.group(1))
+          assert observed == expected, 'Missing or unexpected historical cases: ' + repr(observed)
+          assert len(failure_lines) == 4, 'Unexpected failure count: ' + repr(failure_lines)
+          assert not re.search(r'\\b(?:errors?|passed|skipped|xfailed|xpassed)\\b',
+                               completed.stdout.split('short test summary info')[-1].split('=')[0]), \\
+              'Unexpected non-failure test outcome'
+          print('HISTORICAL_NEGATIVE_CONFIRMED: all four named cases failed to raise WorkspaceCorruptError; NOT production acceptance')
