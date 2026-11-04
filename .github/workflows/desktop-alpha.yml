@@ -88,6 +88,45 @@ jobs:
         run: python -m pytest -q -ra
 
   # Real process, real X display, real keystrokes (Linux only). Not a person, and not Windows.
+  # The install commands in docs/GUI_ACCEPTANCE.md: a normal install in a clean venv, run from outside the source.
+  installed:
+    name: "${{ matrix.os }} / clean install, real entry points"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Linux Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0
+      - name: Clean venv, normal install
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          if [ "$RUNNER_OS" = Windows ]; then py="$RUNNER_TEMP/venv/Scripts/python.exe"; else py="$RUNNER_TEMP/venv/bin/python"; fi
+          "$py" -m pip install -q ".[gui]"
+          echo "VENV_PY=$py" >> "$GITHUB_ENV"
+      - name: Smoke from outside the source tree
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: ${{ matrix.platform }}
+        run: |
+          src="$PWD"
+          cd "$RUNNER_TEMP"
+          "$VENV_PY" "$src/tests/smoke_installed_gui.py"
+
   real-display:
     name: "ubuntu-latest / keyboard walkthrough on a real X display"
     runs-on: ubuntu-latest
