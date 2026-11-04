@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RevisionWorx main screen</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="position: relative; min-height: 100vh; box-sizing: border-box; display: flex; flex-wrap: wrap; font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.4; color: {{t.ink}}; background: {{t.surface}}">
+
+<sc-if value="{{showWelcome}}" hint-placeholder-val="{{false}}">
+<main style="flex: 1 1 100%; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding: 40px 24px; background: {{t.ground}}">
+  <div style="width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 24px">
+    <div style="display: flex; align-items: center; gap: 12px">
+      <span role="img" aria-label="RevisionWorx logo placeholder" style="flex: none; width: 48px; height: 48px; box-sizing: border-box; border: 1.5px dashed {{t.lineStrong}}; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: {{t.sub}}">logo</span>
+      <span style="font-size: 20px; font-weight: 600">RevisionWorx</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 600; line-height: 1.2">Start your first project</h1>
+      <p style="margin: 0; color: {{t.sub}}">Every revision of your engineering files, kept safe on this computer. No account or network needed.</p>
+    </div>
+    <form style="display: flex; flex-direction: column; gap: 16px; padding: 20px; border: 1px solid {{t.line}}; border-radius: 12px; background: {{t.surface}}" onSubmit="{{createFromWelcome}}">
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 500">
+        Project name
+        <input value="{{form.name}}" onChange="{{onFormName}}" placeholder="e.g. Hydraulic Manifold" style="height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 400">
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 500">
+        Project number (optional)
+        <input value="{{form.number}}" onChange="{{onFormNumber}}" placeholder="e.g. P-1042" style="height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 400">
+      </label>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: {{t.sub}}">
+        <span style="min-width: 0">Saved in Documents / RevisionWorx Projects</span>
+        <button type="button" style="flex: none; padding: 4px 0; border: 0; background: transparent; color: {{t.accentInk}}; font: inherit; font-weight: 500; cursor: pointer">Change</button>
+      </div>
+      <button type="submit" disabled="{{form.cannotCreate}}" style="height: 44px; border: 0; border-radius: 8px; background: {{form.bg}}; color: {{form.fg}}; font: inherit; font-weight: 600; cursor: {{form.cursor}}">Create project</button>
+    </form>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: {{t.sub}}">
+      <span>Already use RevisionWorx?</span>
+      <button type="button" onClick="{{openExisting}}" style="padding: 4px 0; border: 0; background: transparent; color: {{t.accentInk}}; font: inherit; font-weight: 500; cursor: pointer">Open an existing workspace</button>
+    </div>
+    <p style="margin: 0; padding: 10px 12px; border-radius: 8px; background: {{t.warnBg}}; color: {{t.warnFg}}; font-size: 12.5px">Alpha: single user, this computer only. Not suitable for irreplaceable data. Use test projects and keep your own backups.</p>
+  </div>
+</main>
+</sc-if>
+
+<sc-if value="{{showApp}}" hint-placeholder-val="{{true}}">
+<nav aria-label="Workspace" style="flex: 1 1 248px; box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; gap: 16px; padding: 12px; background: {{t.ground}}; border-right: 1px solid {{t.line}}">
+  <button type="button" title="Switch or open a workspace" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer">
+    <span role="img" aria-label="RevisionWorx logo placeholder" style="flex: none; width: 34px; height: 34px; box-sizing: border-box; border: 1.5px dashed {{t.lineStrong}}; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 9.5px; color: {{t.sub}}">logo</span>
+    <span style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+      <span style="font-size: 15px; font-weight: 600; line-height: 1.25">RevisionWorx</span>
+      <span style="font-size: 12.5px; color: {{t.sub}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Test workspace</span>
+    </span>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; color: {{t.sub}}"><path d="M6 9l6 6 6-6"></path></svg>
+  </button>
+
+  <label style="display: flex; align-items: center; gap: 8px; height: 38px; box-sizing: border-box; padding: 0 10px; border: 1px solid {{t.line}}; border-radius: 8px; background: {{t.surface}}; color: {{t.sub}}">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.3-4.3"></path></svg>
+    <input type="search" aria-label="Search all projects and documents" placeholder="Search everything" style="flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: {{t.ink}}; font: inherit; font-size: 13.5px">
+    <kbd style="flex: none; font-family: inherit; font-size: 11.5px; color: {{t.sub}}">Ctrl F</kbd>
+  </label>
+
+  <div style="display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 2px 2px 10px">
+      <h2 style="margin: 0; font-size: 12.5px; font-weight: 600; color: {{t.sub}}">Projects</h2>
+      <button type="button" aria-label="New project" title="New project (Ctrl+N)" disabled="{{blocked}}" onClick="{{openNew}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{newFg}}; cursor: {{addCursor}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14 M5 12h14"></path></svg>
+      </button>
+    </div>
+    <sc-for list="{{projectRows}}" as="p" hint-placeholder-count="3">
+      <button type="button" onClick="{{p.pick}}" aria-current="{{p.current}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: flex; flex-direction: column; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: {{p.bg}}; color: {{p.fg}}; font: inherit; text-align: left; cursor: pointer">
+        <span style="display: flex; align-items: center; gap: 8px; width: 100%">
+          <span style="flex: 1; min-width: 0; font-weight: {{p.weight}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{p.name}}</span>
+          <sc-if value="{{p.hasOut}}" hint-placeholder-val="{{false}}">
+          <span title="{{p.outHint}}" style="flex: none; display: flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 500; color: {{p.sub}}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4-1L19 8a2.1 2.1 0 0 0-3-3L5 16z"></path></svg>
+            {{p.outCount}}
+          </span>
+          </sc-if>
+        </span>
+        <span style="font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 12px; color: {{p.sub}}">{{p.number}}</span>
+      </button>
+    </sc-for>
+  </div>
+
+  <div style="flex: 1; min-height: 8px"></div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <button type="button" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; color: {{t.sub}}"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1.9-1.1 1.8 M12 17h.01"></path></svg>
+      Help and shortcuts
+    </button>
+    <p style="margin: 0; padding: 10px; border-radius: 8px; background: {{t.warnBg}}; color: {{t.warnFg}}; font-size: 12px; line-height: 1.35">Alpha: single user, this computer only. Not suitable for irreplaceable data. Use test projects and keep backups.</p>
+  </div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; background: {{t.surface}}">
+
+  <sc-if value="{{blocked}}" hint-placeholder-val="{{false}}">
+  <section aria-label="Changes are paused" style="display: flex; gap: 12px; margin: 16px 24px 0 24px; padding: 14px 16px; border-radius: 10px; background: {{t.dangerBg}}; color: {{t.dangerFg}}">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><path d="M6 11h12v9H6z M8.5 11V8a3.5 3.5 0 0 1 7 0v3"></path></svg>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+      <div>
+        <div style="font-weight: 600">Changes are paused to protect your data</div>
+        <div style="color: {{t.ink}}">An earlier save did not finish, and RevisionWorx cannot confirm it is safe to continue. You can still browse and export. Keep a copy of the workspace folder, run the fix below in a command prompt, then check again.</div>
+      </div>
+      <sc-if value="{{showBlockDetails}}" hint-placeholder-val="{{false}}">
+      <code style="display: block; padding: 8px 10px; border-radius: 6px; background: {{t.surface}}; color: {{t.ink}}; font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 12px; line-height: 1.45">orphaned lock-release file .releasing-deadbeef is unreadable, so its writer cannot be revoked; nobody may write until an administrator confirms that writer is stopped and runs 'revisionworx lock clear-orphan'</code>
+      </sc-if>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+        <button type="button" onClick="{{copyFix}}" style="height: 34px; padding: 0 12px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">{{copyLabel}}</button>
+        <button type="button" onClick="{{checkAgain}}" style="height: 34px; padding: 0 12px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">Check again</button>
+        <button type="button" onClick="{{toggleBlockDetails}}" style="height: 34px; padding: 0 12px; border: 0; background: transparent; color: {{t.ink}}; font: inherit; font-weight: 500; text-decoration: underline; cursor: pointer">{{blockDetailsLabel}}</button>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+  <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 20px 24px 12px 24px">
+    <div style="flex: 1 1 240px; min-width: 0">
+      <h1 style="margin: 0; font-size: 22px; font-weight: 600; line-height: 1.25">{{project.name}}</h1>
+      <p style="margin: 2px 0 0 0; font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 12.5px; color: {{t.sub}}">{{project.number}}</p>
+    </div>
+    <div style="position: relative; display: flex; gap: 8px">
+      <sc-if value="{{hasDocs}}" hint-placeholder-val="{{true}}">
+      <button type="button" disabled="{{blocked}}" onClick="{{addFiles}}" title="Add files (Ctrl+I)" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{addFg}}; font: inherit; font-weight: 500; cursor: {{addCursor}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14 M5 12h14"></path></svg>
+        Add files
+      </button>
+      </sc-if>
+      <button type="button" aria-label="Project actions" aria-expanded="{{projectMenuOpen}}" onClick="{{toggleProjectMenu}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; padding: 0; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; cursor: pointer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h.01 M12 12h.01 M19 12h.01"></path></svg>
+      </button>
+      <sc-if value="{{projectMenuOpen}}" hint-placeholder-val="{{false}}">
+      <div style="position: absolute; top: 44px; right: 0; z-index: 5; width: 210px; padding: 4px; display: flex; flex-direction: column; border: 1px solid {{t.line}}; border-radius: 10px; background: {{t.surface}}; box-shadow: 0 8px 24px {{t.shadow}}">
+        <button type="button" onClick="{{closeMenu}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="height: 36px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{t.ink}}; font: inherit; text-align: left; cursor: pointer">Open project folder</button>
+        <button type="button" onClick="{{closeMenu}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="height: 36px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{t.ink}}; font: inherit; text-align: left; cursor: pointer">Project details</button>
+        <button type="button" onClick="{{closeMenu}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="height: 36px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{t.ink}}; font: inherit; text-align: left; cursor: pointer">Archive project</button>
+      </div>
+      </sc-if>
+    </div>
+  </header>
+
+  <sc-if value="{{hasDocs}}" hint-placeholder-val="{{true}}">
+  <sc-if value="{{showList}}" hint-placeholder-val="{{true}}">
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 0 24px 12px 24px">
+    <div role="group" aria-label="Show" style="display: flex; flex-wrap: wrap; gap: 4px">
+      <sc-for list="{{filters}}" as="f" hint-placeholder-count="3">
+        <button type="button" onClick="{{f.pick}}" aria-pressed="{{f.pressed}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: {{f.bg}}; color: {{f.fg}}; font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer">
+          {{f.label}}
+          <span style="font-size: 12.5px; font-weight: 400; color: {{f.countFg}}">{{f.count}}</span>
+        </button>
+      </sc-for>
+    </div>
+    <label style="flex: 0 1 220px; margin-left: auto; display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid {{t.line}}; border-radius: 6px; color: {{t.sub}}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><path d="M4 5h16l-6 7.5V19l-4 2v-8.5z"></path></svg>
+      <input value="{{q}}" onChange="{{onQ}}" aria-label="Filter this project" placeholder="Filter this project" style="flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: {{t.ink}}; font: inherit; font-size: 13.5px">
+    </label>
+  </div>
+  </sc-if>
+
+  <div style="flex: 1; display: flex; flex-wrap: wrap; align-items: stretch; border-top: 1px solid {{t.line}}">
+
+    <sc-if value="{{showList}}" hint-placeholder-val="{{true}}">
+    <section aria-label="Documents" style="flex: 999 1 460px; min-width: 0; box-sizing: border-box; padding: 8px 12px 16px 12px">
+      <div style="overflow-x: auto">
+        <div style="min-width: 540px">
+          <div aria-hidden="true" style="display: grid; grid-template-columns: minmax(0, 1fr) 104px 36px 136px; column-gap: 12px; padding: 6px 12px; font-size: 12.5px; font-weight: 500; color: {{t.sub}}">
+            <span>Document</span>
+            <span>Number</span>
+            <span>Rev</span>
+            <span>State</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <sc-for list="{{rows}}" as="d" hint-placeholder-count="7">
+              <button type="button" onClick="{{d.pick}}" aria-current="{{d.current}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: grid; grid-template-columns: minmax(0, 1fr) 104px 36px 136px; column-gap: 12px; align-items: center; width: 100%; min-height: 54px; box-sizing: border-box; padding: 7px 12px; border: 0; border-radius: 8px; background: {{d.bg}}; color: {{t.ink}}; font: inherit; text-align: left; cursor: pointer">
+                <span style="min-width: 0; display: flex; align-items: center; gap: 10px">
+                  <span style="flex: none; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: {{d.tileBg}}; color: {{d.tileFg}}">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{d.icon}}"></path></svg>
+                  </span>
+                  <span style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+                    <span style="display: flex; align-items: center; gap: 8px; min-width: 0">
+                      <span style="min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{d.title}}</span>
+                      <sc-if value="{{d.hasPill}}" hint-placeholder-val="{{false}}">
+                      <span style="flex: none; padding: 0 6px; border-radius: 5px; background: {{d.pillBg}}; color: {{d.pillFg}}; font-size: 12px; font-weight: 500; line-height: 19px">{{d.pill}}</span>
+                      </sc-if>
+                    </span>
+                    <span style="font-size: 12.5px; color: {{d.sub}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{d.file}}</span>
+                  </span>
+                </span>
+                <span style="font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 12.5px; color: {{d.sub}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{d.number}}</span>
+                <span style="font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 13px; font-weight: 500">{{d.rev}}</span>
+                <span style="justify-self: start; padding: 0 8px; border-radius: 5px; background: {{d.chipBg}}; color: {{d.chipFg}}; font-size: 12.5px; font-weight: 500; line-height: 22px; white-space: nowrap">{{d.stateName}}</span>
+              </button>
+            </sc-for>
+          </div>
+          <sc-if value="{{noMatches}}" hint-placeholder-val="{{false}}">
+          <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 24px 12px; color: {{t.sub}}">
+            <span>{{noMatchesText}}</span>
+            <button type="button" onClick="{{clearFilter}}" style="padding: 4px 0; border: 0; background: transparent; color: {{t.accentInk}}; font: inherit; font-weight: 500; cursor: pointer">Show all documents</button>
+          </div>
+          </sc-if>
+        </div>
+      </div>
+    </section>
+    </sc-if>
+
+    <sc-if value="{{showNoSelection}}" hint-placeholder-val="{{false}}">
+    <aside aria-label="Selected document" style="flex: 1 1 372px; box-sizing: border-box; min-width: 0; padding: 24px; border-left: 1px solid {{t.line}}; color: {{t.sub}}">Select a document to see what you can do with it and its history.</aside>
+    </sc-if>
+
+    <sc-if value="{{showDetail}}" hint-placeholder-val="{{true}}">
+    <aside aria-label="Selected document" style="flex: 1 1 372px; box-sizing: border-box; min-width: 0; padding: 20px 24px 24px 24px; border-left: {{detailBorder}}; display: flex; justify-content: center">
+      <div style="width: 100%; max-width: {{detailMax}}; display: flex; flex-direction: column; gap: 16px">
+
+        <sc-if value="{{showBack}}" hint-placeholder-val="{{false}}">
+        <button type="button" onClick="{{backToList}}" style="align-self: flex-start; display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 0; border: 0; background: transparent; color: {{t.accentInk}}; font: inherit; font-weight: 500; cursor: pointer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+          All documents
+        </button>
+        </sc-if>
+
+        <div style="min-width: 0">
+          <h2 style="margin: 0; font-size: 18px; font-weight: 600; line-height: 1.3">{{sel.title}}</h2>
+          <p style="margin: 2px 0 0 0; font-size: 13px; color: {{t.sub}}; overflow-wrap: anywhere"><span style="font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 12.5px">{{sel.number}}</span>  ·  {{sel.file}}</p>
+        </div>
+
+        <div role="status" style="display: flex; gap: 10px; padding: 12px; border-radius: 10px; background: {{status.bg}}; color: {{status.fg}}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><path d="{{status.icon}}"></path></svg>
+          <div style="flex: 1; min-width: 0">
+            <div style="font-weight: 600">{{status.title}}</div>
+            <div style="font-size: 13px; color: {{status.help}}">{{status.text}}</div>
+          </div>
+        </div>
+
+        <div style="position: relative; display: flex; gap: 8px">
+          <button type="button" disabled="{{primary.disabled}}" onClick="{{primary.run}}" title="{{primary.hint}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="flex: 1 1 auto; min-width: 0; height: 42px; padding: 0 14px; border: 0; border-radius: 8px; background: {{primary.bg}}; color: {{primary.fg}}; font: inherit; font-weight: 600; cursor: {{primary.cursor}}">{{primary.label}}</button>
+          <button type="button" disabled="{{sel.cannotOpen}}" onClick="{{openFile}}" title="Open in its usual application" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="flex: none; height: 42px; padding: 0 14px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{sel.openFg}}; font: inherit; font-weight: 500; cursor: {{sel.openCursor}}">Open file</button>
+          <button type="button" aria-label="More actions" aria-expanded="{{moreOpen}}" onClick="{{toggleMore}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="flex: none; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; padding: 0; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; cursor: pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h.01 M12 12h.01 M19 12h.01"></path></svg>
+          </button>
+          <sc-if value="{{moreOpen}}" hint-placeholder-val="{{false}}">
+          <div style="position: absolute; top: 48px; right: 0; z-index: 5; width: 210px; padding: 4px; display: flex; flex-direction: column; border: 1px solid {{t.line}}; border-radius: 10px; background: {{t.surface}}; box-shadow: 0 8px 24px {{t.shadow}}">
+            <sc-for list="{{moreItems}}" as="m" hint-placeholder-count="2">
+              <button type="button" onClick="{{m.run}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="height: 36px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{m.fg}}; font: inherit; text-align: left; cursor: pointer">{{m.label}}</button>
+            </sc-for>
+          </div>
+          </sc-if>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-top: 1px solid {{t.line}}; border-bottom: 1px solid {{t.line}}">
+          <div style="position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px">
+            <span style="color: {{t.sub}}">Latest revision <span style="font-family: 'IBM Plex Mono', Consolas, monospace; font-weight: 500; color: {{t.ink}}">{{sel.rev}}</span></span>
+            <button type="button" disabled="{{sel.cannotChangeState}}" aria-expanded="{{stateMenuOpen}}" onClick="{{toggleStateMenu}}" title="Change state" style="flex: none; display: flex; align-items: center; gap: 4px; padding: 0 6px 0 8px; border: 0; border-radius: 5px; background: {{sel.chipBg}}; color: {{sel.chipFg}}; font: inherit; font-size: 12.5px; font-weight: 500; line-height: 24px; cursor: {{sel.stateCursor}}">
+              {{sel.stateName}}
+              <sc-if value="{{sel.canChangeState}}" hint-placeholder-val="{{true}}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+              </sc-if>
+            </button>
+            <sc-if value="{{stateMenuOpen}}" hint-placeholder-val="{{false}}">
+            <div style="position: absolute; top: 30px; right: 0; z-index: 5; width: 190px; padding: 4px; display: flex; flex-direction: column; border: 1px solid {{t.line}}; border-radius: 10px; background: {{t.surface}}; box-shadow: 0 8px 24px {{t.shadow}}">
+              <sc-for list="{{stateItems}}" as="m" hint-placeholder-count="2">
+                <button type="button" onClick="{{m.run}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="height: 36px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{t.ink}}; font: inherit; text-align: left; cursor: pointer">{{m.label}}</button>
+              </sc-for>
+            </div>
+            </sc-if>
+          </div>
+          <sc-if value="{{sel.hasReleased}}" hint-placeholder-val="{{false}}">
+          <span style="color: {{t.sub}}">Released revision <span style="font-family: 'IBM Plex Mono', Consolas, monospace; font-weight: 500; color: {{t.ink}}">{{sel.released}}</span></span>
+          </sc-if>
+        </div>
+
+        <section aria-label="History" style="display: flex; flex-direction: column; gap: 10px">
+          <h3 style="margin: 0; font-size: 13.5px; font-weight: 600">History</h3>
+          <div style="display: flex; flex-direction: column">
+            <sc-for list="{{history}}" as="h" hint-placeholder-count="3">
+              <div style="display: flex; gap: 10px">
+                <div aria-hidden="true" style="flex: none; width: 28px; display: flex; flex-direction: column; align-items: center">
+                  <span style="flex: none; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 14px; background: {{h.badgeBg}}; color: {{h.badgeFg}}; font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 12.5px; font-weight: 500">{{h.rev}}</span>
+                  <sc-if value="{{h.hasLine}}" hint-placeholder-val="{{true}}">
+                  <span style="flex: 1; width: 1px; min-height: 8px; background: {{t.line}}"></span>
+                  </sc-if>
+                </div>
+                <div style="flex: 1; min-width: 0; padding-bottom: 12px">
+                  <button type="button" onClick="{{h.toggle}}" aria-expanded="{{h.open}}" aria-label="{{h.aria}}" style-hover:enabled="box-shadow: inset 0 0 0 200px rgba(127, 140, 160, 0.14)" style="display: block; width: 100%; padding: 3px 6px; margin: -3px 0 0 -6px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer">
+                    <span style="display: block; font-size: 13.5px; font-weight: 500; line-height: 1.35">{{h.note}}</span>
+                    <span style="display: block; font-size: 12.5px; color: {{t.sub}}">{{h.meta}}</span>
+                  </button>
+                  <sc-if value="{{h.open}}" hint-placeholder-val="{{false}}">
+                  <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding: 10px; border-radius: 8px; background: {{t.ground}}; font-size: 12.5px">
+                    <div style="display: flex; gap: 12px; color: {{t.sub}}">
+                      <span>{{h.size}}</span>
+                      <span style="min-width: 0; font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 12px; overflow-wrap: anywhere">SHA-256 {{h.sha}}</span>
+                    </div>
+                    <sc-if value="{{h.hasCompare}}" hint-placeholder-val="{{false}}">
+                    <div style="color: {{t.ink}}">{{h.compareText}}</div>
+                    </sc-if>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                      <button type="button" onClick="{{h.exportIt}}" style="height: 30px; padding: 0 10px; border: 1px solid {{t.lineStrong}}; border-radius: 6px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">Export</button>
+                      <sc-if value="{{h.canCompare}}" hint-placeholder-val="{{true}}">
+                      <button type="button" onClick="{{h.compare}}" style="height: 30px; padding: 0 10px; border: 1px solid {{t.lineStrong}}; border-radius: 6px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">{{h.compareLabel}}</button>
+                      </sc-if>
+                      <sc-if value="{{h.canRestore}}" hint-placeholder-val="{{false}}">
+                      <button type="button" onClick="{{h.restore}}" style="height: 30px; padding: 0 10px; border: 1px solid {{t.lineStrong}}; border-radius: 6px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">Restore</button>
+                      </sc-if>
+                    </div>
+                    <sc-if value="{{h.restoreHint}}" hint-placeholder-val="{{false}}">
+                    <div style="color: {{t.sub}}">Check the document out to restore this revision.</div>
+                    </sc-if>
+                  </div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+      </div>
+    </aside>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{showEmpty}}" hint-placeholder-val="{{false}}">
+  <div style="flex: 1; box-sizing: border-box; display: flex; padding: 4px 24px 24px 24px; min-height: 420px">
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px 24px; border: 1.5px dashed {{t.lineStrong}}; border-radius: 12px; text-align: center">
+      <span style="width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 14px; background: {{t.tint}}; color: {{t.accentInk}}">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5 M7 10l5-5 5 5 M5 19h14"></path></svg>
+      </span>
+      <h2 style="margin: 0; font-size: 18px; font-weight: 600">Add your first file</h2>
+      <p style="margin: 0; max-width: 420px; color: {{t.sub}}">Drop files here, or choose them. Files from elsewhere are copied in, so your originals are never moved or changed.</p>
+      <button type="button" onClick="{{addFiles}}" style="height: 42px; margin-top: 4px; padding: 0 20px; border: 0; border-radius: 8px; background: {{t.accent}}; color: {{t.onAccent}}; font: inherit; font-weight: 600; cursor: pointer">Choose files</button>
+    </div>
+  </div>
+  </sc-if>
+</main>
+</sc-if>
+
+<sc-if value="{{anyMenuOpen}}" hint-placeholder-val="{{false}}">
+<button type="button" aria-label="Close menu" onClick="{{closeMenu}}" style="position: absolute; inset: 0; z-index: 4; padding: 0; border: 0; background: transparent; cursor: default"></button>
+</sc-if>
+
+<sc-if value="{{dialogCheckin}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; inset: 0; z-index: 10; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding: 24px; background: {{t.scrim}}">
+  <form role="dialog" aria-modal="true" aria-label="Check in" onSubmit="{{submitCheckin}}" style="width: 100%; max-width: 480px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; padding: 20px; border-radius: 12px; background: {{t.surface}}; box-shadow: 0 16px 48px {{t.shadow}}">
+    <div>
+      <h2 style="margin: 0; font-size: 18px; font-weight: 600">Check in {{sel.title}}</h2>
+      <p style="margin: 2px 0 0 0; color: {{t.sub}}">This becomes revision <span style="font-family: 'IBM Plex Mono', Consolas, monospace; font-weight: 500; color: {{t.ink}}">{{dlg.next}}</span>. Earlier revisions stay in History.</p>
+    </div>
+    <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 500">
+      What changed?
+      <textarea rows="4" value="{{dlg.draft}}" onChange="{{onDraft}}" placeholder="e.g. Widened the mounting slot to 8 mm per ECR-12" style="box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 400; resize: vertical"></textarea>
+    </label>
+    <sc-if value="{{dlg.unchanged}}" hint-placeholder-val="{{false}}">
+    <label style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 8px; background: {{t.warnBg}}; color: {{t.warnFg}}">
+      <input type="checkbox" checked="{{dlg.anyway}}" onChange="{{toggleAnyway}}" style="margin: 3px 0 0 0">
+      <span>This file has not changed since revision {{sel.rev}}. Check in anyway.</span>
+    </label>
+    </sc-if>
+    <div style="display: flex; justify-content: flex-end; gap: 8px">
+      <button type="button" onClick="{{closeDialog}}" style="height: 40px; padding: 0 16px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">Not yet</button>
+      <button type="submit" disabled="{{dlg.cannotSubmit}}" style="height: 40px; padding: 0 18px; border: 0; border-radius: 8px; background: {{dlg.bg}}; color: {{dlg.fg}}; font: inherit; font-weight: 600; cursor: {{dlg.cursor}}">Check in</button>
+    </div>
+  </form>
+</div>
+</sc-if>
+
+<sc-if value="{{dialogCancel}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; inset: 0; z-index: 10; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding: 24px; background: {{t.scrim}}">
+  <div role="dialog" aria-modal="true" aria-label="Cancel checkout" style="width: 100%; max-width: 480px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; padding: 20px; border-radius: 12px; background: {{t.surface}}; box-shadow: 0 16px 48px {{t.shadow}}">
+    <div>
+      <h2 style="margin: 0; font-size: 18px; font-weight: 600">Cancel the checkout?</h2>
+      <p style="margin: 2px 0 0 0; color: {{t.sub}}">No new revision will be recorded. What should happen to the file on disk?</p>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px">
+      <button type="button" onClick="{{closeDialog}}" style="height: 40px; padding: 0 14px; border: 0; background: transparent; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">Go back</button>
+      <button type="button" onClick="{{discardEdits}}" style="height: 40px; padding: 0 14px; border: 1px solid {{t.dangerFg}}; border-radius: 8px; background: {{t.surface}}; color: {{t.dangerFg}}; font: inherit; font-weight: 500; cursor: pointer">Discard my changes</button>
+      <button type="button" onClick="{{keepEdits}}" style="height: 40px; padding: 0 14px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">Keep my changes</button>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{dialogNew}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; inset: 0; z-index: 10; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding: 24px; background: {{t.scrim}}">
+  <form role="dialog" aria-modal="true" aria-label="New project" onSubmit="{{createProject}}" style="width: 100%; max-width: 440px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; padding: 20px; border-radius: 12px; background: {{t.surface}}; box-shadow: 0 16px 48px {{t.shadow}}">
+    <h2 style="margin: 0; font-size: 18px; font-weight: 600">New project</h2>
+    <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 500">
+      Project name
+      <input value="{{form.name}}" onChange="{{onFormName}}" placeholder="e.g. Hydraulic Manifold" style="height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 400">
+    </label>
+    <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 500">
+      Project number (optional)
+      <input value="{{form.number}}" onChange="{{onFormNumber}}" placeholder="e.g. P-1042" style="height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 400">
+    </label>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px">
+      <button type="button" style="padding: 4px 0; border: 0; background: transparent; color: {{t.accentInk}}; font: inherit; font-weight: 500; cursor: pointer">Use an existing folder instead</button>
+      <div style="display: flex; gap: 8px">
+        <button type="button" onClick="{{closeDialog}}" style="height: 40px; padding: 0 14px; border: 1px solid {{t.lineStrong}}; border-radius: 8px; background: {{t.surface}}; color: {{t.ink}}; font: inherit; font-weight: 500; cursor: pointer">Cancel</button>
+        <button type="submit" disabled="{{form.cannotCreate}}" style="height: 40px; padding: 0 16px; border: 0; border-radius: 8px; background: {{form.bg}}; color: {{form.fg}}; font: inherit; font-weight: 600; cursor: {{form.cursor}}">Create</button>
+      </div>
+    </div>
+  </form>
+</div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"layout":{"editor":"enum","options":["panes","focus"],"default":"panes"},"scenario":{"editor":"enum","options":["normal","checkin","attention","readonly","empty","welcome"],"default":"normal"},"$preview":{"width":1280,"height":800}}'>
+const THEMES = {
+  light: {
+    ground: '#F2F4F7', surface: '#FFFFFF', hover: '#E8EBF0', tint: '#E6EFFC', line: '#E1E5EA', lineStrong: '#C6CCD5',
+    ink: '#14181F', sub: '#56606C', pill: '#E1E5EA', accent: '#1D5FC9', onAccent: '#FFFFFF', accentInk: '#174FA8',
+    offBg: '#E4E7EC', offFg: '#5F6974', scrim: 'rgba(20, 24, 31, 0.38)', shadow: 'rgba(20, 24, 31, 0.18)',
+    neutralBg: '#EEF1F5', neutralFg: '#3D4651', infoBg: '#E6EFFC', infoFg: '#174FA8', okBg: '#E2F4E9', okFg: '#14613A',
+    warnBg: '#FFF3D6', warnFg: '#6F4700', dangerBg: '#FDECEA', dangerFg: '#A31F17', tile: '#EEF1F5', tileFg: '#3D4651'
+  },
+  dark: {
+    ground: '#12161B', surface: '#191E25', hover: '#262C34', tint: '#1E2C42', line: '#2A313A', lineStrong: '#404955',
+    ink: '#E9ECF0', sub: '#A2ACB8', pill: '#2F3640', accent: '#2F6FDB', onAccent: '#FFFFFF', accentInk: '#8DB8F7',
+    offBg: '#262C34', offFg: '#98A2AE', scrim: 'rgba(0, 0, 0, 0.58)', shadow: 'rgba(0, 0, 0, 0.5)',
+    neutralBg: '#262C34', neutralFg: '#C3CAD3', infoBg: '#1E2C42', infoFg: '#9BC1F8', okBg: '#16352A', okFg: '#7AD6A2',
+    warnBg: '#3A2E12', warnFg: '#EDC36B', dangerBg: '#3E1F1D', dangerFg: '#F39A90', tile: '#262C34', tileFg: '#C3CAD3'
+  }
+};
+
+const ICONS = {
+  part: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.5 8-4.5 M12 12v9',
+  assembly: 'M8 3l5 3v5.5l-5 3-5-3V6z M3 6l5 3 5-3 M8 9v5.5 M16 9.5l5 3V18l-5 3-5-3v-3.5 M16 15v6 M11 15l5 0 5-2.5',
+  drawing: 'M4 4h16v16H4z M4 15h16 M13 15v5 M8 8h8 M8 11h5',
+  doc: 'M7 3h7l5 5v13H7z M14 3v5h5 M10 13h6 M10 17h6',
+  check: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M8.5 12l2.5 2.5 4.5-5',
+  pencil: 'M4 20l4-1L19 8a2.1 2.1 0 0 0-3-3L5 16z',
+  alert: 'M12 4l9 16H3z M12 10v4 M12 17.5h.01',
+  lock: 'M6 11h12v9H6z M8.5 11V8a3.5 3.5 0 0 1 7 0v3',
+  info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 11v5 M12 8h.01'
+};
+
+const STATE_NAMES = {
+  wip: 'Work in Progress', in_review: 'In Review', approved: 'Approved', released: 'Released', superseded: 'Superseded', obsolete: 'Obsolete'
+};
+
+const STATE_ACTIONS = {
+  wip: [['in_review', 'Send for review'], ['obsolete', 'Mark obsolete']],
+  in_review: [['approved', 'Approve'], ['wip', 'Send back to work']],
+  approved: [['released', 'Release'], ['wip', 'Send back to work']],
+  released: [['obsolete', 'Mark obsolete']],
+  superseded: [['obsolete', 'Mark obsolete']],
+  obsolete: []
+};
+
+function rev(label, note, when, state, size, sha) {
+  return { rev: label, note: note, when: when, state: state, size: size, sha: sha };
+}
+
+function sampleProjects() {
+  return [
+    { id: 'p1042', name: 'Hydraulic Manifold', number: 'P-1042', docs: [
+      { id: 'assembly', kind: 'assembly', title: 'Manifold Assembly', file: 'manifold_assembly.iam', number: 'MA-1042', co: true, fileState: 'edited', history: [
+        rev('D', 'Moved the return port to clear the pump mount', 'Oct 30 at 4:12 PM', 'wip', 4.8, '7c49dc11…9bdaecb2'),
+        rev('C', 'Changed to 3/4 in. SAE ports after customer review', 'Oct 24 at 11:05 AM', 'released', 4.6, 'a67d5f46…b86f1254'),
+        rev('B', 'Thicker flange for load case B', 'Oct 20 at 2:40 PM', 'superseded', 4.5, '197c7c60…7880ac76'),
+        rev('A', 'Initial revision', 'Oct 14 at 9:18 AM', 'superseded', 4.1, '3f0a5714…15e2fe61')
+      ] },
+      { id: 'block', kind: 'part', title: 'Manifold Block', file: 'manifold_block.ipt', number: 'MB-1042-01', co: false, fileState: 'ok', history: [
+        rev('C', 'Deeper counterbore on the P and T ports', 'Oct 22 at 3:30 PM', 'released', 2.4, 'e5725df1…21f8ce0b'),
+        rev('B', 'Added a case drain port', 'Oct 18 at 10:02 AM', 'superseded', 2.3, 'beb1564f…7b81b78a'),
+        rev('A', 'Initial revision', 'Oct 14 at 9:21 AM', 'superseded', 2.1, 'f00aa31b…6e138b3d')
+      ] },
+      { id: 'drawing', kind: 'drawing', title: 'Manifold Block Drawing', file: 'manifold_block.idw', number: 'DW-1042-01', co: false, fileState: 'ok', history: [
+        rev('C', 'Updated port callouts to match revision C of the block', 'Oct 22 at 4:15 PM', 'released', 1.2, '0afcb80d…e7cec38d'),
+        rev('B', 'Added section view through the drain port', 'Oct 18 at 1:47 PM', 'superseded', 1.1, '47b90f45…9d2f2be1'),
+        rev('A', 'Initial revision', 'Oct 15 at 8:50 AM', 'superseded', 0.9, '36d1957f…6fe88bd7')
+      ] },
+      { id: 'bracket', kind: 'part', title: 'Mounting Bracket', file: 'mounting_bracket.ipt', number: 'MB-1042-03', co: false, fileState: 'missing', history: [
+        rev('A', 'Initial revision', 'Oct 28 at 2:06 PM', 'wip', 0.8, 'd2b7a1cf…e8a4b91c')
+      ] },
+      { id: 'plate', kind: 'part', title: 'Port Plate', file: 'port_plate.ipt', number: 'MB-1042-02', co: false, fileState: 'ok', history: [
+        rev('B', 'Moved the mounting holes to match the pump flange', 'Oct 29 at 11:40 AM', 'in_review', 1.3, '706f5f92…8461f237'),
+        rev('A', 'Initial revision', 'Oct 15 at 9:02 AM', 'superseded', 1.2, '51014dc6…7ce57c07')
+      ] },
+      { id: 'test', kind: 'doc', title: 'Pressure Test Procedure', file: 'pressure_test_procedure.docx', number: 'TP-1042-01', co: false, fileState: 'ok', history: [
+        rev('1', 'Initial revision', 'Oct 27 at 3:18 PM', 'wip', 0.2, '6887d614…c9d2eb84')
+      ] },
+      { id: 'seal', kind: 'doc', title: 'Seal Kit Specification', file: 'seal_kit_spec.pdf', number: 'SP-1042-01', co: false, fileState: 'ok', history: [
+        rev('2', 'Added the Viton option for high-temperature oil', 'Oct 26 at 9:40 AM', 'approved', 0.4, '393485e9…a5eb26e8'),
+        rev('1', 'Initial revision', 'Oct 16 at 2:12 PM', 'superseded', 0.3, '8ceb1c24…4e7d0bb1')
+      ] }
+    ] },
+    { id: 'p1038', name: 'Pump Test Stand', number: 'P-1038', docs: [
+      { id: 'frame', kind: 'assembly', title: 'Stand Frame', file: 'stand_frame.iam', number: 'FR-1038', co: false, fileState: 'ok', history: [
+        rev('B', 'Stiffened the base rails', 'Sep 30 at 1:20 PM', 'released', 6.2, '412e69ab…dfe0a771'),
+        rev('A', 'Initial revision', 'Sep 12 at 10:30 AM', 'superseded', 5.9, '63b04d34…38a1c9ee')
+      ] },
+      { id: 'schematic', kind: 'drawing', title: 'Hydraulic Schematic', file: 'hydraulic_schematic.idw', number: 'DW-1038-01', co: false, fileState: 'changed', history: [
+        rev('A', 'Initial revision', 'Sep 14 at 3:48 PM', 'wip', 0.7, 'fe8a179f…6fe16e8b')
+      ] }
+    ] },
+    { id: 'p1051', name: 'Cylinder Rebuild Kit', number: 'P-1051', docs: [] }
+  ];
+}
+
+function nextLabel(label) {
+  if (/^[0-9]+$/.test(label)) return String(Number(label) + 1);
+  return String.fromCharCode(label.charCodeAt(0) + 1);
+}
+
+function isAttention(d) {
+  return d.fileState === 'missing' || d.fileState === 'changed';
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = this.startState((props && props.scenario) || 'normal', (props && props.layout) === 'focus');
+  }
+
+  startState(scenario, focus) {
+    const s = {
+      projects: sampleProjects(), projectId: 'p1042', selectedId: focus ? null : 'block', filter: 'all', q: '',
+      menu: null, dialog: null, openRev: null, compareRev: null, flash: null, draft: '', anyway: false,
+      blocked: false, blockDetails: false, copied: false, welcome: false, formName: '', formNumber: '', addCount: 0
+    };
+    if (scenario === 'checkin') { s.selectedId = 'assembly'; s.dialog = 'checkin'; s.draft = 'Added a test port on the pressure line'; }
+    if (scenario === 'attention') { s.selectedId = 'bracket'; s.filter = 'attention'; }
+    if (scenario === 'readonly') { s.blocked = true; }
+    if (scenario === 'empty') { s.projectId = 'p1051'; s.selectedId = null; }
+    if (scenario === 'welcome') { s.welcome = true; s.selectedId = null; }
+    return s;
+  }
+
+  componentDidUpdate(prev) {
+    const p = this.props;
+    if (prev && (prev.scenario !== p.scenario || prev.layout !== p.layout)) {
+      this.setState(this.startState(p.scenario || 'normal', p.layout === 'focus'));
+    }
+  }
+
+  project() {
+    const s = this.state;
+    return s.projects.find((p) => p.id === s.projectId) || s.projects[0];
+  }
+
+  selected() {
+    const s = this.state;
+    return this.project().docs.find((d) => d.id === s.selectedId) || null;
+  }
+
+  rowsFor(project) {
+    const s = this.state;
+    const q = s.q.trim().toLowerCase();
+    return project.docs.filter((d) => {
+      if (s.filter === 'mine' && !d.co) return false;
+      if (s.filter === 'attention' && !isAttention(d)) return false;
+      if (!q) return true;
+      return (d.title + ' ' + d.file + ' ' + d.number).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  say(kind, title, text, extra) {
+    this.setState(Object.assign({ flash: { kind: kind, title: title, text: text }, menu: null, projects: this.state.projects }, extra || {}));
+  }
+
+  checkOut(d) {
+    d.co = true;
+    if (d.fileState !== 'changed') d.fileState = 'ok';
+    this.setState({ projects: this.state.projects, flash: null, menu: null, openRev: null, compareRev: null });
+  }
+
+  restoreFile(d) {
+    d.fileState = 'ok';
+    this.say('ok', 'File restored', 'Revision ' + d.history[0].rev + ' is back in the project folder. History has not changed.');
+  }
+
+  openFile(d) {
+    if (d.co) {
+      d.fileState = 'edited';
+      this.setState({ projects: this.state.projects, flash: null, menu: null });
+    } else {
+      this.say('neutral', 'Opened ' + d.file, 'Check it out first if you plan to change it.');
+    }
+  }
+
+  submitCheckin(d) {
+    const s = this.state;
+    const note = s.draft.trim();
+    const next = nextLabel(d.history[0].rev);
+    const entry = rev(next, note, 'Just now', 'wip', d.history[0].size + 0.1, '5ac2e01f…0d97a3c6');
+    if (d.restoredFrom) entry.restored = d.restoredFrom;
+    d.history.unshift(entry);
+    d.co = false;
+    d.fileState = 'ok';
+    d.restoredFrom = null;
+    this.setState({
+      projects: s.projects, dialog: null, draft: '', anyway: false, openRev: null, compareRev: null,
+      flash: { kind: 'ok', title: 'Saved as revision ' + next, text: 'It is now the latest revision. Earlier revisions stay in History.' }
+    });
+  }
+
+  changeState(d, target) {
+    const latest = d.history[0];
+    if (target === 'released') {
+      d.history.forEach((h) => { if (h.state === 'released') h.state = 'superseded'; });
+    }
+    latest.state = target;
+    this.say('ok', 'Revision ' + latest.rev + ' is now ' + STATE_NAMES[target], 'The change is recorded in History.');
+  }
+
+  addFile() {
+    const p = this.project();
+    const s = this.state;
+    const n = s.addCount + 1;
+    const d = {
+      id: 'added' + n, kind: 'part', title: 'Pump Housing' + (n > 1 ? ' ' + n : ''), file: 'pump_housing' + (n > 1 ? '_' + n : '') + '.ipt', number: '—',
+      co: false, fileState: 'ok', history: [rev('A', 'Initial revision', 'Just now', 'wip', 3.1, 'c18f4ac2…94ad4875')]
+    };
+    p.docs.push(d);
+    p.docs.sort((a, b) => a.title.localeCompare(b.title));
+    this.setState({
+      projects: s.projects, addCount: n, selectedId: d.id, filter: 'all', q: '', menu: null,
+      flash: { kind: 'ok', title: 'Added as revision A', text: 'Your original file was copied in and has not changed.' }
+    });
+  }
+
+  createProject(toApp) {
+    const s = this.state;
+    const name = s.formName.trim();
+    if (!name) return;
+    const p = { id: 'new' + s.projects.length, name: name, number: s.formNumber.trim() || 'No number yet', docs: [] };
+    const list = toApp ? [p] : s.projects.concat([p]);
+    this.setState({ projects: list, projectId: p.id, selectedId: null, dialog: null, welcome: false, formName: '', formNumber: '', filter: 'all', q: '', flash: null, menu: null });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const t = THEMES[this.props.theme === 'dark' ? 'dark' : 'light'];
+    const focus = this.props.layout === 'focus';
+    const project = this.project();
+    const sel = this.selected();
+    const rows = this.rowsFor(project);
+    const set = (patch) => () => this.setState(patch);
+    const chip = (state) => {
+      if (state === 'released') return { bg: t.okBg, fg: t.okFg };
+      if (state === 'approved') return { bg: t.infoBg, fg: t.infoFg };
+      if (state === 'in_review') return { bg: t.warnBg, fg: t.warnFg };
+      return { bg: t.neutralBg, fg: t.neutralFg };
+    };
+    const allDocs = project.docs;
+
+    const projectRows = s.projects.map((p) => {
+      const on = p.id === s.projectId;
+      const out = p.docs.filter((d) => d.co).length;
+      return {
+        name: p.name, number: p.number, current: on ? 'true' : undefined, bg: on ? t.tint : 'transparent',
+        fg: on ? t.accentInk : t.ink, sub: on ? t.accentInk : t.sub, weight: on ? 600 : 500,
+        hasOut: out > 0, outCount: out, outHint: out + (out === 1 ? ' document' : ' documents') + ' checked out by you',
+        pick: () => this.setState({ projectId: p.id, selectedId: focus ? null : (p.docs[0] ? p.docs[0].id : null), filter: 'all', q: '', flash: null, menu: null, openRev: null, compareRev: null })
+      };
+    });
+
+    const filterRows = [
+      { id: 'all', label: 'All', count: allDocs.length },
+      { id: 'mine', label: 'Checked out by me', count: allDocs.filter((d) => d.co).length },
+      { id: 'attention', label: 'Needs attention', count: allDocs.filter(isAttention).length }
+    ].map((f) => {
+      const on = s.filter === f.id;
+      return {
+        label: f.label, count: f.count, pressed: on ? 'true' : 'false', bg: on ? t.tint : 'transparent',
+        fg: on ? t.accentInk : t.sub, countFg: on ? t.accentInk : t.sub,
+        pick: () => {
+          const shown = project.docs.filter((d) => f.id === 'all' || (f.id === 'mine' && d.co) || (f.id === 'attention' && isAttention(d)));
+          const keep = shown.some((d) => d.id === s.selectedId);
+          this.setState({ filter: f.id, selectedId: keep ? s.selectedId : (focus || !shown[0] ? null : shown[0].id), flash: null, openRev: null, compareRev: null });
+        }
+      };
+    });
+
+    const rowVals = rows.map((d) => {
+      const on = sel && d.id === sel.id;
+      const latest = d.history[0];
+      const c = chip(latest.state);
+      let pill = '';
+      let pillBg = t.infoBg;
+      let pillFg = t.infoFg;
+      if (d.fileState === 'missing') { pill = 'File missing'; pillBg = t.dangerBg; pillFg = t.dangerFg; }
+      else if (d.fileState === 'changed') { pill = 'Changed'; pillBg = t.warnBg; pillFg = t.warnFg; }
+      else if (d.co && d.fileState === 'edited') { pill = 'Edited'; }
+      else if (d.co) { pill = 'Checked out'; }
+      const onTint = (bg) => (on && (bg === t.infoBg || bg === t.neutralBg) ? t.surface : bg);
+      return {
+        title: d.title, file: d.file, number: d.number, rev: latest.rev, stateName: STATE_NAMES[latest.state], icon: ICONS[d.kind],
+        chipBg: onTint(c.bg), chipFg: c.fg, hasPill: !!pill, pill: pill, pillBg: onTint(pillBg), pillFg: pillFg,
+        current: on ? 'true' : undefined, bg: on ? t.tint : 'transparent', sub: t.sub,
+        tileBg: on ? t.surface : t.tile, tileFg: on ? t.accentInk : t.tileFg,
+        pick: () => this.setState({ selectedId: d.id, flash: null, menu: null, openRev: null, compareRev: null })
+      };
+    });
+
+    let view = { title: '', file: '', number: '', rev: '', stateName: '', chipBg: 'transparent', chipFg: 'inherit', cannotOpen: true, openFg: t.sub, openCursor: 'default', cannotChangeState: true, canChangeState: false, stateCursor: 'default', hasReleased: false, released: '' };
+    let status = { bg: t.neutralBg, fg: t.ink, help: t.sub, icon: ICONS.check, title: '', text: '' };
+    let primary = { label: '', run: () => {}, disabled: true, hint: '', bg: t.offBg, fg: t.offFg, cursor: 'default' };
+    let moreItems = [];
+    let stateItems = [];
+    let history = [];
+
+    if (sel) {
+      const latest = sel.history[0];
+      const released = sel.history.find((h) => h.state === 'released');
+      const actions = STATE_ACTIONS[latest.state] || [];
+      const canChange = !s.blocked && actions.length > 0;
+      const missing = sel.fileState === 'missing';
+      const c = chip(latest.state);
+      const next = nextLabel(latest.rev);
+      view = {
+        title: sel.title, file: sel.file, number: sel.number, rev: latest.rev, stateName: STATE_NAMES[latest.state], chipBg: c.bg, chipFg: c.fg,
+        cannotOpen: missing, openFg: missing ? t.offFg : t.ink, openCursor: missing ? 'default' : 'pointer',
+        cannotChangeState: !canChange, canChangeState: canChange, stateCursor: canChange ? 'pointer' : 'default',
+        hasReleased: !!released && released !== latest, released: released ? released.rev : ''
+      };
+
+      const tone = {
+        neutral: { bg: t.neutralBg, fg: t.ink, help: t.sub, icon: ICONS.check },
+        info: { bg: t.infoBg, fg: t.infoFg, help: t.ink, icon: ICONS.pencil },
+        ok: { bg: t.okBg, fg: t.okFg, help: t.ink, icon: ICONS.check },
+        warn: { bg: t.warnBg, fg: t.warnFg, help: t.ink, icon: ICONS.alert },
+        danger: { bg: t.dangerBg, fg: t.dangerFg, help: t.ink, icon: ICONS.alert }
+      };
+      let line;
+      if (s.flash) line = s.flash;
+      else if (s.blocked) line = { kind: 'neutral', icon: ICONS.lock, title: 'Read-only for now', text: 'You can browse and export. Changes are paused for this workspace.' };
+      else if (missing) line = { kind: 'danger', title: 'The file is missing', text: 'It may have been moved, renamed or deleted outside RevisionWorx. Put it back, or restore the latest revision.' };
+      else if (sel.fileState === 'changed' && !sel.co) line = { kind: 'warn', title: 'Changed without a checkout', text: 'The file no longer matches revision ' + latest.rev + '. Check it out to keep the changes as a new revision.' };
+      else if (sel.co && sel.fileState === 'edited') line = { kind: 'info', title: 'You changed this file', text: 'Check in to save your changes as revision ' + next + '.' };
+      else if (sel.co) line = { kind: 'info', title: 'Checked out by you', text: 'Open the file, make your changes and save. Then check in.' };
+      else line = { kind: 'neutral', title: 'Available', text: 'Check it out before you change the file.' };
+      status = Object.assign({}, tone[line.kind], { title: line.title, text: line.text }, line.icon ? { icon: line.icon } : {});
+
+      let label = 'Check out';
+      let run = () => this.checkOut(sel);
+      let hint = 'Check out (Ctrl+K)';
+      if (missing) { label = 'Restore file'; run = () => this.restoreFile(sel); hint = 'Put revision ' + latest.rev + ' back in the project folder'; }
+      else if (sel.co) { label = 'Check in'; run = () => this.setState({ dialog: 'checkin', menu: null, draft: '', anyway: false }); hint = 'Check in (Ctrl+Shift+K)'; }
+      primary = s.blocked
+        ? { label: label, run: () => {}, disabled: true, hint: 'Changes are paused for this workspace', bg: t.offBg, fg: t.offFg, cursor: 'default' }
+        : { label: label, run: run, disabled: false, hint: hint, bg: t.accent, fg: t.onAccent, cursor: 'pointer' };
+
+      moreItems = [
+        { label: 'Show in folder', fg: t.ink, run: () => this.setState({ menu: null }) },
+        { label: 'Export a copy', fg: t.ink, run: () => this.say('ok', 'Exported revision ' + latest.rev, 'Saved to the folder you chose. SHA-256 verified.') }
+      ];
+      if (sel.co && !s.blocked) moreItems.push({ label: 'Cancel checkout', fg: t.dangerFg, run: () => this.setState({ dialog: 'cancel', menu: null }) });
+
+      stateItems = actions.map((a) => ({ label: a[1], run: () => this.changeState(sel, a[0]) }));
+
+      history = sel.history.map((h, i) => {
+        const open = s.openRev === h.rev;
+        const older = sel.history[i + 1];
+        const hasOlder = !!older;
+        const isLatest = i === 0;
+        const meta = 'You  ·  ' + h.when + '  ·  ' + STATE_NAMES[h.state] + (h.restored ? '  ·  Restored from ' + h.restored : '');
+        let compareText = '';
+        if (hasOlder && s.compareRev === h.rev) {
+          const delta = Math.round((h.size - older.size) * 10) / 10;
+          compareText = 'Compared with ' + older.rev + ': the file is ' + (delta === 0 ? 'the same size' : Math.abs(delta) + ' MB ' + (delta > 0 ? 'larger' : 'smaller')) + '. CAD content itself is not compared.';
+        }
+        return {
+          rev: h.rev, note: h.note, meta: meta, size: h.size.toFixed(1) + ' MB', sha: h.sha, open: open, hasLine: i < sel.history.length - 1,
+          aria: 'Revision ' + h.rev + ': ' + h.note, badgeBg: isLatest ? t.accent : t.neutralBg, badgeFg: isLatest ? t.onAccent : t.neutralFg,
+          canCompare: hasOlder, compareLabel: hasOlder ? 'Compare with ' + older.rev : '', hasCompare: !!compareText, compareText: compareText,
+          canRestore: !isLatest && sel.co && !s.blocked, restoreHint: !isLatest && !sel.co && !s.blocked,
+          toggle: () => this.setState({ openRev: open ? null : h.rev, compareRev: null, menu: null }),
+          exportIt: () => this.say('ok', 'Exported revision ' + h.rev, 'Saved to the folder you chose. SHA-256 verified.'),
+          compare: () => this.setState({ compareRev: h.rev }),
+          restore: () => {
+            sel.fileState = 'edited';
+            sel.restoredFrom = h.rev;
+            this.say('info', 'File replaced with revision ' + h.rev, 'Check in to record it as a new revision, or cancel the checkout and discard to undo. History has not changed.', { openRev: null });
+          }
+        };
+      });
+    }
+
+    const draftOk = s.draft.trim().length >= 3;
+    const unchanged = !!sel && sel.fileState !== 'edited';
+    const canSubmit = draftOk && (!unchanged || s.anyway);
+    const canCreate = s.formName.trim().length > 0;
+    const hasDocs = allDocs.length > 0;
+    const stop = (e) => { if (e && e.preventDefault) e.preventDefault(); };
+
+    return {
+      t: t,
+      showWelcome: s.welcome,
+      showApp: !s.welcome,
+      project: project,
+      blocked: s.blocked,
+      projectRows: projectRows,
+      filters: filterRows,
+      rows: rowVals,
+      q: s.q,
+      hasDocs: hasDocs,
+      showEmpty: !hasDocs,
+      showList: !focus || !sel,
+      showDetail: !!sel,
+      showNoSelection: !focus && !sel && hasDocs,
+      showBack: focus,
+      detailBorder: focus ? 'none' : '1px solid ' + t.line,
+      detailMax: focus ? '720px' : '100%',
+      noMatches: rows.length === 0 && hasDocs,
+      noMatchesText: s.filter === 'attention' ? 'Nothing needs attention.' : (s.filter === 'mine' ? 'Nothing is checked out by you.' : 'No documents match that filter.'),
+      addFg: s.blocked ? t.offFg : t.ink,
+      newFg: s.blocked ? t.offFg : t.sub,
+      addCursor: s.blocked ? 'default' : 'pointer',
+      sel: view,
+      status: status,
+      primary: primary,
+      history: history,
+      moreItems: moreItems,
+      stateItems: stateItems,
+      moreOpen: s.menu === 'more',
+      stateMenuOpen: s.menu === 'state',
+      projectMenuOpen: s.menu === 'project',
+      anyMenuOpen: !!s.menu,
+      dialogCheckin: s.dialog === 'checkin' && !!sel,
+      dialogCancel: s.dialog === 'cancel' && !!sel,
+      dialogNew: s.dialog === 'new',
+      dlg: {
+        next: sel ? nextLabel(sel.history[0].rev) : '', draft: s.draft, unchanged: unchanged, anyway: s.anyway, cannotSubmit: !canSubmit,
+        bg: canSubmit ? t.accent : t.offBg, fg: canSubmit ? t.onAccent : t.offFg, cursor: canSubmit ? 'pointer' : 'default'
+      },
+      form: {
+        name: s.formName, number: s.formNumber, cannotCreate: !canCreate,
+        bg: canCreate ? t.accent : t.offBg, fg: canCreate ? t.onAccent : t.offFg, cursor: canCreate ? 'pointer' : 'default'
+      },
+      showBlockDetails: s.blockDetails,
+      blockDetailsLabel: s.blockDetails ? 'Hide details' : 'Show details',
+      copyLabel: s.copied ? 'Copied' : 'Copy the fix command',
+      copyFix: set({ copied: true }),
+      checkAgain: set({ blocked: false, blockDetails: false, copied: false, flash: null }),
+      toggleBlockDetails: set({ blockDetails: !s.blockDetails }),
+      clearFilter: () => this.setState({ filter: 'all', q: '' }),
+      onQ: (e) => this.setState({ q: e.target.value }),
+      addFiles: () => { if (!s.blocked) this.addFile(); },
+      openFile: () => { if (sel) this.openFile(sel); },
+      backToList: set({ selectedId: null, flash: null, menu: null, openRev: null, compareRev: null }),
+      closeMenu: set({ menu: null }),
+      closeDialog: set({ dialog: null }),
+      toggleMore: set({ menu: s.menu === 'more' ? null : 'more' }),
+      toggleStateMenu: set({ menu: s.menu === 'state' ? null : 'state' }),
+      toggleProjectMenu: set({ menu: s.menu === 'project' ? null : 'project' }),
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      toggleAnyway: () => this.setState({ anyway: !s.anyway }),
+      submitCheckin: (e) => { stop(e); if (sel && canSubmit) this.submitCheckin(sel); },
+      discardEdits: () => {
+        if (!sel) return;
+        sel.co = false;
+        sel.fileState = 'ok';
+        sel.restoredFrom = null;
+        this.say('neutral', 'Checkout cancelled', 'The file is back to revision ' + sel.history[0].rev + '. Your changes were discarded.', { dialog: null });
+      },
+      keepEdits: () => {
+        if (!sel) return;
+        const hadEdits = sel.fileState === 'edited';
+        sel.co = false;
+        sel.fileState = hadEdits ? 'changed' : 'ok';
+        sel.restoredFrom = null;
+        this.say('neutral', 'Checkout cancelled', hadEdits ? 'Your changes are still in the file, but they are not a revision.' : 'Nothing was recorded.', { dialog: null });
+      },
+      openNew: set({ dialog: 'new', formName: '', formNumber: '', menu: null }),
+      onFormName: (e) => this.setState({ formName: e.target.value }),
+      onFormNumber: (e) => this.setState({ formNumber: e.target.value }),
+      createProject: (e) => { stop(e); this.createProject(false); },
+      createFromWelcome: (e) => { stop(e); this.createProject(true); },
+      openExisting: set({ welcome: false, selectedId: focus ? null : 'block' })
+    };
+  }
+}
+</script>
+</body>
+</html>

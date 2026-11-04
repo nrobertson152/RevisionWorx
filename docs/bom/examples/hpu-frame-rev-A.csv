@@ -1,0 +1,17 @@
+parent_number,find_number,child_number,child_revision,quantity,unit,reference_designators,description,part_unit,note
+,,HPU-FRAME,A,,,,Hydraulic power unit frame,EA,
+,,FRAME-WELDMENT,C,,,,Welded base frame 1200x800,EA,
+,,PUMP-MOUNT,A,,,,Pump mounting sub-assembly,EA,
+,,BRACKET-PM,A,,,,Pump bracket 10 mm plate,EA,
+,,BOLT-M10-30,,,,,Hex bolt M10x30 8.8 zinc,EA,
+,,WASHER-M10,,,,,Flat washer M10,EA,
+,,NUT-M10,,,,,Nyloc nut M10,EA,
+,,HOSE-HYD-12,,,,,Hydraulic hose 1/2 in 2SN,m,cut to length
+HPU-FRAME,10,FRAME-WELDMENT,C,1,EA,,,,
+HPU-FRAME,20,PUMP-MOUNT,A,2,EA,,,,
+HPU-FRAME,30,BOLT-M10-30,,8,EA,,,,
+HPU-FRAME,40,WASHER-M10,,8,EA,,,,
+HPU-FRAME,50,HOSE-HYD-12,,1.5,m,,,,
+PUMP-MOUNT,10,BRACKET-PM,A,1,EA,,,,
+PUMP-MOUNT,20,BOLT-M10-30,,4,EA,,,,
+PUMP-MOUNT,30,NUT-M10,,4,EA,,,,

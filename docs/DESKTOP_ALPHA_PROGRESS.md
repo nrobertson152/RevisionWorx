@@ -1,0 +1,312 @@
+# Desktop 0.1.0 Alpha — progress log (Issue #13)
+
+Owner: Claude B (desktop/GUI). Branch: `feature/desktop-alpha` (from Phase 2 `366d435`).
+Scope: PySide6 GUI, UI adapters and UI tests only. No core files are modified on this branch.
+
+> **Alpha status:** single user, local disk only. Not suitable for irreplaceable production data.
+> The app shows this permanently in a banner.
+
+## Resume here (updated 2026-11-04)
+- **GUI code and tests:** `cbd9f5c` on `feature/desktop-alpha`. CI run 41769236050 is green; see checkpoint 9.
+- **Feature additions and the visual redesign are paused by the Director.** Work is limited to making the alpha reliable. The proposal in `UI_REDESIGN_PROPOSAL.md` is on hold.
+- **Next task:** run Restore and Cancel with "Discard edits" in the background. They copy the whole file on the GUI thread, so a large CAD file freezes the window.
+- **Waiting on the Director:** manual acceptance of the installed GUI (`GUI_ACCEPTANCE.md`), which nobody has done yet, and the logo file.
+- **Waiting on others:** independent review of everything after `ce00ac4`. The CI `accepted-core` pin is still `fe8a179`, and it moves only with independent acceptance.
+- **Rules:** no merge, rebase, retarget, release or core edits. Report results on issue #13 and PR #14 with exact SHAs and counts.
+
+## Checkpoint 1 — `df024e6` (2026-11-02)
+
+### What exists and works (verified by tests below)
+| Alpha workflow | GUI | Tests |
+|---|---|---|
+| 1. Start offline, create/open a local project | Start page: one-step **Create project** (workspace + `Projects` root + managed project), **Open workspace…**, recent list; startup reopens last workspace or falls back to the start page with the reason | `test_quick_start_*`, `test_window_starts_on_start_page…`, `test_missing_workspace_returns…` |
+| 2. Import a document, browse metadata/status | **Import file…** (Ctrl+I): exclusive copy into a chosen project folder + revision 1; summary fields, coloured status | `test_import_*`, `test_import_flow_viewmodel`, `test_full_alpha_journey…` |
+| 3. Check out / check in with a meaningful description | **Check out** (Ctrl+K), **Check in…** dialog (Ctrl+Shift+K): description required (≥3 chars), optional label, explicit "unchanged" override | `test_checkout_checkin_history_and_restart`, journey test |
+| 4. Revision history, reopen after restart | History table + full revision detail pane (author, size, SHA-256, state changes); checkouts survive restart (per-user token store) | `test_checkout_survives_restart…`, journey test |
+| 5. Actionable errors | Missing file, permission denied, conflicting edit (stale checkout / foreign checkout / token mismatch), **recovery-blocked** (journal integrity failure) and pending-recovery banner | `test_missing_working_file…`, `test_permission_denied…`, `test_conflicting_edit…`, `test_recovery_blocked…`, `test_pending_recovery…` |
+| 6. Alpha marking | Permanent banner + "(Alpha)" in title | `test_alpha_notice_is_explicit`, `test_window_starts…` |
+
+Defect fixed: Workspace menu actions late-bound their slot, so **every** menu item ran "Refresh"
+(`test_menu_actions_call_their_own_slots`).
+
+### Test evidence
+| Where | Command | Result |
+|---|---|---|
+| CI run 41564516271, ubuntu-latest, Python 3.11.17, PySide6/Qt 6.12.0 | `pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py` | 11 passed |
+| same | `pytest -q -ra` | 222 passed |
+| CI run 41564516271, windows-latest, Python 3.11.9, PySide6/Qt 6.12.0 | Qt tests | 11 passed |
+| same | `pytest -q -ra` | 220 passed, 2 skipped (POSIX permission test; case-insensitive FS test) |
+| Claude B sandbox, Linux, Python 3.13.18, **no PySide6** (no package index reachable) | `pytest -q -ra` | 210 passed, 3 skipped (2 Qt modules, permission test as root) |
+| same, as non-root user | `pytest -q tests/test_desktop_alpha.py` | 20 passed |
+
+Qt tests run offscreen. **The installed GUI has not been launched interactively by anyone yet**; see
+manual acceptance below.
+
+### Design notes / residual risks
+- **Import** is a GUI adapter over public core calls: the copy is created with `open(..., "xb")`
+  (never overwrites) while the writer lock is held, after a fail-closed journal integrity check. The
+  copy is removed only when nothing can have been committed (copy failed, or core validation refused
+  registration). A crash between copy and commit leaves an unregistered copy in the project folder
+  (no data loss; register it with "Register file…"). A core API would close this gap (see A2 below).
+- **Health check** reads every journal entry (seq + SHA-256). O(journal size); fine for alpha.
+- The GUI holds the writer lock only per operation (unchanged Phase 1 model).
+
+### API dependencies requested from core (Claude A, via PR #7) — GUI works around all of them today
+- **A1 Read-only health API**: `Workspace.health()` → integrity status, pending-recovery count,
+  reason. GUI currently loops `journal_seqs()` + `read_entry()`.
+- **A2 Core import**: `documents.import_document(ws, project_id, source, rel_path, …)` that copies
+  via temp + exclusive publish and records intent, so a crash cannot leave an unregistered copy.
+- **A3 "Nothing was written" classification**: a marker (e.g. `exc.nothing_written`) or
+  `CommitNotAttempted` base, so adapters can safely clean up after a refused operation.
+- **A4 `MissingFileError(DocumentError)`**: GUI matches the text "does not exist" today.
+- **A5 Public accessors** for what the GUI reaches privately: `documents._require_doc`,
+  `documents.lc_mod.allowed_targets`, and `LocalIndex.db` (project file listing).
+
+## Checkpoint 2 — `7125d12` + busy-state commit (2026-11-02)
+- **Working-file column** in the document list (OK / Edited / Changed, not checked out / Missing /
+  Unavailable) from core `document_status` (size+mtime, hash only when needed); red/amber rows and a
+  "need attention" notice. Problems are visible without opening each document.
+- **Restore to working file** (while checked out, older revisions only, confirmation first) via core
+  `restore_to_working`. History is never rewritten; the next check-in records `restored_from`.
+- **Compare with previous** via core `compare_revisions` (metadata only; CAD content is not diffed).
+- **Busy state**: while an import/check-in/scan runs, the status bar says so and check-out, check-in,
+  cancel and import are disabled; a second job is refused, not queued.
+- Evidence for `7125d12`: CI run 41565168800 — ubuntu 3.11.17: Qt 12 passed, full 226 passed;
+  windows 3.11.9: Qt 12 passed, full 224 passed, 2 skipped (same two as before).
+
+## Release-candidate work — `e5725df`, `beb1564`, `b4c6d72` (Claude B)
+CORE_API compliance, no false success, read-only when recovery-blocked, launch contract
+(`docs/GUI_LAUNCH_CONTRACT.md`), F5 keeps the selection.
+Evidence for `b4c6d72`: CI run 41567499552 — ubuntu 3.11.17: Qt 20 passed, full 242 passed;
+windows 3.11.9: Qt 20 passed, full 240 passed, 2 skipped. Integration accepted this exact commit in its
+frozen GUI/CLI matrix (run 41568957858); it has not accepted anything newer.
+
+## Checkpoint 3 — `062baa3`..`17651af` (2026-11-02, takeover from Claude B)
+First time the GUI was rendered and looked at (offscreen). Screenshots, Linux offscreen, not an
+interactive session: [default size](desktop-alpha/workspace-1200x760.png),
+[minimum size](desktop-alpha/workspace-minimum.png).
+
+| Defect on `b4c6d72` | Now |
+|---|---|
+| Default 1200x760: revision history showed no rows. Minimum 800x520: action buttons and history off screen | Project details moved to a tab; tables keep at least 3 rows; the layout sets its own minimum |
+| Selecting a document that failed to load left the previous document's actions enabled while another row was highlighted, so Check out acted on the wrong document | Panel clears, reason shown inline, F5 retries |
+| Import or adopt saved with a warning raised `TypeError` out of the GUI poll | Shown as saved with a warning |
+| Register saved with a warning showed nothing; project creation saved with a warning looked like a failure and invited a duplicate | Warning shown; the attempt ends |
+| Committed check-in, cancel or checkout reported as failed if the local token file could not be updated | Warning; the change is reported as saved |
+| Check-in outcome unreadable from the journal looked like an ordinary failure | Says it could not confirm, and to check the history before retrying |
+| Filtered-out document or project kept its actions; project list refresh dropped the selection | Cleared when hidden; selection kept otherwise |
+| Change state and three menu items enabled while recovery-blocked; project actions enabled during jobs | Disabled |
+| Quit, close or switch workspace during a job | Refused with a message |
+| Open file did nothing when no application could open the file | Reports it |
+| Errors mentioned shares and networks | Local wording (Director tier 1) |
+| A long Windows path in a label set the window's minimum width (introduced by `062baa3`, fixed in `06a9d4b`) | Clipped, with the full text in a tooltip |
+
+Regressions: `tests/test_qt_desktop_alpha_rc.py`. Against the `b4c6d72` GUI source, 25 of its first 26
+tests failed; the other is a size guard that already passed. The later long-path test failed on `062baa3`
+(1728 px).
+
+Windows CI was red on `062baa3`, `06a9d4b` and `0a07b91` (minimum width 1340 px). My first explanation,
+long paths, was wrong for that number. The width report showed the cause: the offscreen fallback font on
+Windows CI is about 1.9x wider than on Linux at the same size and DPI. The offscreen limit now scales with the
+text, and a Windows-only CI step measures on the native platform.
+
+| Where (commit `17651af`) | Command | Result |
+|---|---|---|
+| CI run 41570211687, ubuntu-latest, Python 3.11.17, PySide6/Qt 6.12.0 | `pytest -q -ra -m qt tests/test_qt_gui.py tests/test_qt_desktop_alpha.py` / `pytest -q -ra` | 20 passed / 269 passed |
+| same run, windows-latest, Python 3.11.9, PySide6/Qt 6.12.0 | same | 20 passed / 267 passed, 2 skipped (POSIX-permission test; case-insensitive FS test) |
+| same Windows job, `QT_QPA_PLATFORM=windows` | `pytest -q -ra -s -m qt tests/test_qt_desktop_alpha_rc.py -k "minimum_size_fits or long_paths"` | 2 passed; Segoe UI 9 pt, 96 DPI, minimum window 842x666 |
+| Local, Linux, Python 3.13, PySide6 6.12.0, as root | `QT_QPA_PLATFORM=offscreen pytest -q -ra` | 268 passed, 1 skipped (POSIX-permission test) |
+
+The first three rows count `17651af`. The local row ran on the same code before the commit.
+
+Known limits: the native step measures the window's size hints; it does not exercise dialogs or a person
+using the app. A long unbreakable path is clipped (tooltip and text selection still give the full text).
+
+## Checkpoint 4 — `2a6a7bd`..`d4e3623` (2026-11-02)
+Tested against accepted core `fe8a179`, then on a real X display for the first time: the real GUI process on
+Xvfb, driven by real keystrokes (`tests/e2e_x11_walkthrough.py`). Outcomes are checked through the CLI and the
+files on disk. It is not a person using the app, and says nothing about Windows or native file dialogs.
+
+| Defect | Found by | Now |
+|---|---|---|
+| A write refused by a recovery block left the GUI fully writable, because the read-only check cannot see every cause | Probe on `fe8a179` | Same read-only state and banner as a block found by the health check; F5 re-checks |
+| A lock left by a crash: "try again in a moment", for ever | Probe on `fe8a179` | The error gives the token and the exact command, with the real folder, in selectable text. The walkthrough follows it and recovers |
+| A job's result could arrive while it still counted as busy, so the new revision showed with Check out disabled | Integration, run 41572552095 | The slot is freed immediately before `on_done`, so `busy` false means settled |
+| Help promised Enter opens the selected row; only a double-click did | Offscreen audit | Enter works in both lists |
+| Alt+W, Alt+P and Alt+I each meant two things; several controls had no screen-reader name; paging buttons came last in Tab order | Offscreen audit | Fixed. Check in is now Alt+K, Compare Alt+M, Restore Alt+T |
+| Typing a path in Import recorded a document titled with its first letter | Real display | Title follows the file name until you type your own |
+| Tab was trapped inside tables, moving between cells | Real display | Tab leaves the table; arrow keys move within it |
+| After a restart no document was selected, so Ctrl+K silently did nothing | Real display | Opening a project selects its first document |
+| Status bar cut off on a 768 px high screen | Real display | Default size allows for the title bar |
+| Successful export showed nothing; a replace confirmed in the save dialog then failed with a disk error; export ran on the GUI thread | Audit | Says where the file went; replace works; runs in the background |
+| Export could overwrite a managed working file or write into the workspace metadata | Audit | Refused |
+
+Regressions: `tests/test_qt_desktop_alpha_rc.py`, `tests/test_qt_desktop_alpha_keyboard.py`. The walkthrough fails on
+`e5fb7e1` at the wrong document title, so it can detect a real defect.
+
+| Where (commit `d4e3623`, CI run 41575959230) | Command | Result |
+|---|---|---|
+| ubuntu-latest, Python 3.11.17, PySide6/Qt 6.12.0 | Qt tests (`-m qt`, 3 files) / `pytest -q -ra` | 66 passed / 299 passed |
+| windows-latest, Python 3.11.9, PySide6/Qt 6.12.0 | same | 66 passed / 297 passed, 2 skipped (POSIX-permission test; case-insensitive FS test) |
+| same Windows job, `QT_QPA_PLATFORM=windows` | window-size checks | 2 passed; Segoe UI, minimum window 842x666 |
+| GUI merged with accepted core `fe8a179`, on the runner only: ubuntu-latest | `pytest -q -ra` | 353 passed |
+| same: windows-latest | `pytest -q -ra` | 351 passed, 2 skipped (same two) |
+| ubuntu-latest, Python 3.11, xcb on Xvfb, openbox | `xvfb-run ... python tests/e2e_x11_walkthrough.py` | all 9 steps passed; screenshots kept as a CI artifact |
+
+Also run locally, not accepted evidence: the same code merged with `phase2-documents` `22a5273` (newer than the accepted
+core): 381 passed, 3 skipped, and the walkthrough passed (Linux, Python 3.13, as root).
+
+~~Known limit: while a recovery block is known only from a refused write, F5 clears the banner until the next write finds
+it again.~~ Fixed in checkpoint 5 below.
+
+## Manual acceptance (installed GUI) — not yet performed
+1. `python -m pip install -e ".[gui]"` then `revisionworx-gui` (Windows: Start → run from venv).
+2. Start page: confirm the amber alpha banner. Create project "Test Bracket", number "T-1".
+3. Documents tab → **Import file…** → pick any file → Import. Confirm revision A/1 in history.
+4. **Check out** → **Open file** → edit/save → **Check in…** with a description → 2 revisions.
+5. Quit, relaunch: the workspace reopens; history still shows both revisions.
+6. Delete the working file in Explorer/Files → select the document: red "missing" status;
+   Check in shows a "Missing file" message with the recovery hint.
+7. Record OS, Python and Qt versions and any deviations on Issue #13.
+
+## Next
+- Screen-reader check and a keyboard walkthrough on Windows (needs an interactive session; the Linux one is automated).
+- ~~A8~~: handled in the GUI in checkpoint 5 (committed-but-unapplied entries are reported as pending). A core
+  `Workspace.health()` (A1) would still be the cleaner home for this.
+- Visual redesign: see `UI_REDESIGN_PROPOSAL.md`.
+- Byte-level progress for very large files needs a core progress callback on `store_file` (A7).
+- A6 (requested in `controller.checkout`): return the checkout token with `CommittedNotApplied`, so a saved
+  checkout does not need an administrator to release it.
+- Packaging coordination with PR #2 (Windows/Linux offline bundles).
+
+## Checkpoint 5 — workspace health re-check (Claude B, 2026-11-03)
+Base: `feature/desktop-alpha` `0773bde`. Commit `1cf26aa`, written in a session with read-only GitHub access and pushed
+unchanged on 2026-11-03 (see checkpoint 6 for the CI). GUI controller only; no core or protocol change.
+
+| Defect | Found by | Fix |
+|---|---|---|
+| F5 cleared a recovery block that only a refused write could see (unreadable orphaned `.releasing-*` lock file), so the GUI looked writable and invited the same refused change | Known limit above | Such a block is re-checked with the same writable open every change starts with (writer lock, journal check, roll-forward of already-committed entries), closed without committing. The GUI stays read-only until that succeeds, while a job holds the workspace, or if the lock cannot be taken (fail closed). Blocks the read-only `verify()` can see are handled as before. |
+| A8: committed-but-unapplied journal entries were reported as "inconsistencies" (after `lock clear-orphan`, or a crash between commit and apply) | `## Next` A8 | `health()` counts non-fenced entries above `applied_seq` (public `journal_seqs`/`applied_seq`/`read_entry`/`is_fenced`) as `pending` and leaves out `verify()` problems on records those entries write. Other problems are still reported. Never applies or repairs. |
+
+Regressions: `tests/test_gui_health_recheck.py` (11 tests; 7 fail on `0773bde`, 4 guard unchanged behaviour).
+
+| Where | Command | Result |
+|---|---|---|
+| Linux container, Python 3.13.18, **no PySide6** (PyPI unreachable from the session) | `pytest -q -ra` | 232 passed, 5 skipped (4 Qt modules skipped; 1 POSIX-permission test as root) |
+| same, on unchanged `0773bde` | `pytest -q -ra` | 221 passed, 5 skipped |
+| same | `pytest -q tests/test_gui_health_recheck.py` on `0773bde` | 7 failed, 4 passed (defects reproduced) |
+
+**Not run:** any Qt/offscreen test, Windows, the X11 walkthrough. Existing Qt tests were reviewed by reading for dependence
+on the changed behaviour (`test_recovery_block_found_while_writing…`, `test_recovery_blocked_makes_gui_read_only…`); none
+was found, but CI must confirm. No interactive desktop acceptance.
+
+Decision for the Coordinator: F5 now takes the writer lock briefly (and rolls forward committed entries) when, and only
+when, a change was already refused for a block the read-only check cannot see. Request A1 would make this a pure read.
+
+## Checkpoint 6 — a saved change is never reported as failed because the lock release failed (Claude B, 2026-11-03)
+Base: checkpoint 5 (`1cf26aa`). Pushed with checkpoint 5 on 2026-11-03 as `0cb3b0b`. GUI controller only; no core change.
+
+| Defect | Found by | Fix |
+|---|---|---|
+| `Workspace.close()` can raise after the commit point (Windows lock-file rename gives up while antivirus/backup holds the file). Import, register, checkout, cancel, state changes and project edits were then shown as **failed although saved**, inviting a retry | Audit of `_write()` and the Phase 1 lock-release path | `_write()` compares the journal head before and after the change. Committed + release failure → "Saved, but releasing the writer lock failed…" (SavedWithWarning, shown by the existing "Saved with a warning" paths). Nothing committed → the release error, as before. |
+| A release failure during an error **replaced** the change's own error (a ConflictError became a lock error; CommittedNotApplied could become a failure) | same | The change's own exception is kept; the release error is attached as a note (Python 3.11+). |
+| Check-in: same case already ended as saved via `transaction_outcome`, now direct; the checkout token is forgotten in both paths | same | `checkin_now` handles SavedWithWarning from `_write()`. |
+
+Regressions: `tests/test_gui_release_failure.py` (6 tests; 3 fail on `1cf26aa`, 3 guard paths that were already right).
+Linux container, Python 3.13.18, no PySide6: `pytest -q -ra` 238 passed, 5 skipped.
+CI after the push: run 41679983437 at `53c33a1` all jobs green (Qt 66 per OS; full suite Ubuntu 316, Windows 314 + 2 skipped).
+Run 41678241178 at `0cb3b0b`: Windows failed intermittently in both attempts on different tests (core release race in
+`_fence_orphaned_releases`, forwarded to Core via #33; GUI import-title test, saved-with-warning, cause unconfirmed). Not
+yet a reliable Windows record.
+A real Windows sharing-violation reproduction was not attempted; the release failure is injected after a real release.
+
+## Checkpoint 7 — end-to-end journey acceptance with a real crash (Claude B, 2026-11-03, backlog #28 item 04)
+Base: `53c33a1`. Commit `09f7ea3`. Test-first; one GUI controller wording fix found by the journey; no core change.
+
+Journey: import → check out → check in → check out and edit → **a real child process running the GUI controller dies
+(`os._exit`) after its check-in is committed, before it is applied** → restart (new Controller on the same per-user
+folders; in the Qt test also a new window) → the pending change and the crash's lock are shown, nothing reported as
+inconsistent, the committed revision already in the history, no phantom checkout → the user's checkout is refused with the
+lock-break command → administrator runs it → F5 → the next checkout applies the pending entries → another check-in and
+restart. Checked independently of the GUI: `rev export` bytes of every revision, `verify`, `doc verify --id`, and the
+untouched outside original.
+
+| Test | Where |
+|---|---|
+| `tests/test_gui_journey.py` (controller + view-models, no Qt) | every OS, every Python in CI |
+| `tests/test_qt_desktop_alpha_journey.py` (MainWindow: real buttons, real import and check-in dialogs with typed input, error box, F5, `observable_state`) | the required "must not be skipped" Qt CI step on Ubuntu and Windows |
+
+| Defect | Found by | Fix |
+|---|---|---|
+| After a crash between commit and apply, the notice said "your next change applies it first", but every change is refused until that crash's writer lock is released or broken | This journey | `health()` reads the public `Workspace.read_writer_lock` (only when changes are pending) and, while a lock is held, names the holder and says changes are refused until it is released. Regression `test_pending_notice_does_not_promise_the_next_change_while_a_lock_is_held` fails on `53c33a1`. |
+
+Observed, not a defect: after the crash the per-user state keeps the dead session's checkout token for a document that is
+no longer checked out. It is never shown as "mine" and the next checkout replaces it.
+
+| Where | Commit | Result |
+|---|---|---|
+| Linux container, Python 3.13.18, no PySide6, `pytest -q -ra` | `09f7ea3` | 240 passed, 6 skipped (5 Qt modules incl. the new one, 1 root-only) |
+| CI run 41683489559, ubuntu-latest / Python 3.11, PySide6 6.12.0 | `09f7ea3` | Qt step 67 passed (66 + journey); full suite 319 passed |
+| same, windows-latest / Python 3.11 | `09f7ea3` | Qt step 67 passed; full suite 317 passed, 2 skipped; native size 2 passed |
+| same, GUI merged with accepted core, Ubuntu / Windows | `09f7ea3` | 373 passed / 371 passed, 2 skipped |
+| same, keyboard walkthrough on X | `09f7ea3` | WALKTHROUGH PASSED |
+
+Limits: offscreen, window shortcuts are asserted bound but triggered through their actions (window focus is not guaranteed
+offscreen); real keystrokes are covered by the X11 walkthrough on Linux only. One green Windows run; the intermittent
+Windows failures seen at `0cb3b0b` were not reproduced here and are not fixed. No interactive installed-GUI acceptance.
+
+## Checkpoint 8: Windows `state.json` failure (`b048199`, `e92ef3e`, `e17e621`, `4e31955`, 2026-11-04)
+
+Root cause of the Windows failure in CI 41711104288: when `busy` turned true, `MainWindow.poll()` rebuilt the document list, which re-read the document on the GUI thread just as the worker began writing. That read overlapped core replacing `state.json`, and "Checking in…" became "Cannot read this document".
+
+- `b048199`: a failed re-read after a saved change never replaces the saved outcome. Checkout, cancel, restore and state change had a worse form of this, raising an error box for a saved change.
+- `e92ef3e`: starting a job no longer reads the workspace on the GUI thread.
+- `e17e621`: `GUI_ACCEPTANCE.md`. `4e31955`: CI proves its install commands in a clean venv on Linux and Windows.
+
+The refused read itself can still happen. Core's bounded read retry is on `phase2-documents`, not on this branch.
+
+CI run 41765709905 at `4e31955`: Ubuntu Qt 71 passed, full 331 passed. Windows Qt 71 passed, full 329 passed, 2 skipped. These are single runs, so they do not show the intermittent failure is gone.
+
+## Checkpoint 9: outcomes and workspace targeting (`4695de2`, `cbd9f5c`, 2026-11-04)
+
+Found by reading the GUI code against the P0 list, not by a reported failure. Every row has a regression test in `tests/test_qt_desktop_alpha_outcomes.py`. 28 of the 34 tests in `4695de2` fail on `4e31955`; the other 6 are guards that already held. `cbd9f5c` adds one test for a regression QA's suite caught in `4695de2`: an interpreter stop during import removed the copy.
+
+| Defect on `4e31955` | Now |
+|---|---|
+| `WorkspaceCorruptError` from the lock release after a commit said "Nothing was written" | Saved with a warning; the GUI still goes read-only |
+| Quick start and New project showed a saved project as a failure when the lock release failed, inviting a duplicate | Opens or closes with a warning |
+| Archive saved with a warning kept the old status and record version, so the next click conflicted | Shows the new status |
+| A journal read error just after the change skipped the release, leaving the lock held and reporting failure | Lock released, change reported saved |
+| **Adopt and Import windows are not modal: preview in A, open B, click Adopt, and the folder was registered in B** | They close when the workspace changes, and the flows refuse |
+| A failed open of a second workspace showed the start page while actions still targeted the first | The first stays on screen, with the error |
+| `preferences.json` with valid JSON of the wrong shape stopped the application starting | Reads as empty |
+| An unwritable preferences folder made every workspace impossible to open | Opens; `preferences_warning` holds the reason |
+| A workspace folder removed while open left write actions enabled | Disabled with a reason; F5 recovers |
+| Failed reads in Filter files and New project vanished in a Qt slot, invisible with no console | Reported; a last-resort hook says the outcome is not known |
+| A failed import with nothing committed left its copy, and the retry was refused as "already exists" | Copy removed only if the journal has not moved |
+| Adopt refused because a job was running hung at "adopting" with every button off | Says to try again |
+| Rebuild refused because a job was running did nothing, silently | Says so |
+| `LockReleaseBusyError` (newer core) showed only the raw message | Says nothing was written and to try again; not read-only |
+
+Injected failures: release, journal-read and registration failures are monkeypatched around the real core. The moved-folder and damaged-preferences cases use real files. No real Windows sharing violation or real disk fault was produced.
+
+| Where | Commit | Result |
+|---|---|---|
+| Linux container, Python 3.13.18, PySide6 6.12.0, `QT_QPA_PLATFORM=offscreen python -m pytest -q -ra` | `cbd9f5c` tree | 365 passed, 1 skipped (root-only) |
+| same, the 34 new tests on old code | `4e31955` | 28 failed, 6 passed |
+| same, tree merged locally with `phase2-documents` `673bec2` | `cbd9f5c` tree | 757 passed, 3 skipped |
+| CI run 41769236050, ubuntu-latest / Python 3.11 | `cbd9f5c` | Qt 106 passed; full 366 passed |
+| same, windows-latest / Python 3.11 | `cbd9f5c` | Qt 106 passed; full 364 passed, 2 skipped; native size 2 passed |
+| same, merged with accepted core `fe8a179`, Ubuntu / Windows | `cbd9f5c` | 420 passed / 418 passed, 2 skipped |
+| same, keyboard walkthrough on X; clean install on Ubuntu and Windows | `cbd9f5c` | WALKTHROUGH PASSED; INSTALLED GUI SMOKE PASSED on both |
+| CI run 41768959578, branch `diag/claude-b-trial-core-673bec2` (`19b1451`: `4695de2` merged with core `673bec2`), ubuntu-latest | `19b1451` | Qt 105 passed; full 757 passed, 2 skipped |
+| same, windows-latest | `19b1451` | Qt 105 passed; full 755 passed, 4 skipped |
+| same run, "merged with accepted core" jobs | `19b1451` | Failed, Ubuntu and Windows, so the run's overall conclusion is failure. See below |
+
+Run 41768959578 predates `cbd9f5c`, so it does not cover that one-line import change. Its "accepted core" jobs failed at the merge step, not in a test: `fe8a179` is already an ancestor of this tree, so the merge had nothing to do and `git rev-parse MERGE_HEAD` failed. The same step will fail on `feature/desktop-alpha` when it moves onto a core that contains the pin, so that job has to change in the same commit.
+
+Other suites, run locally on `cbd9f5c` merged with `673bec2`:
+- **GUI A, `tests/test_qt_gui_accessibility_a.py` (PR #35 head `b6f22fe`), run on `4695de2` merged with `673bec2`:** 8 passed, 1 failed. `test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout` fails on the second `hasFocus()` after the modal closes. It fails the same way at `ce00ac4`, so these changes did not cause it. Probably offscreen window activation, but that is not proven, and a real focus-return defect is not ruled out.
+- **QA `tests/` at PR #3 (branch head at this session's fetch):** 10 failed, 219 passed, 12 skipped, 3 xfailed. This count varies by one or two between runs because of the harness race below. Two stable failures touch the GUI, and both look like out-of-date tests. `test_real_postjournal_checkin_failure_survives_restart_once` expects `result.error` to be `CommittedNotApplied`, but the GUI deliberately reports that as saved with a warning. `test_document_viewmodel_checkout_status_and_filter` stops waiting when rows appear, not when the job finishes, so `can_checkout` is false while `busy`. `tests/qa/test_qt_documents.py` has the same race and failed 1 of 8 repeat runs. The other failures are core-targeted tests and old copies of tests; they were not triaged here.
+
+Remaining risks: no person has used the installed GUI; GUI actions other than check-in, import, register, adopt and export still write on the GUI thread; shared folders stay unsupported.

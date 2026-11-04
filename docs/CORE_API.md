@@ -1,0 +1,257 @@
+# RevisionWorx core API contract (for UI and integration callers)
+
+**Owner:** Claude A (core). **Consumers:** Claude B (desktop alpha, issue #13) and Integration
+(PR #2). **Source of truth:** `phase2-documents`. A change to anything below is announced on
+PR #7 and issue #13 with migration notes *before* it lands. Everything not listed here is
+internal and may change without notice. In particular, do not call `Workspace.commit`, the
+journal or lock helpers, or anything starting with `_`, from UI code.
+
+Stability levels:
+- **Stable:** the signature, return keys and exceptions listed here hold for 0.1.0 alpha.
+- **Provisional:** usable, but may change with notice.
+
+## 1. Opening a workspace (Stable)
+
+```python
+from revisionworx.workspace import Workspace
+ws = Workspace.create(location: Path, name: str)        # new workspace; returned open, writable
+ws = Workspace.open(location: Path, writable=False)     # read-only by default
+ws.close()                                              # or: with Workspace.open(...) as ws:
+```
+
+`close()` can raise `WorkspaceError` or `OSError` if the filesystem refuses. The lock is then still held, and nothing is lost. Call
+`close()` again; the next `Workspace.open(..., writable=True)` of that workspace in this process also retries. The handle stays closed.
+
+- `location` is the shared folder that contains (or will contain) `.revisionworx/`.
+- A UI holds **one** writable handle per workspace, opened on demand for a change and closed
+  promptly. A writable handle holds the single writer lock, and every other user is read-only
+  while it is held.
+- Read-only handles never block anyone.
+
+| Exception (all subclass `WorkspaceError`) | Meaning | UI action |
+|---|---|---|
+| `WorkspaceLockedError(holder)` | Another session holds the writer lock. `holder` has `user`, `host`, `pid`, `acquired`. | Show "in use by user@host since …"; offer read-only. |
+| `WorkspaceCorruptError` | Writes refused for safety. Includes "orphaned lock-release file … `lock clear-orphan`" and journal gaps. | **Recovery-blocked state.** Show the message verbatim and offer read-only. Never retry in a loop. Resolution is an administrator action (CLI). **A journal gap also refuses read-only opens**, so there is no read-only to offer in that one case. |
+| `LockReleaseBusyError` (`.name`) | A writable open was refused because a lock-release file could not be read right now (another session releasing, or a program holding it). Nothing was written; not corruption. | Show the message; offer read-only and a manual **Retry**. Do not loop automatically. Not an administrator action unless it persists. |
+| `WorkspaceFormatError` | Not a workspace, or an unsupported format version. | "This folder is not a RevisionWorx workspace (or needs a newer version)." |
+| `OSError` (`PermissionError`, `FileNotFoundError`) | Filesystem refused. | Show the path and the OS message; do not retry automatically. |
+
+## 2. Projects (Stable)
+
+```python
+from revisionworx import projects
+projects.add_root(ws, name, path) -> str                                 # root_id (needs a root first)
+projects.create_project(ws, projects.NewProject(name=..., number=..., ...)) -> dict  # project record
+projects.adopt_project(ws, folder, name, mode="indexed", number="") -> dict          # opt-in existing folder
+projects.preview_adoption(ws, folder) -> dict                            # read-only preview, call first
+ws.list("project") -> dict[str, dict]                                    # id -> record
+projects.project_folder(ws, record) -> Path
+```
+
+- A project record has `id`, `name`, `number`, `customer`, `description`, `mode`, `root_id`,
+  `rel_path`, `status`, `origin`, `created`, `created_by` and `_rev`.
+- Errors: `ProjectError` (validation, duplicate number, no root, path problems).
+
+## 3. Documents (Stable)
+
+```python
+from revisionworx import documents as d
+d.register_document(ws, project_id, file_path, *, type_id=None, number="", title="",
+                    description="", capture=True, revision_description="Initial revision",
+                    label=None) -> tuple[doc: dict, rev1: dict | None]
+d.list_documents(ws, project_id=None) -> list[dict]       # sorted by project, then path
+d.document_status(ws, doc_id, verify_hash=False) -> dict  # state: missing | unrevisioned | unchanged
+                                                          #        | modified | modified-externally
+d.history(ws, doc_id) -> list[dict]                       # revisions, oldest first
+d.working_path(ws, doc) -> Path
+d.export_revision(ws, rev_id, dest, overwrite=False) -> Path
+```
+
+- "Import" means the file already lives inside the project folder and is registered **in
+  place**. The core never moves or edits it. To bring in an outside file, the UI copies it into
+  the project folder first, then registers it.
+- A document record has `id`, `project_id`, `rel_path`, `number`, `title`, `type_id`, `status`,
+  `latest_rev_id`, `rev_count` and `_rev`.
+- A revision record has `id`, `document_id`, `number`, `label`, `sha256`, `size`,
+  `description`, `state`, `previous_rev_id`, `restored_from`, `created`, `author` and `transitions`.
+- Revisions are immutable.
+
+## 4. Checkout and check-in (Stable)
+
+```python
+co = d.checkout(ws, doc_id, note="") -> dict          # co["token"] is the session's proof of ownership
+d.checkin(ws, doc_id, token, description, label=None, txid=None) -> dict   # new revision record
+d.cancel_checkout(ws, doc_id, token, revert=False) -> None
+```
+
+- Keep the token across restarts with `revisionworx.clientstate.CheckoutTokens().put(ws.id,
+  doc_id, token)` / `.get(...)`. Without it the checkout can only be released by an
+  administrator.
+- `description` must be non-empty.
+- **Retries:** pass a `txid` (32 lowercase hex) that you generate once per user action. On an
+  ambiguous failure (crash, lost connection), retry with the same txid. You get the original
+  result, never a duplicate revision.
+- **A fenced txid is spent.** If the attempt lost the writer lock, the retry raises `LockLostError`
+  ("never took effect"). Nothing changed. Reopen and start a new attempt with a **new** txid.
+
+| Exception | Meaning | UI action |
+|---|---|---|
+| `CheckoutConflict(checkout)` | Already checked out; `.checkout["owner"]` has user/host. | "Checked out by …". |
+| `NotCheckedOut`, `TokenMismatch` | No checkout, or someone else's. | Refresh the view; offer read-only. |
+| `StaleCheckout` | A newer revision exists; nothing was written. | Tell the user to save a copy, check out again and merge. |
+| `NoChanges` | File identical to the latest revision. | Offer cancel checkout. |
+| `MissingFileError` (a `DocumentError`) | The working file is not there. | Tell the user to put it back. |
+| `DocumentError` | Other validation (link, archived document). | Show the message. |
+| `ConflictError` | Someone changed the record since you read it; nothing written. | Reload and let the user retry. |
+| `LockLostError` | This writable handle lost authority; nothing took effect. | Close the handle, reopen and retry the action. |
+| `CommittedNotApplied(seq, txid)` | **The change IS saved.** Only derived files lag. `.result` holds what `checkout` or `checkin` would have returned, including the checkout token. | Report success with a warning. Keep the token. **Do not retry as a failure.** |
+| `TxidReuseError` / `IdentityUnverifiable` | The txid was used for a different request / a pre-ADR-021 entry. | Programming error / ask `ws.transaction_outcome(txid)`. |
+
+`ws.transaction_outcome(txid) -> {"state": "committed" | "fenced" | "not-found", "seq"?}` answers
+"did my action happen?" after a crash. Only `committed` means it took effect.
+
+## 5. Health (Provisional)
+
+`ws.health() -> {"ok", "reason", "head_seq", "applied_seq", "pending"}` is the quick check: it never raises for a damaged
+journal, `ok` is False when writes would be refused, and `pending` entries are saved and need no action.
+
+`ws.verify() -> {"problems": [...]}` is the full check: show problems read-only. Repair is an administrator action. A problem
+with `severity: "info"`, such as `fenced-entry`, needs no action and can never be cleared.
+
+### Integrity check: `revisionworx doctor [--quick] [--json]`, `doctor.examine(location, hash_content=True) -> dict`
+
+Strictly read-only: no lock, no recovery, no repair, no index, no temp file, and it works on a damaged journal that `Workspace.open`
+would refuse, reporting every bad entry rather than the first. Exit code 0 when `ok` (nothing above `info`), 1 otherwise, 2 if it could not run.
+
+The result is `{workspace, ok, settled, errors, warnings, checked: [..], skipped: [..], findings: [{code, severity, subject, message, action}]}`.
+`skipped` says what was not judged and why; an absent finding means nothing about anything listed there. Findings are sorted by severity, code, subject.
+
+A pass counts only if no journal entry appeared while it ran, because every change that could cause a false alarm is published first. It tries up to 5 times. If writers keep
+publishing, `skipped` says there was no consistent view, `settled` is false and `ok` is false: nothing is proven healthy. It cannot tell a live lock holder from a dead one, and `--quick` skips hashing content.
+It proves nothing about SMB, NFS or other hosts: it reads what this machine sees.
+
+Codes are stable; scripts can rely on them.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `W001` | error | No workspace here |
+| `W002` | error | `workspace.json` unreadable or not a workspace file |
+| `W003` | error | Workspace format is newer than this RevisionWorx |
+| `J001` | error | Journal entries missing: one finding per gap, however large |
+| `J002` | error | Journal entry torn, malformed or changed after writing |
+| `J003` | warning | Entry has no digest (old version), so changes to it are undetectable |
+| `J004` | warning | A file in the journal folder is not an entry |
+| `J005` | info | Fenced entry: published after its writer lost the lock, never took effect |
+| `J006` | error | An entry is numbered 0; numbering starts at 1 |
+| `S001` | info/warning | `state.json` missing (info) or unreadable (warning): only a cache |
+| `S002` | error | `state.json` is ahead of the journal: a partial restore |
+| `S003` | info | Saved changes not materialised yet |
+| `L001` | info | Writer lock held |
+| `L002` | info | Writer lock held by a revoked writer; the next writer clears it |
+| `L003` | error | `writer.lock` unreadable |
+| `L004` | warning | Displaced lock or interrupted release; the next writer handles it |
+| `L005` | error | Orphan unreadable; writers refused until `lock clear-orphan` |
+| `L006` | warning | Administrative clear did not finish |
+| `L007` | error | Lock archived with its token not revoked: invariant W2 violated |
+| `L008` | error | Audited clear evidence missing or altered |
+| `R001` | warning | Record differs from the journal |
+| `R002` | warning | Record missing |
+| `R003` | warning | Record the journal never wrote |
+| `R004` | warning | Record should have been deleted |
+| `R005` | warning | Record unreadable |
+| `B001` | error | Blob an entry refers to is missing |
+| `C001` | error | Content a revision needs is missing, or the hash is invalid |
+| `C002` | error | Content does not match its hash |
+| `C003` | warning | Content could not be read |
+| `C004` | info | Content no revision uses |
+| `C005` | info | Temp file from an interrupted store |
+| `D001` | error | Document's revision chain does not hold together |
+| `D003` | error | Checkout of a document that does not exist |
+| `D004` | error | Revision of a document that does not exist |
+| `D005` | error | Document of a project that does not exist |
+| `D006` | error | Document names a released revision that does not exist |
+| `D007` | warning | Revision in a state the lifecycle does not have |
+| `D010` | error | Immutable revision field changed in the journal |
+| `D011` | error | Revision transition history rewritten |
+| `D012` | error | Revision deleted |
+| `X001` | error | A check could not finish; it appears in `skipped` |
+
+## 6. Administrator-only operations (CLI, not for the alpha UI)
+
+`revisionworx lock show | break | clear-orphan` (ADR-015/019). These are deliberately absent from
+the UI contract. The alpha shows the recovery-blocked message from §1 and stops there.
+
+## 7. Local search index (Provisional)
+
+`open_index(ws, cache_dir=None)` syncs and returns a `LocalIndex`. Use its methods, including `project_files(project_id)`, rather
+than `idx.db`: only the methods replace a damaged cache and retry. `IndexBusyError` (a `WorkspaceError`) means another
+RevisionWorx process is using it: nothing is wrong, so try again. A damaged cache replaces itself. `idx.coverage()`
+now includes `baselines_unavailable`, the projects whose file list could not be read.
+
+## 8. Subsystem persistence (Provisional)
+
+For **domain subsystems** inside `revisionworx/` (documents, BOM `bom/` PR #21, change control `changes/` PR #20), never
+for UI code. Requested by Claude D (PR #7 comment 6595825553) and Claude C (A10, comment 6595951841). Both adapters,
+`changes/store.py` and `bom/store.py` `WorkspaceCatalogStore`, already conform as of `724993c` / `8f67bfe`.
+
+**You may use:**
+- `register_kind(kind)` at import time, for kinds you own (`^[a-z]{2,16}$`, listed in the table below).
+- `Workspace.get(kind, id)`, `Workspace.list(kind)`; the journal is the answer, record files are a cache.
+- `Workspace.commit(op, [RecordPut | RecordDelete | RecordCheck, ...], txid=None) -> seq`: one user action, one call,
+  applied all-or-nothing. `expect_rev=0` for create-once records (unique numbers, audit events); `RecordCheck` may guard
+  **any** kind, including core and document records, but put/delete only your own kinds.
+- `Workspace.transaction_outcome(txid) -> {"state": "committed" | "fenced" | "not-found", ...}`.
+- Ids match `^[a-z]{2,8}_[0-9a-f]{32}$` or `^[a-z0-9][a-z0-9_.-]{0,63}$`. `data` is a JSON object; `_rev` is reserved and
+  set by the core.
+
+**Errors from `commit`:** `ConflictError` (nothing written; reload); `CommittedNotApplied` (**it is committed**: never
+retry as a failure, the next writable open completes it; confirm with `transaction_outcome`); `LockLostError`,
+`ReadOnlyError`, `TxidReuseError`, `IdentityUnverifiable`, `WorkspaceCorruptError`; `ValueError` for a contract error
+(unregistered kind, bad id or txid), with nothing written.
+
+**Core guarantees (tested in `tests/test_subsystem_persistence_contract.py`, real processes):** reading, recovery,
+`health()` and `verify()` are kind-agnostic. A process that never imported a subsystem reads its records and completes
+an entry whose writer died between commit and apply; it cannot *write* that kind (`ValueError`, nothing published).
+Journal validation checks a kind's *form*, never the registered set, and will stay that way while this section stands.
+
+**Not provided:** schema or versioning of your `data` (yours to own); local search index coverage of your kinds (the
+index is documents-only); anything multi-host. **Do not** touch journal, lock or record files, `KINDS`, or any name
+starting with `_`.
+
+| Kind | Owner |
+|---|---|
+| `root`, `project`, `template`, `settings`, `audit` | core |
+| `doctype`, `document`, `revision`, `checkout`, `lifecycle` | documents (core) |
+| `part`, `partnum`, `bomline`, `bomstruct`, `partseq`, `partrule` | BOM, Claude C (PR #21) |
+| `changereq`, `changeord`, `changeevt`, `changenum`, `changecfg` | change control, Claude D (PR #20) |
+
+A new kind is added to this table and to the collision test on PR #7 before use.
+
+## Change log
+- 2026-11-04 (document records): reads in `documents` raise `WorkspaceCorruptError` for a document, revision, checkout or project
+  record of the wrong shape, instead of `KeyError`, `TypeError` or `AttributeError`. `revisions_of` and `history` also refuse revision
+  numbers out of order, and releasing a revision requires an intact chain. `LocalIndex` reports a record it cannot store the
+  same way and keeps its previous contents. No signature or record format changed. `ws.get` and `ws.list` stay generic and do
+  not apply these checks; other kinds (§8) stay their owners' to validate.
+- 2026-11-04 (malformed files; working-file authority): `ws.require_authority()` is new, for work a journal entry cannot fence.
+  `restore_to_working` and `cancel_checkout(revert=True)` now refuse before touching the file when the handle is read-only,
+  closed or revoked (`ReadOnlyError`, `WorkspaceError`, `LockLostError`), and raise `MissingFileError` if the folder is gone.
+  `read_writer_lock` reports every lock file that cannot name a writer as unreadable, including non-objects and missing or
+  non-string tokens. `get`/`list` answer from the journal when a record file is damaged in any way, and raise
+  `WorkspaceCorruptError`, not `ValueError`, when the journal cannot answer either. `commit` raises `ValueError` for record data
+  nested more than 64 levels. `gc_content` adds `unrecognised` to its report. No signature changed.
+- 2026-11-03: `close()` can be retried after a failure. If publishing fails after the entry became visible (the folder sync),
+  `commit` raises `CommittedNotApplied` rather than a plain `OSError`, because the change did happen. No signature changed.
+- 2026-11-02: `ws.health()`, `LocalIndex.project_files` and `documents.require_document` are new (Claude B's A1 and A5). All additive.
+- 2026-11-02: `MissingFileError` and `CommittedNotApplied.result` are new (Claude B's A4 and A6). `verify` marks `fenced-entry` with
+  `severity: info`, and the CLI no longer exits 1 for it alone. `doc verify` also audits the journal for changed revisions.
+  `read_writer_lock` reports an unreadable lock as `{"token": "?", "unreadable": True}` instead of raising `ValueError`.
+- 2026-11-03 (doctor): `revisionworx doctor` and `revisionworx.doctor` are new (§5). `journal_gaps` is new. A stray high-numbered journal file no longer exhausts memory in `open`, `health` and `verify`; the gap error message now gives a range.
+- 2026-11-04: §8 Subsystem persistence (Provisional) is new: documents what BOM (PR #21) and change control (PR #20) already use, plus the kind registry. No code changed.
+- 2026-11-03 (ADR-019 rev. 5): `LockReleaseBusyError` is new. `Workspace.open(writable=True)` raises it, not `WorkspaceCorruptError`, when a `.releasing-*`/`.fencing-*` file stays access-denied (Windows delete-pending or a held file); if that file has gone, the open now succeeds. No signature changed.
+- 2026-11-02 (`feffbcf`): `checkin(txid=...)` retries now return the original revision, as this page always said.
+  Before, a retry raised `NotCheckedOut` or `TxidReuseError`. `IndexBusyError` is new. `get`/`list` ignore record files
+  the journal never wrote. No signature changed. `CheckoutTokens` now stores one file per checkout; its API is unchanged,
+  and tokens in an existing `checkouts.json` still work.
+- 2026-11-02: first published (core `phase2-documents`, ADR-019 rev. 3). Nothing above changed
+  between `366d435` and this commit. `OrphanClearConflict` is new, but admin-only (CLI).

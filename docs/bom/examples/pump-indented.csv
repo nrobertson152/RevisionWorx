@@ -1,0 +1,9 @@
+Level,Item,Part Number,Description,Qty,Unit,Rev,RefDes
+0,,PUMP-ASSY,Gear pump assembly,1,EA,D,
+1,1,PUMP-BODY,Pump body,1,EA,C,
+1,2,GEAR-SET,Gear set,1,EA,B,
+2,1,GEAR-DRIVE,Drive gear,1,EA,A,
+2,2,GEAR-IDLER,Idler gear,1,EA,A,
+1,3,SEAL-KIT,Seal kit,1,EA,,
+2,1,ORING-40,O-ring 40x3 NBR,2,EA,,
+1,4,SCREW-M8-25,Socket screw M8x25,6,EA,,S1 S2 S3 S4 S5 S6

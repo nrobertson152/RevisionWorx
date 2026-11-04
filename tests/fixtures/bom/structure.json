@@ -1,0 +1,127 @@
+{
+  "format": "revisionworx.bom",
+  "kind": "structure",
+  "structure": {
+    "lines": [
+      {
+        "attributes": {},
+        "child_id": "prt_22222222222222222222222222222222",
+        "child_revision": "B",
+        "find_number": "10",
+        "line_id": "bln_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "note": "",
+        "parent_id": "prt_11111111111111111111111111111111",
+        "provenance": "declared",
+        "quantity": "2",
+        "reference_designators": [],
+        "unit": "EA"
+      },
+      {
+        "attributes": {},
+        "child_id": "prt_33333333333333333333333333333333",
+        "child_revision": "",
+        "find_number": "20",
+        "line_id": "bln_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "note": "torque 25 Nm",
+        "parent_id": "prt_11111111111111111111111111111111",
+        "provenance": "declared",
+        "quantity": "8",
+        "reference_designators": [
+          "B1",
+          "B2",
+          "B10"
+        ],
+        "unit": "EA"
+      },
+      {
+        "attributes": {},
+        "child_id": "prt_55555555555555555555555555555555",
+        "child_revision": "",
+        "find_number": "30",
+        "line_id": "bln_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "note": "",
+        "parent_id": "prt_11111111111111111111111111111111",
+        "provenance": "inferred",
+        "quantity": "1",
+        "reference_designators": [],
+        "unit": "EA"
+      },
+      {
+        "attributes": {},
+        "child_id": "prt_33333333333333333333333333333333",
+        "child_revision": "",
+        "find_number": "10",
+        "line_id": "bln_cccccccccccccccccccccccccccccccc",
+        "note": "",
+        "parent_id": "prt_22222222222222222222222222222222",
+        "provenance": "cad-extracted",
+        "quantity": "4",
+        "reference_designators": [],
+        "unit": "EA"
+      },
+      {
+        "attributes": {
+          "Route": "+left side"
+        },
+        "child_id": "prt_44444444444444444444444444444444",
+        "child_revision": "",
+        "find_number": "20",
+        "line_id": "bln_dddddddddddddddddddddddddddddddd",
+        "note": "",
+        "parent_id": "prt_22222222222222222222222222222222",
+        "provenance": "declared",
+        "quantity": "1.25",
+        "reference_designators": [],
+        "unit": "m"
+      }
+    ],
+    "parts": [
+      {
+        "description": "Welded frame",
+        "kind": "assembly",
+        "number": "FRAME-100",
+        "part_id": "prt_11111111111111111111111111111111",
+        "resolved": true,
+        "revision": "C",
+        "unit": "EA"
+      },
+      {
+        "description": "Pump sub, \"quoted\"",
+        "kind": "assembly",
+        "number": "SUB-200",
+        "part_id": "prt_22222222222222222222222222222222",
+        "resolved": true,
+        "revision": "B",
+        "unit": "EA"
+      },
+      {
+        "description": "Hex bolt M8×20 – zinc",
+        "kind": "part",
+        "number": "BOLT-M8",
+        "part_id": "prt_33333333333333333333333333333333",
+        "resolved": true,
+        "revision": "",
+        "unit": "EA"
+      },
+      {
+        "description": "Hose ½ in",
+        "kind": "material",
+        "number": "HOSE-12",
+        "part_id": "prt_44444444444444444444444444444444",
+        "resolved": true,
+        "revision": "",
+        "unit": "m"
+      },
+      {
+        "description": "Ünïcode label ✓",
+        "kind": "part",
+        "number": "=LABEL",
+        "part_id": "prt_55555555555555555555555555555555",
+        "resolved": true,
+        "revision": "A",
+        "unit": "EA"
+      }
+    ]
+  },
+  "version": 1
+}

@@ -1,0 +1,4 @@
+﻿part_id,number,description,unit,kind,status,revision,manual_number,manufacturer_1,mpn_1,manufacturer_2,mpn_2,vendor_1,sku_1,document_id_1,revision_id_1,role_1,attr:Material
+prt_33333333333333333333333333333333,BOLT-M8,Hex bolt M8×20 – zinc,EA,part,active,,no,Acme,'-B8,Würth,0057 08 20,Shop,S-1,,,,8.8
+prt_11111111111111111111111111111111,FRAME-100,Welded frame,EA,assembly,active,C,no,,,,,,,doc_ffffffffffffffffffffffffffffffff,rev_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee,drawing,
+prt_44444444444444444444444444444444,HOSE-12,Hose ½ in,m,material,active,,yes,,,,,,,,,,

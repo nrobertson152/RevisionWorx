@@ -4,6 +4,16 @@ RevisionWorx is an offline, cross-platform, GPL-3.0 engineering PDM application.
 
 This file is the current source of authority for AI-assisted engineering. The Director governs the project; **Coder**, **Reviewer** and **Engineering Coordinator** are the only three agent roles. Roles are assigned per task, not permanently to a model or historical agent name. See [the coordination playbook](docs/agents/README.md).
 
+## Current operating mode (Director decision, 2026-11-04)
+
+Claude is the **sole developer** of RevisionWorx, working toward the 1.0.0 release, and acts as Coder and
+Engineering Coordinator. The Director has waived the independent-Reviewer requirement for this mode: Claude may
+merge its own pull requests without separate review. Every other safeguard below still applies: exact-SHA green
+CI before merging, regression tests for every behaviour change, no weakened tests, fail-closed integrity, no
+unverified multi-user claims, and evidence recorded on the PR. **Releases, release/version tags and licensing
+remain Director-only.** Where this section and the three-role text below differ, this section governs until the
+Director changes it.
+
 ## Roles and authority
 
 - **Director (`nrobertson152`)** retains exclusive authority over releases, version/release tags and licensing. The Director delegates routine engineering priorities, design decisions, assignments and verified PR merges to the Engineering Coordinator. Multi-user production safety claims require evidence and must not be inferred from CI.
@@ -24,7 +34,7 @@ GitHub issues, PRs, commits, review threads and CI are the authoritative record.
 
 Use issue/PR comments and durable commits for handoffs, not chat-only status. Keep one active Coder per issue and avoid overlapping edits to shared state protocols. No GitHub ref locks, mandatory checkout/check-in comments, additional permanent agent roles or recurring check-ins are required. Scheduled agents remain paused unless the Director explicitly authorizes resumption.
 
-**Repository staging:** `main` currently holds documentation; draft PR #6 (`phase1-foundation`) and stacked PR #7 (`phase2-documents`) contain foundational application code, with additional GUI and feature drafts. Before assigning work, inspect the **live** branches and PR bases; do not assume these historical identifiers remain current. The unmerged multi-agent roster and atomic assignment-lock proposals in PRs #22 and #23 are not adopted by this policy.
+**Repository staging:** the core (PR #6/#7), desktop GUI (#14), BOM (#21), change control (#20) and QA tests (#3, #34, #35, #38) were consolidated on `integration/v1.0.0` for 1.0.0 and merged to `main`. Before assigning work, inspect the **live** branches and PR bases; do not assume these historical identifiers remain current. The unmerged multi-agent roster and atomic assignment-lock proposals in PRs #22 and #23 are not adopted by this policy.
 
 ## Engineering rules
 
