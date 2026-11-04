@@ -1,6 +1,6 @@
 # RevisionWorx — Architecture
 
-**Status: PROPOSED, NOT YET IMPLEMENTED.** Claude must validate decisions against actual constraints and record architectural decisions here.
+**Status: PROPOSED, NOT YET IMPLEMENTED.** The assigned Coder (Claude or ChatGPT) must validate decisions against actual constraints and record architectural decisions here; independent ChatGPT review is required before Director approval.
 
 ## System map
 

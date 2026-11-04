@@ -1,40 +1,46 @@
-# RevisionWorx — working with AI agents
+# RevisionWorx — three-role engineering workflow
 
-RevisionWorx is an offline, cross-platform, GPL-3.0 engineering PDM (product data management) application. The specification is `docs/REQUIREMENTS.md`; architecture, ADRs and open design gates are in `docs/ARCHITECTURE.md`. Read both before changing code.
+RevisionWorx is an offline, cross-platform, GPL-3.0 engineering PDM application. The product specification is `docs/REQUIREMENTS.md`; architecture, ADRs and open design gates are in `docs/ARCHITECTURE.md`. Read both before changing application code.
 
-## Roles
+This file is the current source of authority for AI-assisted engineering. The Director governs the project; **Coder**, **Reviewer** and **Engineering Coordinator** are the only three agent roles. Roles are assigned per task, not permanently to a model or historical agent name. See [the coordination playbook](docs/agents/README.md).
 
-- **Director (`nrobertson152`)** decides what to build, merges pull requests and approves releases. Only the Director merges, releases, tags, deletes branches or makes multi-user production claims.
-- **Claude** is the primary developer and architect. It implements issues, owns the architecture decisions, and opens pull requests.
-- **ChatGPT / Codex** does independent review and testing. Codex reviews every pull request automatically. Comment `@codex <request>` on a PR to ask it for a fix.
-- **GitHub** holds the record: issues, pull requests and CI.
+## Roles and authority
 
-## How work flows
+- **Director (`nrobertson152`)** authorizes work, sets priorities, resolves design/risk decisions and alone approves merges, releases, tags, branch deletion and multi-user production claims.
+- **Coder (Claude or ChatGPT, one assigned owner per task)** owns technical investigation, implementation, architecture proposals, regression tests, documentation and focused PRs. The Coder addresses review findings and cannot approve their own code. No parallel Coder on the same assignment.
+- **Reviewer (ChatGPT, independent of the Coder)** examines the actual diff and latest head SHA, runs or assesses targeted and adversarial tests, checks integrity and safety invariants, and records blocking findings. Codex GitHub review may be used; a `COMMENTED` review or passing CI alone is not acceptance. If the Coder is ChatGPT, review must be performed by a separate ChatGPT session.
+- **Engineering Coordinator** inventories issues and PRs, confirms Director authorization and single-task ownership, manages dependencies and handoffs, tracks exact-SHA CI and review evidence, and reports readiness and blockers. The Coordinator does not implement code, approve their own work, merge, tag, release or restart scheduled agents.
 
-1. The Director opens an issue.
-2. One branch and one focused PR per issue. The PR description says `Closes #<n>`.
-3. Tests and Codex review run on the PR. Address the findings, or explain on the PR why a finding is wrong.
-4. The Director merges.
+GitHub issues, PRs, commits, review threads and CI are the authoritative record. Legacy Claude A/B/C/D, ChatGPT A/B/C, Distributed Systems, Integration and separate GUI/Core agent labels describe historical work, not current active roles. Existing branches and PRs remain intact until the Director decides their disposition.
 
-Report results, blockers and questions on the issue or PR, not only in chat. For every test claim, give the exact command, the OS and Python version, the commit, and the pass/fail/skip/xfail counts. "Not run" is not "passed". A strict expected failure (xfail) is an open requirement, not a fix. Report local multiprocess tests and real SMB/NFS cross-host tests separately.
+## Work cycle
 
-**Where the code is:** `main` holds documentation only. The code is on draft PRs #6 (`phase1-foundation`) and #7 (`phase2-documents`, stacked on #6). Until those merge, base code work on the right branch and say which one in the PR.
+1. **Authorize:** The Director approves a bounded issue/request. The Coordinator checks for duplicate or dependent work, identifies the correct base branch, records acceptance criteria and assigns one Coder.
+2. **Implement:** The Coder works on a dedicated branch and opens a focused PR, using `Closes #<n>` where appropriate. Never push into another owner's PR branch or independently rebase stacked work. A significant protocol change requires a design and failure-mode review before implementation.
+3. **Verify:** The Coder records exact SHA, command, OS/Python/Qt environment, passed/failed/skipped/xfail counts, known limitations and unverified environments. `xfail` is an open requirement, not a pass. Do not weaken tests to make CI green.
+4. **Review:** An independent ChatGPT Reviewer examines the current head and adds reproducible findings and tests where possible. The Coder fixes findings, and the Reviewer re-verifies any changed code. An older review does not certify a newer SHA.
+5. **Coordinate:** The Coordinator checks current-head CI, independent review, unresolved blockers, dependency/base-branch consistency, and readiness. It recommends **READY / BLOCKED / IN REVIEW / DRAFT** to the Director.
+6. **Decide:** Only the Director merges or authorizes a release. No agent may self-merge, waive safety gates, change branch protection or claim unverified production safety.
+
+Use issue/PR comments and durable commits for handoffs, not chat-only status. Keep one active Coder per issue and avoid overlapping edits to shared state protocols. No GitHub ref locks, mandatory checkout/check-in comments, additional permanent agent roles or recurring check-ins are required. Scheduled agents remain paused unless the Director explicitly authorizes resumption.
+
+**Repository staging:** `main` currently holds documentation; draft PR #6 (`phase1-foundation`) and stacked PR #7 (`phase2-documents`) contain foundational application code, with additional GUI and feature drafts. Before assigning work, inspect the **live** branches and PR bases; do not assume these historical identifiers remain current. The unmerged multi-agent roster and atomic assignment-lock proposals in PRs #22 and #23 are not adopted by this policy.
 
 ## Engineering rules
 
-- Build working software incrementally; don't stop at architectural prose.
+- Build working software incrementally; do not stop at architectural prose.
 - Preserve existing company folder structures and native Inventor/SolidWorks references. No destructive migration.
-- Don't scan unmanaged archives automatically. New projects register; old projects opt in.
+- Do not scan unmanaged archives automatically. New projects register; old projects opt in.
 - **Release blockers:** data integrity, safe concurrent checkouts, immutable revisions and crash recovery.
-- **Authority:** the shared `.revisionworx` metadata is authoritative; local SQLite is a disposable search cache. Don't assume shared network filesystem operations are safe until verified.
-- **Administrative lock override stays, and is fenced** (`docs/ADMINISTRATIVE_LOCK_FENCING_DIRECTIVE.md`). A revoked writer must have no path to publish.
-- **Fail closed** when authority can't be established.
+- **Authority:** shared `.revisionworx` metadata is authoritative; local SQLite is a disposable search cache. Never assume network filesystem operations are safe without verification.
+- **Administrative lock override stays and is fenced** (`docs/ADMINISTRATIVE_LOCK_FENCING_DIRECTIVE.md`). A revoked writer must have no path to publish.
+- **Fail closed** when authority cannot be established.
 - **Offline only:** no accounts, cloud dependency, subscriptions, telemetry or mandatory network services. Core and CLI use the standard library only.
-- **OpenSchematix:** verify its actual formats and APIs before claiming interoperability. Never modify the OpenSchematix repository from here.
-- Design before editing shared-data protocols, and document assumptions and failure modes.
-- Add regression tests for every behaviour; reproduce a defect before claiming it's fixed.
-- Keep `docs/ARCHITECTURE.md` in step with actual design decisions, and mark unimplemented ideas as proposed.
-- Branding: use only the Director-supplied logo (`docs/REVISIONWORX_BRANDING_DIRECTIVE.md`).
+- **OpenSchematix:** verify its actual formats and APIs before claiming interoperability. Do not modify OpenSchematix from this repository.
+- Design before editing shared-data protocols; document assumptions and failure modes.
+- Add regression tests for every material behaviour; reproduce defects before claiming they are fixed.
+- Keep `docs/ARCHITECTURE.md` aligned with verified design decisions; label unimplemented proposals.
+- Branding uses only the Director-supplied logo (`docs/REVISIONWORX_BRANDING_DIRECTIVE.md`).
 
 ## Commands (on a branch with code)
 
@@ -43,15 +49,15 @@ python -m pip install -e ".[dev]"
 QT_QPA_PLATFORM=offscreen python -m pytest -q -ra
 ```
 
-Hosted Actions are free on this public repository, but avoid redundant matrix runs.
+Report local multiprocess tests separately from actual SMB/NFS cross-host tests. Do not infer production safety from green hosted CI or simulated filesystem tests.
 
 ## Code Review Rules
 
-Reviewers (Codex reads this section) should treat these as blocking:
+The independent Reviewer should treat these as blocking:
 
-- Any path where a revoked or stale writer can publish, or where two contenders can both hold authority.
-- Changes to revisions after publication, or crash and restart paths that lose data or resurrect revoked authority.
-- Treating the SQLite index as authoritative, or index results that disagree with the journal.
+- Any path where a revoked or stale writer can publish, or two contenders can both hold authority.
+- Changes to revisions after publication, or crash/restart paths that lose data or resurrect revoked authority.
+- Treating the SQLite index as authoritative, or index results disagreeing with the journal.
 - Destructive migration, automatic scanning of unmanaged archives, or broken native CAD references.
 - Claims of SMB/NFS or multi-user safety without real cross-host evidence.
 - Behaviour changes without a regression test, or tests that would pass on the old buggy code.
