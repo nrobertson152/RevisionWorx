@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-04 (session 16: malformed lock, state and record files; working-file authority)
+**Updated:** 2026-11-04 (session 16: malformed lock, state, document and revision records; working-file authority)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -72,6 +72,16 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | GUI | `gui/viewmodels.py`, `gui/qt/documents.py` | View-models tested headless; Qt Documents tab **not executed** |
 
 ## Session log
+
+### 2026-11-04 (session 16) — document and revision records; revision chains
+- `tests/test_document_record_damage.py`: each field of each root, project, document, revision and checkout record is replaced
+  or removed, with a correct digest and no record files to fall back on. Read operations, write operations and the index must work
+  or refuse, and a refused write must leave the journal, working file and content store as they were. Broken chains are checked one by one.
+- Found on `3299bbc` and fixed: raw `KeyError`, `TypeError` and `AttributeError` from nearly every document operation; revision
+  numbers out of order accepted as a good chain; a revision in a broken chain could be released.
+- Validation lives in `documents.py`, not `Workspace.get`, because `Workspace` stays generic for subsystem kinds (CORE_API §8).
+  `doctor` still reports a malformed record as X001 "could not be checked", which stops its document checks at that record; a
+  per-record finding is a follow-up, since another session is in `doctor.py` now.
 
 ### 2026-11-04 (session 16) — malformed files around the journal; working-file authority
 Each was reproduced on `673bec2` first. `tests/test_malformed_files_fail_closed.py`, `tests/test_working_file_authority.py`.

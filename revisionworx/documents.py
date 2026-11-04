@@ -24,7 +24,7 @@ from .content import ContentStore, hash_file, is_content_name
 from .filetypes import classify
 from .lifecycle import LifecycleError
 from .workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
-                        Workspace, WorkspaceError, current_actor, new_id, now_iso, register_kind, strip_rev)
+                        Workspace, WorkspaceCorruptError, WorkspaceError, current_actor, new_id, now_iso, register_kind, strip_rev)
 
 for _kind in ("doctype", "document", "revision", "checkout", "lifecycle"):
     register_kind(_kind)
@@ -84,6 +84,58 @@ class StaleCheckout(DocumentError):
     """A revision was committed after this checkout was taken (e.g. after an admin release)."""
 
 
+# ---------------------------------------------------------------------------- reading records
+# A journal entry's digest says it was not altered by accident, not that its record has the right shape. Everything here
+# reads through _get and _all, so a malformed record is one controlled refusal and not a KeyError deep in an operation.
+_TEXT, _OPTIONAL_TEXT, _WHOLE, _OBJECT, _LIST = (str,), (str, type(None)), (int,), (dict,), (list,)
+_RECORD_FIELDS = {
+    "project": {"id": _TEXT, "name": _TEXT, "mode": _TEXT, "status": _TEXT, "root_id": _TEXT, "rel_path": _TEXT},
+    "document": {"id": _TEXT, "project_id": _TEXT, "rel_path": _TEXT, "type_id": _TEXT, "number": _TEXT, "title": _TEXT,
+                 "owner": _TEXT, "revision_scheme": _TEXT, "status": _TEXT, "latest_rev_id": _OPTIONAL_TEXT,
+                 "released_rev_id": _OPTIONAL_TEXT, "rev_count": _WHOLE},
+    "revision": {"id": _TEXT, "document_id": _TEXT, "number": _WHOLE, "label": _TEXT, "state": _TEXT, "sha256": _TEXT,
+                 "size": _WHOLE, "source_mtime_ns": _WHOLE, "source_rel_path": _TEXT, "description": _TEXT, "author": _OBJECT,
+                 "created": _TEXT, "previous_rev_id": _OPTIONAL_TEXT, "restored_from": _OPTIONAL_TEXT, "transitions": _LIST},
+    "checkout": {"document_id": _TEXT, "token": _TEXT, "owner": _OBJECT, "acquired": _TEXT, "base_rev_id": _OPTIONAL_TEXT,
+                 "restored_from": _OPTIONAL_TEXT},
+}
+
+
+def _record_problem(kind: str, record: dict) -> str | None:
+    for field, types in _RECORD_FIELDS[kind].items():
+        value = record.get(field, ...)
+        if value is ...:
+            return f"{field} is missing"
+        if not isinstance(value, types) or isinstance(value, bool):
+            return f"{field} has the wrong type"
+    if kind == "document" and record["revision_scheme"] not in revlabels.SCHEMES:
+        return "revision_scheme is not a known scheme"
+    if kind == "revision":
+        if not is_content_name(record["sha256"]):
+            return "sha256 is not a SHA-256"
+        for step in record["transitions"]:
+            if not (isinstance(step, dict) and isinstance(step.get("from"), str) and isinstance(step.get("to"), str)
+                    and isinstance(step.get("by"), dict)):
+                return "transitions has a malformed step"
+    return None
+
+
+def _checked(kind: str, rid: str, record: dict) -> dict:
+    problem = _record_problem(kind, record)
+    if problem:
+        raise WorkspaceCorruptError(f"{kind} {rid} is malformed: {problem}. Nothing was changed; run 'revisionworx doctor'")
+    return record
+
+
+def _get(ws: Workspace, kind: str, rid: str) -> dict | None:
+    record = ws.get(kind, rid)
+    return None if record is None else _checked(kind, rid, record)
+
+
+def _all(ws: Workspace, kind: str) -> dict[str, dict]:
+    return {rid: _checked(kind, rid, record) for rid, record in ws.list(kind).items()}
+
+
 # ---------------------------------------------------------------------------- configuration
 def list_doctypes(ws: Workspace) -> dict[str, dict]:
     out = {k: {"id": k, **v} for k, v in DEFAULT_DOCTYPES.items()}
@@ -119,7 +171,7 @@ def get_lifecycle(ws: Workspace) -> dict:
 
 def save_lifecycle(ws: Workspace, lc: dict) -> None:
     valid = lc_mod.validate_lifecycle(lc)
-    in_use = {r["state"] for r in ws.list("revision").values()}
+    in_use = {r["state"] for r in _all(ws, "revision").values()}
     missing = in_use - {s["id"] for s in valid["states"]}
     if missing:
         raise LifecycleError(f"revisions are currently in states {sorted(missing)}, which the new lifecycle removes")
@@ -128,7 +180,7 @@ def save_lifecycle(ws: Workspace, lc: dict) -> None:
 
 # ---------------------------------------------------------------------------- helpers
 def _managed_project(ws: Workspace, project_id: str) -> tuple[dict, Path]:
-    project = ws.get("project", project_id)
+    project = _get(ws, "project", project_id)
     if project is None:
         raise DocumentError(f"unknown project {project_id}")
     if project["mode"] != "managed":
@@ -140,14 +192,14 @@ def _managed_project(ws: Workspace, project_id: str) -> tuple[dict, Path]:
 
 
 def working_path(ws: Workspace, doc: dict) -> Path:
-    project = ws.get("project", doc["project_id"])
+    project = _get(ws, "project", doc["project_id"])
     if project is None:
         raise DocumentError(f"document {doc['id']} belongs to a missing project")
     return paths.resolve_under_root(projects.project_folder(ws, project), doc["rel_path"])
 
 
 def _require_doc(ws: Workspace, doc_id: str) -> dict:
-    doc = ws.get("document", doc_id)
+    doc = _get(ws, "document", doc_id)
     if doc is None:
         raise DocumentError(f"unknown document {doc_id}")
     return doc
@@ -157,7 +209,7 @@ require_document = _require_doc      # public name for callers outside this modu
 
 
 def _require_rev(ws: Workspace, rev_id: str) -> dict:
-    rev = ws.get("revision", rev_id)
+    rev = _get(ws, "revision", rev_id)
     if rev is None:
         raise DocumentError(f"unknown revision {rev_id}")
     return rev
@@ -175,7 +227,7 @@ def _regular_file(path: Path) -> None:
 def _check_number(ws: Workspace, number: str, allow_duplicate: bool, exclude: str | None = None) -> None:
     if not number or allow_duplicate:
         return
-    for d in ws.list("document").values():
+    for d in _all(ws, "document").values():
         if d["id"] != exclude and d.get("number", "").casefold() == number.casefold():
             raise DocumentError(f"document number {number!r} is already used by {d['rel_path']!r}")
 
@@ -183,20 +235,22 @@ def _check_number(ws: Workspace, number: str, allow_duplicate: bool, exclude: st
 def revisions_of(ws: Workspace, doc_id: str) -> list[dict]:
     """A document's revisions, oldest first, by walking the ``previous_rev_id`` chain from its
     latest revision: O(revisions of this document), not O(all revisions in the workspace)."""
-    doc = ws.get("document", doc_id)
+    doc = _get(ws, "document", doc_id)
     out, rid, seen = [], doc.get("latest_rev_id") if doc else None, set()
     while rid:
         if rid in seen:
             raise WorkspaceError(f"revision chain of document {doc_id} loops at {rid}")
         seen.add(rid)
-        rev = ws.get("revision", rid)
+        rev = _get(ws, "revision", rid)
         if rev is None or rev["document_id"] != doc_id:
             raise WorkspaceError(f"revision chain of document {doc_id} is broken at {rid}; run 'verify'")
         out.append(rev)
         rid = rev.get("previous_rev_id")
     out.reverse()
-    if doc and len(out) != doc.get("rev_count", len(out)):
+    if doc and len(out) != doc["rev_count"]:
         raise WorkspaceError(f"document {doc_id} records {doc['rev_count']} revisions but its chain has {len(out)}")
+    if [r["number"] for r in out] != list(range(1, len(out) + 1)):
+        raise WorkspaceError(f"revision chain of document {doc_id} is out of order; run 'verify'")
     return out
 
 
@@ -238,7 +292,7 @@ def register_document(ws: Workspace, project_id: str, file_path: Path | str, *, 
         raise DocumentError(f"{fp} is a symbolic link, not a regular file (links are not followed)")
     rel = paths.relative_to_root(folder, fp)
     key = paths.case_key(rel)  # case-insensitive: such names collide on Windows/SMB clients
-    for d in ws.list("document").values():
+    for d in _all(ws, "document").values():
         if d["project_id"] == project_id and paths.case_key(d["rel_path"]) == key:
             raise DocumentError(f"{rel!r} is already registered in this project (as {d['rel_path']!r})")
     target = paths.resolve_under_root(folder, rel)
@@ -293,7 +347,7 @@ def update_document(ws: Workspace, doc_id: str, expected_rev: int | None = None,
 
 
 def list_documents(ws: Workspace, project_id: str | None = None) -> list[dict]:
-    docs = [d for d in ws.list("document").values() if project_id is None or d["project_id"] == project_id]
+    docs = [d for d in _all(ws, "document").values() if project_id is None or d["project_id"] == project_id]
     return sorted(docs, key=lambda d: (d["project_id"], d["rel_path"].casefold()))
 
 
@@ -302,7 +356,7 @@ def checkout(ws: Workspace, doc_id: str, note: str = "", expected_doc_rev: int |
     doc = _require_doc(ws, doc_id)
     if doc["status"] != "active":
         raise DocumentError("archived documents cannot be checked out")
-    existing = ws.get("checkout", doc_id)
+    existing = _get(ws, "checkout", doc_id)
     if existing is not None:
         raise CheckoutConflict(existing)
     path = working_path(ws, doc)
@@ -316,7 +370,7 @@ def checkout(ws: Workspace, doc_id: str, note: str = "", expected_doc_rev: int |
             RecordCheck("document", doc_id, doc["_rev"] if expected_doc_rev is None else expected_doc_rev)])
     except ConflictError as exc:
         if exc.kind == "checkout":
-            raise CheckoutConflict(ws.get("checkout", doc_id) or {}) from exc
+            raise CheckoutConflict(_get(ws, "checkout", doc_id) or {}) from exc
         raise
     except CommittedNotApplied as exc:
         exc.result = {**co, "_rev": exc.seq}     # saved: without its token only an administrator could release it
@@ -325,7 +379,7 @@ def checkout(ws: Workspace, doc_id: str, note: str = "", expected_doc_rev: int |
 
 
 def _require_checkout(ws: Workspace, doc_id: str, token: str) -> dict:
-    co = ws.get("checkout", doc_id)
+    co = _get(ws, "checkout", doc_id)
     if co is None:
         raise NotCheckedOut("this document is not checked out")
     if not token or co["token"] != token:
@@ -386,7 +440,7 @@ def _checkin(ws: Workspace, doc_id: str, token: str, description: str, label: st
                             "checked in. Save your file elsewhere, check out again and merge your changes")
     path = working_path(ws, doc)
     _regular_file(path)
-    latest = ws.get("revision", doc["latest_rev_id"]) if doc["latest_rev_id"] else None
+    latest = _get(ws, "revision", doc["latest_rev_id"]) if doc["latest_rev_id"] else None
     number = doc["rev_count"] + 1
     chosen = _next_label(ws, doc, number, label)
     stored = ContentStore(ws).store_file(path)
@@ -457,7 +511,7 @@ def admin_release_checkout(ws: Workspace, doc_id: str, expected_token: str, reas
     is left untouched."""
     if not reason.strip():
         raise DocumentError("a reason is required")
-    co = ws.get("checkout", doc_id)
+    co = _get(ws, "checkout", doc_id)
     if co is None:
         raise NotCheckedOut("this document is not checked out")
     if co["token"] != expected_token:
@@ -502,6 +556,7 @@ def transition(ws: Workspace, rev_id: str, to_state: str, comment: str = "",
     ops: list = []
     new_doc = None
     if to_state == lc["released"]:
+        revisions_of(ws, doc["id"])              # a revision in a broken chain is not one to release
         if not ContentStore(ws).verify(rev["sha256"]):
             raise WorkspaceError(f"stored content of revision {rev['label']} is missing or damaged; "
                                  "it cannot be released")
@@ -542,11 +597,11 @@ def _guard_immutable(old: dict, new: dict) -> None:
 def document_status(ws: Workspace, doc_id: str, verify_hash: bool = False) -> dict:
     """Compare the working file with the latest revision; detect edits made outside RevisionWorx."""
     doc = _require_doc(ws, doc_id)
-    co = ws.get("checkout", doc_id)
+    co = _get(ws, "checkout", doc_id)
     path = working_path(ws, doc)
     out = {"document_id": doc_id, "path": str(path), "checked_out": bool(co),
            "checkout_owner": co["owner"] if co else None, "method": "hash" if verify_hash else "metadata"}
-    latest = ws.get("revision", doc["latest_rev_id"]) if doc["latest_rev_id"] else None
+    latest = _get(ws, "revision", doc["latest_rev_id"]) if doc["latest_rev_id"] else None
     if not path.exists():
         return {**out, "state": "missing"}
     if latest is None:
@@ -570,7 +625,7 @@ def read_revision_bytes(ws: Workspace, rev_id: str, max_bytes: int) -> tuple[dic
     Returns ``(revision, data)``; the bytes are checked against ``revision.sha256`` and
     ``revision.size``. The original extension is ``Path(revision["source_rel_path"]).suffix``."""
     rev = _require_rev(ws, rev_id)
-    if ws.get("document", rev["document_id"]) is None:
+    if _get(ws, "document", rev["document_id"]) is None:
         raise DocumentError(f"revision {rev_id} belongs to a missing document")
     data = ContentStore(ws).read_verified(rev["sha256"], max_bytes, expected_size=rev["size"])
     return rev, data
@@ -584,7 +639,7 @@ def export_revision(ws: Workspace, rev_id: str, dest: Path, overwrite: bool = Fa
 def verify_revisions(ws: Workspace, doc_id: str | None = None) -> list[dict]:
     store = ContentStore(ws)
     problems = []
-    for rev in ws.list("revision").values():
+    for rev in _all(ws, "revision").values():
         if doc_id and rev["document_id"] != doc_id:
             continue
         if not store.verify(rev["sha256"]):
@@ -617,7 +672,7 @@ def audit_history(ws: Workspace) -> list[dict]:
                 if changed:
                     report("immutable-field-changed", rid, seq, fields=changed)
                 before, after = old.get("transitions", []), new.get("transitions", [])
-                if after[:len(before)] != before:
+                if not isinstance(before, list) or not isinstance(after, list) or after[:len(before)] != before:
                     report("transitions-rewritten", rid, seq)
             seen[rid] = new
     return problems
@@ -651,14 +706,14 @@ def _transition_actor(rev: dict, state: str) -> str:
 def drawing_register(ws: Workspace, project_id: str) -> list[dict]:
     """Rows for the engineering drawing register of one project."""
     lc = get_lifecycle(ws)
-    project = ws.get("project", project_id)
+    project = _get(ws, "project", project_id)
     doctypes = list_doctypes(ws)
     rows = []
     for doc in list_documents(ws, project_id):
         if doctypes.get(doc["type_id"], {}).get("category") != "drawing":
             continue
-        latest = ws.get("revision", doc["latest_rev_id"]) if doc["latest_rev_id"] else None
-        released = ws.get("revision", doc["released_rev_id"]) if doc["released_rev_id"] else None
+        latest = _get(ws, "revision", doc["latest_rev_id"]) if doc["latest_rev_id"] else None
+        released = _get(ws, "revision", doc["released_rev_id"]) if doc["released_rev_id"] else None
         rows.append({
             "number": doc["number"], "title": doc["title"], "project": project["name"] if project else "",
             "customer": project.get("customer", "") if project else "",
@@ -693,7 +748,7 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
     kept; dry-run by default; removals are recorded in the journal as an audit record."""
     ws._require_writable()
     store = ContentStore(ws)
-    referenced = {r["sha256"] for r in ws.list("revision").values()}
+    referenced = {r["sha256"] for r in _all(ws, "revision").values()}
     now = time.time()
     orphans, unrecognised, kept_young = [], [], 0
     if store.root.is_dir():
@@ -718,7 +773,7 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
             "event": "content-gc", "removed": orphans, "time": now_iso(), "by": current_actor()})])
         for o in orphans:  # audit first: a crash leaves a record of intent, never an unlogged deletion
             ws.require_authority()        # a deletion cannot be fenced, but it can stop once authority is gone
-            if o["sha256"] not in {r["sha256"] for r in ws.list("revision").values()}:
+            if o["sha256"] not in {r["sha256"] for r in _all(ws, "revision").values()}:
                 store.path_for(o["sha256"]).unlink(missing_ok=True)
         report["removed"] = True
     return report

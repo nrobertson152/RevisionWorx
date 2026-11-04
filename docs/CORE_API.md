@@ -228,6 +228,11 @@ starting with `_`.
 A new kind is added to this table and to the collision test on PR #7 before use.
 
 ## Change log
+- 2026-11-04 (document records): reads in `documents` raise `WorkspaceCorruptError` for a document, revision, checkout or project
+  record of the wrong shape, instead of `KeyError`, `TypeError` or `AttributeError`. `revisions_of` and `history` also refuse revision
+  numbers out of order, and releasing a revision requires an intact chain. `LocalIndex` reports a record it cannot store the
+  same way and keeps its previous contents. No signature or record format changed. `ws.get` and `ws.list` stay generic and do
+  not apply these checks; other kinds (§8) stay their owners' to validate.
 - 2026-11-04 (malformed files; working-file authority): `ws.require_authority()` is new, for work a journal entry cannot fence.
   `restore_to_working` and `cancel_checkout(revert=True)` now refuse before touching the file when the handle is read-only,
   closed or revoked (`ReadOnlyError`, `WorkspaceError`, `LockLostError`), and raise `MissingFileError` if the folder is gone.

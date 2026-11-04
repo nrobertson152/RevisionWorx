@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import paths, scan
-from .workspace import RecordPut, Workspace, WorkspaceError, current_actor, new_id, now_iso, strip_rev
+from .workspace import RecordPut, Workspace, WorkspaceCorruptError, WorkspaceError, current_actor, new_id, now_iso, strip_rev
 
 MODES = ("indexed", "managed")
 PLATFORM_KEY = "windows" if os.name == "nt" else "posix"
@@ -49,9 +49,11 @@ def root_path(ws: Workspace, root_id: str) -> Path:
     root = ws.get("root", root_id)
     if not root:
         raise ProjectError(f"unknown root {root_id}")
+    if not isinstance(root.get("paths"), dict) or not isinstance(root["paths"].get(PLATFORM_KEY, ""), str):
+        raise WorkspaceCorruptError(f"root {root_id} is malformed: paths has the wrong shape; run 'revisionworx doctor'")
     p = root["paths"].get(PLATFORM_KEY)
     if not p:
-        raise ProjectError(f"root {root['name']!r} has no path configured for this operating system "
+        raise ProjectError(f"root {root.get('name')!r} has no path configured for this operating system "
                            f"({PLATFORM_KEY}); add one in Settings")
     return Path(p)
 

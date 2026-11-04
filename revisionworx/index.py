@@ -271,6 +271,16 @@ class LocalIndex:
         self._set_meta("baselines_unavailable", json.dumps(sorted(ids)))
 
     def _apply_put(self, kind: str, rid: str, data: dict) -> None:
+        """The index is disposable and cannot judge: a record it cannot store is reported as damage, and the transaction
+        around this call rolls back, so the cache is never left describing part of an entry."""
+        try:
+            self._store_put(kind, rid, data)
+        except (KeyError, TypeError, AttributeError, sqlite3.InterfaceError, sqlite3.ProgrammingError,
+                sqlite3.IntegrityError, OverflowError) as exc:
+            raise WorkspaceCorruptError(f"{kind} {rid} is malformed and cannot be indexed ({exc!r}); "
+                                        "run 'revisionworx doctor'") from exc
+
+    def _store_put(self, kind: str, rid: str, data: dict) -> None:
         if kind == "project":
             old = self.db.execute("SELECT baseline_blob FROM projects WHERE id=?", (rid,)).fetchone()
             self._upsert_project(data)
