@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-01 (second session: Phase 1 review, PySide6 migration)
+**Updated:** 2026-11-03 (session 15: failure injection; read-only integrity doctor)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -73,6 +73,102 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 
 ## Session log
 
+### 2026-11-03 (session 15) — read-only integrity doctor (#28 item 11)
+- `revisionworx doctor [--quick] [--json]` and `revisionworx/doctor.py`. Stable codes are in `docs/CORE_API.md` §5.
+  Takes no lock and changes nothing; keeps going past damage so one bad entry does not hide another; says what it did not check.
+- A pass counts only if the journal did not change during it, so a concurrent writer does not produce false errors (retries up to 5 times, then says so).
+- `tests/test_doctor.py`: one fixture per kind of damage, each asserting the exact codes and an unchanged tree (bytes and mtimes);
+  races injected deterministically; a real concurrent writer; and the advice followed through the real CLI.
+- Limits: it cannot tell a live lock holder from a dead one, and nothing here was run on SMB, NFS or a second host.
+
+### 2026-11-03 (session 15) — the filesystem refuses, the process survives
+- New `tests/test_fault_injection_matrix.py`: each filesystem change of each core operation fails in turn (disk full, read-only,
+  access denied, one I/O error), the process keeps running, the disk comes back, then the state is checked against the journal.
+- Found and fixed: `close()` could not be retried, so a moment of disk trouble needed an administrator; a failed opener or
+  create could keep the lock with no way to release it; a failed folder sync after publishing told the caller a saved change had
+  failed; a failed `close()` during error handling hid the real error.
+- Limit: a process that ends before a retry succeeds still leaves the lock for an administrator.
+
+### 2026-11-04 (session 15) — subsystem persistence contract; Phase 1 journal triage
+- **CORE_API §8 (Provisional):** answers Claude D (PR #20) and Claude C (A10, PR #21). Both adapters already use only the
+  listed calls; kind registry added; no kind collisions.
+- **Tests:** `tests/test_subsystem_persistence_contract.py` (3): a real child process registers a kind, commits and dies
+  before apply; this process, which never registered it, reads, recovers and verifies it, and cannot write it. Mutation
+  check: validating kinds against the registered set makes both process tests fail.
+- **QA run 41730782278 triage:** its 4 malformed-journal failures are on `phase1-foundation` (`412e69a`), where a writable
+  open publishes on top of a damaged entry; they pass on PR #7. Reported on #33 and PR #6; Director to choose how PR #6
+  gets the current core. No push to `phase1-foundation`.
+
+### 2026-11-03 (session 14) — Windows `.releasing-*` race (Coordinator handoff on PR #7), ADR-019 rev. 5
+- **Origin:** CI 41678241178 (GUI PR #14, `0cb3b0b`), `test_checkout_race_between_processes_has_one_winner` on Windows:
+  `PermissionError` from `orphan.read_bytes()` in `_fence_orphaned_releases`. That line is in the older core the GUI
+  branch carries; PR #7's head reads with sharing retries but still called a release file that stayed access-denied
+  past the retry budget "unreadable, run clear-orphan", even after it vanished.
+- **Reproduced first:** three new tests in `tests/test_windows_sharing.py` fail on `3cc42e1` with `WorkspaceCorruptError`.
+- **Fix:** access denied is not damage. Gone from the listing: continue. Still listed: fail closed with
+  `LockReleaseBusyError` (retry), file untouched; custody files are put back as `.releasing-*`. Corrupt (readable,
+  no token) is unchanged. See ADR-019 rev. 5.
+- **Evidence:** see the PR #7 check-in for exact commands, commit and counts (local Linux and native CI).
+- **GUI note:** PR #14 must take the current core to get this and the issue #10 fixes; it is Claude B's branch.
+
+### 2026-11-03 (session 13) — P0 journal structure (#29) and CAD source-capture integrity
+- **Journal:** `read_entry` validates every dereferenced field (`_entry_shape_problem`); `null`/`[]`/scalar entries, bool
+  `seq`, wrong-typed optional fields, invalid kinds/ids, non-bool `delete`, non-object put `data`, bad blob refs and bad
+  revocation holders raise `WorkspaceCorruptError`. Legacy digestless entries still accepted. `health()` fails closed.
+- **Capture:** `store_file` pins the source by handle, re-checks path identity before/after, and verifies with a second
+  hash read. Detection, not atomicity; guarantee and limits in CORE_INVARIANTS §5a/§5b.
+- **Evidence (local Linux, CPython 3.13.18):** full suite 452 passed, 3 skipped. PR #34 independent shape gates 1/7 -> 7/7;
+  PR #34 crash/derived/ADR-017 files 9/11 -> 11/11. Native Windows/Linux CI: see PR #7 check-in.
+- **Next:** P1 transaction/recovery hardening; Windows verification of `st_ino` identity in capture.
+
+### 2026-11-02 (session 9) — Codex P1 findings on `e5b38a6`: threat model corrected; P2 conflicts; API contract
+- **Codex `workspace.py:693` (custody disposal) and `:472` (fencing archival): both reproduced
+  deterministically.** See `tests/test_lock_namespace_threat_model.py::test_boundary_codex_*`.
+  - Each needs an *outside* rename of a live lock onto a custody name.
+  - The same capability yields two effective writers with **no orphan code at all**
+    (`test_boundary_baseline_*`: one rename of `writer.lock`).
+  - A control with identical protocol moves and timing, but no outside rename, is safe.
+  - Conclusion: there is no protocol-internal race; ADR-019 rev. 3 *overclaimed*. Its threat model
+    is rewritten with a property-by-actor table. Exclusivity against outside actors is recorded as
+    an **open Director decision** (OS permissions or the ADR-014 coordinator). No narrowing
+    "fixes" were made.
+- **DS P2 semantics:**
+  - A different reason or `user@host` for the same orphan incarnation raises
+    `OrphanClearConflict` and records nothing.
+  - An identical request resumes idempotently (crash, lost ACK).
+  - Identical bytes recreated after a terminal result are a new incarnation (new `clear_id`).
+  - CLI exit code 2 on conflict.
+- **Evidence tampering is now detectable:** `verify()` reports `orphan-evidence-altered` /
+  `orphan-evidence-missing`.
+- **`docs/CORE_API.md`:** the stable UI/integration contract for Claude B (issue #13).
+- **Tests:** `python -m pytest -q` → **213 passed, 1 skipped (Qt)**, Linux, Python 3.13.18, 8+3
+  consecutive full runs identical. With `e5b38a6`'s `workspace.py`/`cli.py`, 3 of the new tests
+  fail (conflict, verify, process exit codes). The boundary tests reproduce on both versions, by
+  design. Windows not executed here.
+
+### 2026-11-02 (session 8) — ADR-019 rev. 3: custody-bound, serialized orphan clear (DS P1 + P2)
+- **Reproduced first.** `tests/test_orphan_clear_custody.py`: all 16 tests fail on `366d435`.
+  - P1: the evidence differs from the audited SHA-256, and a new writer acquires.
+  - P2: two authorisations are published for one orphan.
+- **Fix (ADR-019 rev. 3):**
+  - **Authorisation** is a compare-and-swap on the journal head; competitors adopt it.
+  - **Custody:** the orphan moves to a private `.clearing-*` name; evidence is written from the
+    verified in-memory bytes.
+  - **Terminal result:** exactly one per clear (`completed` / `refused`). Mismatched bytes are
+    quarantined under a fresh blocking name.
+  - **Acquisition** settles open clears, then scans releasing, clearing, releasing.
+  - **Fencing:** token-orphan fencing now also moves the file before reading it.
+- **Found under load and fixed:** a stale-view "does not exist" when a competitor authorised and
+  moved the file between our head read and our file read. Regression test added.
+- **Behaviour change.** An orphan whose bytes changed after authorisation is no longer re-cleared
+  by its old name. It is quarantined, and the administrator clears the quarantine name (the CLI
+  prints it). The rev. 2 test was updated accordingly.
+- **Tests:** `python -m pytest -q` → **207 passed, 1 skipped (Qt)**, 10 consecutive full runs
+  identical (Linux, Python 3.13.18). Windows **not executed here**; the Windows branch of
+  `_quarantine` (`os.rename`) is exercised only by CI.
+- **Independent review pending:** Distributed Systems' original counterexamples, then QA on
+  Linux and Windows. The Phase 1 backport and `perf-journal-index` stay on hold until acceptance.
+
 ### 2026-11-02 (session 7) — P0: successor-lock deletion race fixed (ADR-019), awaiting QA
 - **Reproduced first:** `tests/test_lock_release_race.py::test_paused_releaser_never_deletes_successor_lock`
   failed on `d202b28` (B's lock deleted).
@@ -133,6 +229,95 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 - Reproduced Agent D's procedure as `tests/test_issue8_fencing.py`. Both tests failed first: the stale commit succeeded.
 - Implemented journal-order fencing. The full suite gives **153 passed, 1 skipped**.
 - Multi-user use is still gated on the coordinator and on SMB verification.
+
+### 2026-11-02 (session 12) — adversarial core review (Director assignment, in progress)
+**Read this first if you are resuming.** Candidate work is on `phase2-documents`, not independently accepted.
+
+Done:
+- `22a5273` (Issue #10 reader share mode) passed Core CI 41574652418: ubuntu-latest Python 3.11, 274 passed, 3
+  skipped; windows-latest Python 3.13, 275 passed, 2 skipped, plus 5 trials of the 6- and 10-process contention.
+- 16 confirmed defects fixed with failing tests first: `tests/test_core_reliability.py` (30 of its then 40 tests
+  failed on `22a5273`). See the commit message of `feffbcf` for the list.
+- Real-process crash matrix: `tests/proc_actor.py`, `tests/proc_harness.py`, `tests/test_process_crash_matrix.py`.
+  A process dies with `os._exit` before every filesystem change of commit, check-in, register, checkout, cancel,
+  restore, lifecycle release, create/adopt project, GC, repair, release, revoked-lock clear, orphan fence, break,
+  clear-orphan and create. A new process recovers, then the state is checked against a journal replay.
+  23 tests pass on Linux. It found no new defect beyond a test assumption (see the ADR-022 limitation).
+
+- `tests/test_process_handoff.py`: stale release, stale revoked cleanup and stale break across real processes, with
+  the real `lock break` CLI and a kill at every step of the mover; a check-in stopped past its checks; reader
+  stress; a soak with an administrator breaking every lock. Local, Linux, Python 3.13.18: 6 passed. Negative controls
+  with the same tests: `d2b7a1c` 4 failed, 2 passed. Soak over 12 runs each: `fe8a179` 2 failed (a real false
+  "created by another writer" and a real `verify` failure), this candidate 0 failed.
+
+- `docs/CORE_INVARIANTS.md`: the invariant and failure map, with the test that guards each part.
+
+- `tests/test_lock_protocol_systematic.py`: stateless model checking with context bounding, over the real code. With
+  mutation checks that put the `d2b7a1c` defect back and remove fencing: the explorer must find them, and does. It
+  found one more defect, now fixed: a stopped check-in resumed after its own retry finished and reported `NotCheckedOut`
+  for a saved change.
+
+- More fixes, each with a failing test first: `verify` no longer fails forever after a correct fencing, or calls unapplied
+  entries damage; an unreadable `writer.lock` has a way out (`lock break --token ?`, then `clear-orphan`); new folders are
+  synced before anything refers to them (order tested, power loss not); old `.rwx-*.tmp` files beside a working file are
+  swept; `doc verify` audits the journal for changed revisions; A4 and A6 from Claude B.
+- Core CI 41578257430 at `12e4c49`: all four jobs passed. Ubuntu 3.11 and 3.13: 349 passed, 3 skipped. Windows 3.11 and 3.13:
+  350 passed, 2 skipped, 5/5 contention trials each.
+
+- Also fixed with failing tests first: a damaged `state.json` costs a replay, not the workspace; a damaged `workspace.json`
+  is `WorkspaceFormatError`; a malformed entry is corruption, not a raw `KeyError`; a gap under a long-lived handle stops writes;
+  hashing and storing a working file no longer block a CAD program's rename on Windows; GC stops once it has lost the lock;
+  the CLI keeps a token and reports success when a change is saved but not materialised.
+- Differential test: incremental index equals a fresh rebuild across random histories. 6 seeds pass; it found no defect.
+- Negative controls for the explorer (budget 500): `d2b7a1c` 5 failed, 2 passed; `fe8a179` and `22a5273` 1 failed, 6 passed.
+
+- **Candidate `96f9c36`:** Core CI 41579731163 passed all four jobs, 393 passed and 3 skipped on each, with 5/5 Windows contention
+  trials on both Windows jobs. Exhaustive explorer at that SHA (Linux, Python 3.13.18): 17,537 schedules, 7 passed, none sampled.
+  Handed to QA and Distributed Systems. Not yet independently accepted; QA suite and GUI trial merge last ran at `feffbcf`.
+
+Not done yet, in priority order:
+1. Claude B's remaining API requests: A2, A3, A7 (A1, A4, A5 and A6 are done).
+2. Director question: same-host dead-process lock recovery (a stale lock is never stolen today, so every crash needs the CLI).
+
+Known and watched:
+- The 21 s outlier in Windows contention trial 3 is not the product: with `--durations` (run 41577700770) the tests took
+  1.29 s and 0.80 s. It is always the fourth pytest session in the job, so pytest's removal of old temp folders is the
+  likely cause, not proven (the full suite's temp holds the 50,000-folder traversal test).
+- Core CI 41577700770 at `a03f1f0`: ubuntu 3.11 and 3.13 and windows 3.11 passed (windows 3.11: 344 passed, 2 skipped, 5/5
+  contention trials). windows 3.13 failed one test: racing openers of a new index got `IndexBusyError`, because SQLite
+  does not use its busy timeout when switching a new database to WAL. Fixed in the next commit. The real-process crash
+  matrix passed on all four jobs.
+- QA tests that fail on the merged tree with the newest GUI also fail with `fe8a179` as core, so core did not
+  cause them: `test_real_postjournal_checkin_failure_survives_restart_once`,
+  `test_document_viewmodel_checkout_status_and_filter`, `test_document_viewmodel_rejects_empty_checkin_without_journal_mutation`.
+
+### 2026-11-02 (session 11) — core integration readiness
+- `fe8a179` got a scoped ACCEPT from QA (41571153163) and Distributed Systems (41570591613, 41570924625,
+  41571231241) for the three rev. 4 fixes only. That acceptance does not carry over to later SHAs.
+- New defect found and fixed: **ADR-022**, a late write by a stale writer could cause stale reads and a
+  lost update. Tests first failed on `fe8a179`.
+- Issue #10: three remaining ways a transient sharing violation cost availability; see ADR-019. Added
+  6- and 10-process contention with a reader polling the lock file.
+- Those tests **failed on real Windows at `3cb2764`** (run 41573956298): readers starved the release.
+  Fixed by reading with `FILE_SHARE_DELETE` and waiting longer; see ADR-019.
+- Issue #9: reproduced nothing new. Added insert/update/delete during rebuild and sync across a fenced
+  entry, compared with a journal replay. Both pass, and the fix from `325b7a8` stands.
+- Added `.github/workflows/core-ci.yml`, so this branch now gets its own Linux and Windows runs.
+- New `docs/INTEGRATION_PLAN.md`: proposed order and remaining gates, for the Director.
+- Claude B's API requests A1-A7 are triaged on PR #7, not implemented. They would change the source under
+  review, so they follow acceptance of this SHA.
+
+### 2026-11-02 (session 10) — ADR-019 rev. 4: three protocol-only P1s on `d2b7a1c`
+- Took over as core owner (Claude A) from the previous session. Rev. 3 claimed protocol-only
+  exclusivity; QA, Distributed Systems and Codex refuted it, and the QA reproducers were rerun here
+  first (3 unsafe PASS + 3 strict XFAIL on `d2b7a1c`).
+- Fix: `_displace_writer_lock` and revoke-before-archive in `_fence_token_orphan`. See ADR-019 rev. 4.
+- New: `tests/test_lock_stale_decision_races.py` (crash at every step of each mover) and
+  `tests/test_lock_protocol_schedules.py` (seeded schedule exploration with process kills).
+- `tests/test_issue8_fencing.py`: a pause hook keyed on the old `broken` destination would have stopped
+  firing silently, so it now matches any move of `writer.lock`.
+- **Not accepted by its author.** Awaiting QA and Distributed Systems on the exact SHA. Windows not run
+  here. API requests A1-A5 from Claude B (PR #7) are not yet answered.
 
 ### 2026-11-01 (session 2, part 3) — independent agents' work executed; decision pending
 Agents B and D opened PR #3, PR #4 and issue #5 during this session. Their tests had not been run

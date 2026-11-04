@@ -13,16 +13,17 @@ import io
 import os
 import secrets
 import stat
+import time
 import uuid
 from pathlib import Path
 
+from . import atomicio, paths, projects, revlabels
 from . import lifecycle as lc_mod
-from . import paths, projects, revlabels
 from .content import ContentStore, hash_file
 from .filetypes import classify
 from .lifecycle import LifecycleError
-from .workspace import (ConflictError, RecordCheck, RecordDelete, RecordPut, Workspace, WorkspaceError,
-                        current_actor, new_id, now_iso, register_kind, strip_rev)
+from .workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
+                        Workspace, WorkspaceError, current_actor, new_id, now_iso, register_kind, strip_rev)
 
 for _kind in ("doctype", "document", "revision", "checkout", "lifecycle"):
     register_kind(_kind)
@@ -68,6 +69,10 @@ class TokenMismatch(DocumentError):
 
 class NoChanges(DocumentError):
     pass
+
+
+class MissingFileError(DocumentError):
+    """The file is not there. Worth telling apart from other refusals: the user can put it back."""
 
 
 class ImmutableRevisionError(DocumentError):
@@ -147,6 +152,9 @@ def _require_doc(ws: Workspace, doc_id: str) -> dict:
     return doc
 
 
+require_document = _require_doc      # public name for callers outside this module (Claude B's A5)
+
+
 def _require_rev(ws: Workspace, rev_id: str) -> dict:
     rev = ws.get("revision", rev_id)
     if rev is None:
@@ -158,7 +166,7 @@ def _regular_file(path: Path) -> None:
     try:
         st = os.lstat(path)
     except FileNotFoundError:
-        raise DocumentError(f"{path} does not exist") from None
+        raise MissingFileError(f"{path} does not exist") from None
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
         raise DocumentError(f"{path} is not a regular file (links are not followed)")
 
@@ -309,6 +317,9 @@ def checkout(ws: Workspace, doc_id: str, note: str = "", expected_doc_rev: int |
         if exc.kind == "checkout":
             raise CheckoutConflict(ws.get("checkout", doc_id) or {}) from exc
         raise
+    except CommittedNotApplied as exc:
+        exc.result = {**co, "_rev": exc.seq}     # saved: without its token only an administrator could release it
+        raise
     return {**co, "_rev": seq}
 
 
@@ -322,11 +333,51 @@ def _require_checkout(ws: Workspace, doc_id: str, token: str) -> dict:
     return co
 
 
+def _earlier_checkin(ws: Workspace, doc_id: str, txid: str, description: str, label: str | None) -> dict | None:
+    """What an earlier attempt with this txid already did (CORE_API 4), or None if nothing happened yet.
+
+    A check-in cannot lean on commit()'s own retry check: every attempt makes a new revision id and time, so
+    no two attempts are ever the same request, and after a success the checkout it needs is gone. The
+    journal answers instead: the original revision for the same request, and a refusal for anything else."""
+    outcome = ws.transaction_outcome(txid)
+    if outcome["state"] == "not-found":
+        return None
+    if outcome["state"] == "fenced":
+        raise LockLostError(f"check-in attempt {txid} (entry {outcome['seq']}) never took effect, because its "
+                            "session had lost the writer lock. Nothing changed. Start a new attempt with a new txid")
+    entry = ws.read_entry(outcome["seq"])
+    revs = [i["data"] for i in entry["records"] if i["kind"] == "revision" and not i.get("delete")]
+    same = (entry.get("op") == "document.checkin" and len(revs) == 1 and revs[0]["document_id"] == doc_id
+            and revs[0]["description"] == description.strip() and (label is None or revs[0]["label"] == label.strip()))
+    if not same:
+        raise TxidReuseError(f"txid {txid} was already used for a different change (entry {outcome['seq']})")
+    return {**revs[0], "_rev": outcome["seq"]}
+
+
 def checkin(ws: Workspace, doc_id: str, token: str, description: str, label: str | None = None,
             allow_unchanged: bool = False, txid: str | None = None) -> dict:
-    """Snapshot the working file as a new immutable revision and release the checkout atomically."""
+    """Snapshot the working file as a new immutable revision and release the checkout atomically.
+
+    With a ``txid``, a retry returns the original revision and captures nothing new (CORE_API 4)."""
     if not description.strip():
         raise DocumentError("a change description is required")
+    if txid is None:
+        return _checkin(ws, doc_id, token, description, label, allow_unchanged, None)
+    earlier = _earlier_checkin(ws, doc_id, txid, description, label)
+    if earlier is not None:
+        return earlier
+    try:
+        return _checkin(ws, doc_id, token, description, label, allow_unchanged, txid)
+    except (NotCheckedOut, TokenMismatch, StaleCheckout, ConflictError, TxidReuseError):
+        # Another attempt with this txid may have got there while this one was stopped: same answer as a retry.
+        earlier = _earlier_checkin(ws, doc_id, txid, description, label)
+        if earlier is not None:
+            return earlier
+        raise
+
+
+def _checkin(ws: Workspace, doc_id: str, token: str, description: str, label: str | None, allow_unchanged: bool,
+             txid: str | None) -> dict:
     doc = _require_doc(ws, doc_id)
     co = _require_checkout(ws, doc_id, token)
     if doc["latest_rev_id"] != co["base_rev_id"]:
@@ -344,17 +395,38 @@ def checkin(ws: Workspace, doc_id: str, token: str, description: str, label: str
     rev = _new_revision(doc, number, chosen, stored, description.strip(), doc["latest_rev_id"],
                         get_lifecycle(ws)["initial"], co.get("restored_from"))
     new_doc = {**strip_rev(doc), "latest_rev_id": rev["id"], "rev_count": number, "modified": now_iso()}
-    seq = ws.commit("document.checkin", [
-        RecordPut("revision", rev["id"], rev, expect_rev=0),
-        RecordPut("document", doc_id, new_doc, expect_rev=doc["_rev"]),
-        RecordDelete("checkout", doc_id, expect_rev=co["_rev"])], txid=txid)
+    try:
+        seq = ws.commit("document.checkin", [
+            RecordPut("revision", rev["id"], rev, expect_rev=0),
+            RecordPut("document", doc_id, new_doc, expect_rev=doc["_rev"]),
+            RecordDelete("checkout", doc_id, expect_rev=co["_rev"])], txid=txid)
+    except CommittedNotApplied as exc:
+        exc.result = {**rev, "_rev": exc.seq}
+        raise
     return {**rev, "_rev": seq}
 
 
+def _sweep_working_temps(path: Path) -> None:
+    """Remove temp files a crash left beside this working file, and only those: it is the company's folder. A young
+    one may belong to a writer that is still at work."""
+    cutoff = time.time() - atomicio.ORPHAN_TEMP_MIN_AGE_SECONDS
+    for entry in path.parent.iterdir():
+        if entry.name.endswith(".tmp") and entry.name.startswith((f".{path.name}.rwx-", f"..{path.name}.rwx-")):
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    atomicio.remove_quietly(entry)
+            except OSError:
+                pass
+
+
 def _write_working_from_store(ws: Workspace, sha256: str, path: Path) -> None:
+    _sweep_working_temps(path)
     tmp = path.with_name(f".{path.name}.rwx-{uuid.uuid4().hex[:8]}.tmp")
-    ContentStore(ws).export(sha256, tmp)
-    os.replace(tmp, path)
+    try:
+        ContentStore(ws).export(sha256, tmp)
+        atomicio.retry_sharing(lambda: os.replace(tmp, path))
+    finally:
+        atomicio.remove_quietly(tmp)     # a CAD program holding the file must not leave copies in the project
 
 
 def cancel_checkout(ws: Workspace, doc_id: str, token: str, revert: bool = False) -> None:
@@ -508,6 +580,36 @@ def verify_revisions(ws: Workspace, doc_id: str | None = None) -> list[dict]:
         if not store.verify(rev["sha256"]):
             problems.append({"revision_id": rev["id"], "document_id": rev["document_id"],
                              "label": rev["label"], "problem": "content missing or damaged"})
+    problems.extend(p for p in audit_history(ws) if not doc_id or p["document_id"] == doc_id)
+    return problems
+
+
+def audit_history(ws: Workspace) -> list[dict]:
+    """Check from the journal that no published revision ever changed. ``commit`` is generic, so only the code calling it
+    keeps revisions immutable; this is what would notice if it ever failed to. Reads every effective entry."""
+    seen: dict[str, dict] = {}
+    problems: list[dict] = []
+
+    def report(problem: str, rid: str, seq: int, **details) -> None:
+        problems.append({"problem": problem, "revision_id": rid, "seq": seq,
+                         "document_id": seen.get(rid, {}).get("document_id"), **details})
+    for entry in ws.entries_after(0):
+        for item in entry["records"]:
+            if item["kind"] != "revision":
+                continue
+            rid, seq = item["id"], entry["seq"]
+            if item.get("delete"):
+                report("revision-deleted", rid, seq)
+                continue
+            old, new = seen.get(rid), item["data"]
+            if old is not None:
+                changed = [f for f in IMMUTABLE_REVISION_FIELDS if old.get(f) != new.get(f)]
+                if changed:
+                    report("immutable-field-changed", rid, seq, fields=changed)
+                before, after = old.get("transitions", []), new.get("transitions", [])
+                if after[:len(before)] != before:
+                    report("transitions-rewritten", rid, seq)
+            seen[rid] = new
     return problems
 
 
@@ -579,7 +681,6 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
     requires the writer lock (no check-in can be storing concurrently); every revision record,
     including unapplied journal entries, is a reference; objects younger than ``min_age_seconds`` are
     kept; dry-run by default; removals are recorded in the journal as an audit record."""
-    import time
     ws._require_writable()
     store = ContentStore(ws)
     referenced = {r["sha256"] for r in ws.list("revision").values()}
@@ -603,6 +704,7 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
         ws.commit("content.gc", [RecordPut("audit", new_id("aud"), {
             "event": "content-gc", "removed": orphans, "time": now_iso(), "by": current_actor()})])
         for o in orphans:  # audit first: a crash leaves a record of intent, never an unlogged deletion
+            ws._check_lock_still_held()   # a deletion cannot be fenced, but it can stop once authority is gone
             if o["sha256"] not in {r["sha256"] for r in ws.list("revision").values()}:
                 store.path_for(o["sha256"]).unlink(missing_ok=True)
         report["removed"] = True

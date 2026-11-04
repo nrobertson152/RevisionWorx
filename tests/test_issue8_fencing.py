@@ -84,7 +84,7 @@ def test_former_pre_audit_gap_admin_paused_before_lock_move(share, monkeypatch):
     import revisionworx.workspace as wsmod
 
     def replace(src, dst):
-        if str(src).endswith("writer.lock") and "broken" in str(dst):
+        if str(src).endswith("writer.lock"):
             with pytest.raises(LockLostError):  # stale writer acts during the admin's pause
                 stale.commit("stale", [RecordPut("project", RID, {"name": "stale"})])
         return real_replace(src, dst)

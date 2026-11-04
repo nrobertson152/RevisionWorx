@@ -420,7 +420,7 @@ afterwards and is only evidence.
   remains an implementation detail.
 - The historical extension comes from `revision.source_rel_path`.
 
-### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED, awaiting QA
+### ADR-019 Lock release by atomic move-then-verify (successor-lock race) — IMPLEMENTED; rev. 4 awaiting independent review; rev. 5 (Windows release race) awaiting CI/QA
 **Defect.** Reproduced by Distributed Systems (run 41387552435) and here
 (`tests/test_lock_release_race.py`, which failed on `d202b28`):
 1. Writer A verifies the token in `writer.lock`, then pauses before its pathname `unlink`.
@@ -480,6 +480,191 @@ exists. Adding more token re-checks only narrows the window.
   Changed bytes are never covered by an older audit; they need a new, separately audited decision.
   Documented; the same class as any manual override.
 
+- **Rev. 3: custody-bound, serialized clear** (Distributed Systems review of `366d435`, run
+  41393650443; both counterexamples reproduced first in `tests/test_orphan_clear_custody.py`, all
+  16 tests fail on `366d435`).
+  - *P1 (audit/bytes TOCTOU).* Rev. 2 hashed `locks/<name>` and then moved the **pathname**. A
+    file swapped in between was archived under the audit, the barrier vanished and a new writer
+    acquired. A second hash does not help: the race simply moves after it.
+  - *P2 (duplicate authorisation).* Two administrators could both pass the "no audit yet" lookup
+    and both publish `workspace.orphan.clear`, with different reasons and evidence names, for one
+    orphan.
+
+  Trust boundary: the audit authorises **bytes** (the SHA-256 the administrator inspected), not a
+  pathname. The name only locates candidates. A file may be archived under an audit only if
+  the archived bytes are, by construction, the audited bytes.
+
+  Protocol (`clear_orphaned_release`, `_drive_orphan_clear`):
+  1. **Authorise, serialized.** The decision ("is there an open authorisation for this file?") is
+     taken against journal head *H*, and the authorisation is published exactly at *H*+1 by
+     exclusive create (`_publish_admin_entry(expect_head=H)`). If anything was published after *H*,
+     the publish fails and the decision is retaken (also when the file vanished meanwhile). There
+     is therefore at most one open authorisation per orphan instance, and a competing request
+     **adopts** it (its own reason is not recorded; the CLI says so). Each authorisation carries a
+     `clear_id`; rev. 2 audits derive it from their evidence-name suffix.
+  2. **Take custody.** `os.replace(<name>, .clearing-<clear_id>-<rand>)`: a fresh name that never
+     clobbers. Whatever is now in custody is exactly what was moved, and custody files keep
+     blocking writers.
+  3. **Verify and archive from the verified buffer.** Read the custody file once. If
+     `sha256(bytes)` equals the audit, publish the evidence file *from those bytes* (exclusive
+     create). Later mutation of the custody file cannot reach the evidence. Existing evidence
+     with different bytes stops everything: `WorkspaceCorruptError`.
+  4. **One terminal result per clear** (`workspace.orphan.clear.result`, published by the same
+     compare-and-swap):
+     - `completed`; or
+     - `refused`, with the observed SHA-256 and a fresh quarantine name `.releasing-<new>`. The
+       mismatched bytes are moved there. A quarantined file is a new orphan instance: it still
+       blocks (it is unreadable, or carries a token and is fenced) and needs its own audited
+       decision. The old name can no longer be re-authorised.
+  5. **Dispose of custody** only while it still holds the audited bytes. Anything else found there
+     is quarantined, never deleted.
+
+  Acquisition first settles every open clear and custody file, then scans `.releasing-*`, then
+  `.clearing-*`, then `.releasing-*` again. Files only move `.releasing → .clearing → (evidence |
+  .releasing quarantine)`, so a concurrent administrator cannot slip one past the barrier. Any
+  custody file still present means a clear is in flight, and acquisition refuses ("retry").
+
+  Token-bearing orphans are fenced by the same move-then-verify rule: the file goes to
+  `.fencing-<rand>` first; the token is read from the moved file, revoked, then archived. An
+  unreadable custody file is re-quarantined as a blocking orphan.
+
+  Crash windows (each tested; "resume" means the next acquisition or a re-run of the command):
+
+  | Crash point | State | Result |
+  |---|---|---|
+  | Before or during authorisation | orphan at its name, no audit | acquisition refused |
+  | After authorisation, before custody | orphan at its name, open audit | resume takes custody under that audit |
+  | After custody, before evidence | `.clearing-*` | blocks; resume verifies and archives exactly once |
+  | After evidence, before terminal result | evidence + `.clearing-*` | blocks; resume publishes one `completed` |
+  | After `refused` result, before quarantine | `.clearing-*`, refused result | blocks; resume moves the bytes to the recorded quarantine name |
+  | After terminal result, before custody disposal | evidence + `.clearing-*` | resume disposes custody if the bytes still match |
+
+  **Threat model (corrected after the Codex review of `e5b38a6`).** Rev. 3 as first published
+  claimed defence against pathname replacement *at the custody names*. That was wrong for writer
+  exclusivity, and this section replaces that claim.
+
+  *Actors.* "Protocol processes" are RevisionWorx clients and administrators that touch
+  `locks/` only through this code, and may crash at any instruction, pause for any time and
+  interleave arbitrarily. Every name they create is fresh (`uuid4`), so no protocol process ever
+  renames onto an existing `.releasing-*`, `.fencing-*` or `.clearing-*` name. An "outside actor"
+  renames, replaces or deletes files in `locks/` by other means (a script, a user in Explorer,
+  malware, an older incompatible build).
+
+  | Property | Protocol processes + crashes | Outside actor |
+  |---|---|---|
+  | At most one effective writer (ADR-015/019) | **Design goal, rev. 4** (rev. 3's "guaranteed" was refuted on `d2b7a1c`; pending independent review) | **Not achievable** with a file-only authority |
+  | Evidence archived under an audit equals the audited SHA-256 at archival | **Guaranteed** | **Guaranteed** (evidence is published from the verified buffer by exclusive create) |
+  | Later alteration or removal of archived evidence | n/a | **Detected** by `verify()` (`orphan-evidence-altered` / `-missing`), not prevented |
+  | One authorisation and one terminal result per orphan incarnation | **Guaranteed** (journal CAS) | **Guaranteed** while the journal itself is not forged |
+
+  *Why exclusivity is out of reach for an outside actor.* The baseline needs no orphan code: one
+  rename of a live `writer.lock` lets a second writer acquire while the first, paused after its
+  preflight, still commits (`tests/test_lock_namespace_threat_model.py::test_boundary_baseline_*`).
+  More generally, any file-only protocol must at some point remove a blocking file by pathname, or
+  the blocking set grows forever. POSIX has no unlink or rename bound to an inspected object, so an
+  actor who can rename onto that name at that instant substitutes a live lock. Both Codex
+  counterexamples (`workspace.py:693` custody disposal, `:472` fencing archival) are exactly this.
+  They are reproduced deterministically as `test_boundary_codex_*`, and a control with identical
+  protocol moves and timing but no outside rename is safe. Re-hashing, identity checks (dev/ino)
+  or extra renames only narrow the window, so none is claimed as a fix. Exclusivity against
+  outside actors needs an authority the actor cannot write: OS permissions on `locks/` and the
+  journal, or the ADR-014 coordinator. That is a Director decision, recorded here as **open**.
+
+  *Orphan incarnation identity.* An incarnation is the authorisation's `clear_id`, bound to (file
+  name, SHA-256) at a journal sequence. Name and digest alone are not an identity: identical
+  bytes reappearing at the same name after a terminal result are a new incarnation with a new
+  `clear_id` (tested). There is no authenticated principal: "same administrator" means same
+  reason and same `user@host`. An identical request resumes idempotently (lost acknowledgement,
+  crash, restart). Any other request raises `OrphanClearConflict` and records nothing.
+
+- **Rev. 4: no stale decision can unfence a lock** (three protocol-only P1s on `d2b7a1c`, from Codex,
+  QA and Distributed Systems, all reproduced first; rev. 3's claim of protocol-only exclusivity was
+  wrong). Every failure had the same shape: a process read token A at `writer.lock`, an ordinary
+  acquirer B then replaced A, and the delayed pathname move took **B's** live lock, while the file
+  ended up outside the scanned namespace with B unrevoked. A successor C then saw nothing, and C and
+  B (already past its preflight) both took effect.
+
+  | Mover | `d2b7a1c` | Failure |
+  |---|---|---|
+  | Revoked-lock cleanup in acquisition | `writer.lock` → `writer.lock.revoked-*` | moved B, never revoked it |
+  | `break_writer_lock` | `writer.lock` → `writer.lock.broken-*` | moved B, never revoked it |
+  | `_restore_foreign_lock` | `.releasing-*` → `writer.lock.displaced-*`, *then* revoke | crash in between lost the obligation |
+
+  **Invariant.** A token-bearing lock file stops blocking only after the token *read from that moved
+  file* is durably revoked. Two rules deliver it:
+  1. Nobody but the owner moves `writer.lock` except through `_displace_writer_lock`, which moves it
+     to a fresh scanned `.releasing-*` name. An earlier read only gives permission to look.
+  2. Token-bearing files reach an evidence name only through `_fence_token_orphan`: inspect the
+     moved file, revoke, archive.
+
+  Why that closes the race: the rename out of `writer.lock` happens before the name can be vacant,
+  so any later acquirer's scan, which runs after its own exclusive create, finds the file. B's next
+  publication lands after the revocation and is fenced, or lands before it and precedes C entirely.
+  Evidence names are unchanged when the moved file is the expected one, and the audit's planned name
+  stays accurate. A successor found instead gets `writer.lock.orphaned-*` from its own audit.
+  Acquisition's retry is now a bounded loop (`LOCK_ACQUIRE_ATTEMPTS`), not recursion.
+
+  Crash windows for all three movers (each tested at every filesystem step):
+
+  | Crash point | State | Result |
+  |---|---|---|
+  | Before the move | `writer.lock` unchanged | blocked, or cleared if revoked |
+  | After the move, before revocation | `.releasing-*` | next acquirer revokes the actual token before writing |
+  | After custody, before revocation | `.fencing-*` | same |
+  | After revocation, before archive | `.fencing-*` | next acquirer archives; the token is already fenced |
+
+  **Decision: a displaced successor is revoked, not restored,** in cleanup and break. Restoring would
+  keep B running but adds states and another exclusive-create race for a very rare case. The release
+  path keeps its existing restore attempt. Consequence: B can lose a healthy session in this race and
+  gets `LockLostError`. That is unavailability, not corruption, and it reopens.
+
+  **Schedule exploration.** `tests/test_lock_protocol_schedules.py` runs three writers and an
+  administrator over the real code with a seeded scheduler that can switch or kill an actor before any
+  filesystem operation, and checks the property from the journal: authority never interleaves, no
+  lost update, no live token in evidence. It finds the defect on `d2b7a1c` within a few seeds. It
+  explores randomly and is not a proof; threads stand in for processes.
+
+  **Not claimed:** SMB/NFS, power loss, Windows until run there, outside actors (unchanged from
+  rev. 3), or a formal proof of the protocol. Independent QA and Distributed Systems review is pending.
+
+- **Lock file reads (issue #10, after rev. 4).** On Windows, opening a file while another process renames
+  it can fail with WinError 32. That says nothing about who holds the lock, but `close()` read it as "not
+  mine" and leaked the lock, a live handle read it as "lost" and went read-only for good, and the orphan
+  scan read a healthy orphan as "corrupt" and refused every writer. `_read_lock_file` now retries with a
+  bound. If `close()` still cannot look it releases anyway, since release is move-then-verify and cannot
+  take a successor's lock. A holder leaving mid-acquire is retried instead of reported as held by `?`.
+
+  Retries alone were not enough. New 6- and 10-process tests on real Windows (Core CI run 41573956298, at
+  `3cb2764`) showed the winner's release starved after 1 s, leaving every other process waiting 60 s and
+  timing out. The cause is that Python's `open()` does not grant `FILE_SHARE_DELETE`, so every reader blocks
+  a rename. `atomicio.read_json` now opens through `CreateFileW` with all share modes on Windows, so
+  RevisionWorx's own readers never block a release. Outside programs can still hold a file open, so
+  `atomic_write_bytes`, record deletes and the release wait up to about 5 s, and a release that still cannot
+  finish keeps the lock and reports it. This uses `ctypes` from the standard library.
+
+- **Rev. 5: unreadable is not damaged (Windows `.releasing-*` race, Coordinator handoff on PR #7,
+  2026-11-03).** On Windows a live releaser's private `.releasing-*` file refuses opens with access denied
+  between its rename and the completion of its unlink (delete pending), and an outside program can hold
+  one open. The scan treated a read that stayed denied past the ~5 s retry budget as an unreadable
+  orphan: `WorkspaceCorruptError` and "run `lock clear-orphan`", even when the file vanished a moment later.
+  The original intermittent CI failure (run 41678241178) was an older core on the GUI branch that read
+  without any retry; PR #7's head already retried but kept this gap (`tests/test_windows_sharing.py`, three
+  tests, all failing on `3cc42e1`). Now a `PermissionError` (after retries) is handled apart from damage:
+  - the file is no longer listed in `locks/` (directory listing, not a stat or open, which a
+    delete-pending file also refuses): its releaser or a competing fencer took it, exactly as for
+    `FileNotFoundError`, so the scan continues;
+  - it is still listed: acquisition still **fails closed** (gives its lock back, nothing written) but
+    raises `LockReleaseBusyError` ("retry"), not `WorkspaceCorruptError`. The file is untouched and keeps
+    blocking until it can be read and fenced;
+  - the same applies after the fencer has taken custody: the `.fencing-*` file goes back to a fresh
+    `.releasing-*` name with its bytes unchanged.
+  Corrupt evidence is not bypassed: a file that *can* be read but has no token still fails closed as
+  corrupt and needs the audited administrative clear. **Not claimed:** that a file denied forever is
+  ever classified; it blocks writers, with a retry message, until it is readable or removed by an
+  administrator. **Known separate limit:** a releaser that cannot read its *own* moved file restores
+  it to `writer.lock` (fail closed, lock stays held), so a program holding that file for > 5 s leaves the
+  lock held until an administrator breaks it.
+
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.
 - ADR-016 bounded retry on Windows sharing violations (`PermissionError` on the rename).
@@ -526,6 +711,76 @@ on PR #4).
   comes from `request`.
 - **Contract:** `RequestIdentityV2Contract` (reordering, check-only, key order, non-finite values)
   plus legacy-entry tests. The coordinator must implement the same identity bytes.
+
+### ADR-022 Record files are a cache of the journal — IMPLEMENTED; awaiting independent review
+**Defect** (found preparing core integration; `tests/test_materialisation_authority.py` failed on
+`fe8a179`). Production code and one crash are enough:
+1. Writer B publishes entry N, which is effective, and pauses before materialising it.
+2. An administrator revokes B. C takes over and updates the same record.
+3. B resumes and writes N's outdated data over C's record file, then dies before its `state.json` write.
+
+`applied_seq` still claims C's sequence, so nothing replays. `get()` returned B's data until
+someone ran `verify --repair`, and the next writer's `expect_rev` check passed against it: **a lost
+update**. The journal stayed correct throughout, but decisions were not being taken from it. The same
+late write could also resurrect a deleted record or remove a newer one. `commit()` made this easier by
+replaying before it checked its lock.
+
+**Decision.** No file primitive can stop the late write: the check and the write are never atomic, and
+fencing only governs journal entries. So record files stop being trusted. They are a cache, and reads
+are resolved against the journal:
+- **Journal view:** per handle, in memory, built only from digest-verified entries and read forward, so
+  each immutable entry is read once. `latest` maps each record to the (seq, deleted) of its last
+  *effective* write; going forward, an entry is fenced exactly when its token is already revoked, which
+  matches `is_fenced`. Discarded if the journal is shorter or the last entry seen changed (a restore).
+- **`get` / `list`:** a file is used only if its `_rev` equals the seq of the journal's last effective write of
+  that record. Otherwise the answer comes from the journal entry. A file newer than the view makes the view
+  refresh once, so a commit landing during a read is still seen. A file the journal never wrote, or one claiming an
+  entry the journal does not have, is not a record. `expect_rev` goes through `get`, so it is covered too.
+- **`_pending_overlay` is gone;** the view subsumes it. Revocations are served from the view as well.
+- **`commit`** checks its lock before replaying, so a writer that lost its lock writes nothing there.
+
+The files can still be wrong on disk until the next write of that record. `verify` still reports it, and
+`verify --repair` still fixes it. That is deliberate: a damaged cache must stay visible.
+
+**Damaged journal.** A view that cannot be built must not remove read access to a fully applied workspace
+(CORE_API: recovery-blocked means read-only; this regression was caught by testing against the GUI branch).
+If everything is applied, reads serve the files. If entries are unapplied, reads raise, because the files
+would be behind. `commit` checks revocations first and raises either way, so no write decision sees this.
+
+**Cost** (Linux, Python 3.13.18, one run each, local disk):
+
+| N entries | | `fe8a179` | ADR-022 |
+|---|---|---|---|
+| 1,000 | 50 commits, open handle | 3,122 ms | 402 ms |
+| 1,000 | fresh read-only open + first `get` | 2.9 ms | 59 ms |
+| 3,000 | 50 commits, open handle | not run | 1,005 ms |
+| 3,000 | fresh read-only open + first `get` | not run | 196 ms |
+
+Commits get faster because revocations stop being rescanned, but **the first read on a fresh handle now
+costs O(n)**. Previously that cost landed on the first commit or the first pending read instead. The
+parked `perf-journal-index` branch (ADR-020) keeps the same "per-handle, in memory, never persisted" rule.
+Its txid index and head probe still apply on top of this and would need redoing against it.
+
+**Limitation:** a file altered by an outside program while keeping the same `_rev` is served until `verify` reports
+it and `verify --repair` restores it. Outside actors are out of scope for Tier 1 (ADR-019), and comparing bytes
+on every read would make the files pointless.
+
+**Not claimed:** power loss, SMB/NFS, or outside actors. Independent QA and Distributed Systems review is pending.
+
+### ADR-023 The local index proves which journal it describes, and disposes of itself — IMPLEMENTED; awaiting review
+A cursor alone cannot tell which journal it belongs to. After a restore, a workspace can grow back to or past the
+cursor with different entries, and the cache kept serving records that exist in no journal (reproduced first).
+- **Anchor:** the cache stores the digest of the entry at its cursor. Entry digests cover the txid and time, so
+  they differ across timelines. `sync()` rebuilds if the anchor does not hold.
+- **Damaged journal:** the entry cannot answer, and the workspace is already recovery-blocked. Search stays
+  available, as reads do. A repair brings the check back.
+- **Busy is not damaged:** `database is locked` used to count as corruption, so opening deleted a database another
+  process was using. It now raises `IndexBusyError`, and nothing is deleted.
+- **Damage heals:** about 40% of single damaged pages raised `database disk image is malformed` on every later use.
+  Now `sync()` and the query methods replace the cache and retry once. Callers using `idx.db` directly are not
+  covered (Claude B's A5 asks for a public method).
+- **Creating is safe to race:** the schema is created in one transaction, and the second opener finds it done.
+- **Not detected:** a bit flip that still parses. SQLite has no page checksums here, and the cache is disposable.
 
 ## Shared filesystem coordination — OPEN design gate (Phase 3)
 

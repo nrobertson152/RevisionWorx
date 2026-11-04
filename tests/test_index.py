@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import random
 import sqlite3
 import time
 
 import pytest
 
 from revisionworx import index as index_mod
-from revisionworx import projects
+from revisionworx import documents, projects  # noqa: F401 - documents registers its record kinds
 from revisionworx.index import LocalIndex, fts_query, open_index
 from revisionworx.projects import NewProject
-from revisionworx.workspace import Workspace
+from revisionworx.workspace import LockLostError, RecordDelete, RecordPut, Workspace
 
 
 def _adopted(ws, share, name, files):
@@ -163,3 +164,151 @@ def test_default_cache_dir_is_local(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     if os.name != "nt":
         assert index_mod.default_cache_dir() == tmp_path / "xdg" / "revisionworx"
+
+
+# ---------------------------------------------------------------- issue #9: cursor matches contents
+def _journal_state(ws, kind):
+    """Replay of the effective journal entries: what the cache must describe."""
+    state = {}
+    for entry in ws.entries_after(0):
+        for item in entry["records"]:
+            if item["kind"] == kind:
+                if item.get("delete"):
+                    state.pop(item["id"], None)
+                else:
+                    state[item["id"]] = item["data"]
+    return state
+
+
+def _assert_cache_matches_journal(ws, idx):
+    assert idx.cursor_seq() == ws.head_seq()
+    roots = {r[0]: r[1] for r in idx.db.execute("SELECT id, name FROM roots")}
+    assert roots == {k: v["name"] for k, v in _journal_state(ws, "root").items()}
+    checkouts = {r[0] for r in idx.db.execute("SELECT document_id FROM checkouts")}
+    assert checkouts == set(_journal_state(ws, "checkout"))
+
+
+@pytest.mark.parametrize("change", ["insert", "update", "delete"])
+def test_rebuild_with_a_commit_mid_snapshot_matches_the_journal(ws, cache_dir, change):
+    keep, target = "root_" + "1" * 32, "root_" + "2" * 32
+    rev = ws.commit("t", [RecordPut("root", target, {"name": "before"}, expect_rev=0)])
+    co = "doc_" + "3" * 32
+    ws.commit("t", [RecordPut("checkout", co, {"owner": {"user": "u", "host": "h"}, "acquired": "t"}, expect_rev=0)])
+    mutation = {"insert": RecordPut("root", keep, {"name": "new"}, expect_rev=0),
+                "update": RecordPut("root", target, {"name": "after"}, expect_rev=rev),
+                "delete": RecordDelete("root", target, expect_rev=rev)}[change]
+    real, fired = ws.list, []
+
+    def list_then_commit(kind):
+        result = real(kind)
+        if not fired:
+            fired.append(True)
+            ws.commit("t.mid", [mutation])
+        return result
+    with LocalIndex(ws, cache_dir) as idx:
+        ws.list = list_then_commit
+        idx.rebuild()
+        del ws.list
+        assert fired
+        _assert_cache_matches_journal(ws, idx)
+        assert idx.sync()["mode"] == "current"
+
+
+def test_sync_stays_correct_across_a_fenced_entry(share, cache_dir):
+    """A fenced entry is in the journal but is not a change. The cache must skip it and still reach head."""
+    rid, late = "root_" + "1" * 32, "root_" + "2" * 32
+    w = Workspace.create(share, "W")
+    with LocalIndex(w, cache_dir) as idx:
+        idx.rebuild()
+        real = w._current_rev
+
+        def revoked_after_preflight(kind, record_id):
+            Workspace.break_writer_lock(share, w._lock_token, "unresponsive")
+            w._current_rev = real
+            return real(kind, record_id)
+        w._current_rev = revoked_after_preflight
+        with pytest.raises(LockLostError):
+            w.commit("t.fenced", [RecordPut("root", late, {"name": "fenced"}, expect_rev=0)])
+        with Workspace.open(share, writable=True) as next_writer:
+            next_writer.commit("t", [RecordPut("root", rid, {"name": "kept"}, expect_rev=0)])
+        idx.sync()
+        _assert_cache_matches_journal(w, idx)
+        assert idx.db.execute("SELECT 1 FROM roots WHERE id=?", (late,)).fetchone() is None
+    w._lock_token = None
+    w.close()
+
+
+# ---------------------------------------------------------------- incremental equals rebuild equals journal
+def _tables(idx):
+    dump = {}
+    for table in ("roots", "projects", "files", "documents", "revisions", "checkouts"):
+        dump[table] = sorted(idx.db.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+    for table, cols in (("projects_fts", "id, name, number, customer, description"),
+                        ("files_fts", "project_id, path"), ("documents_fts", "id, number, title, rel_path")):
+        dump[table] = sorted(idx.db.execute(f"SELECT {cols} FROM {table}").fetchall(), key=repr)
+    return dump
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_incremental_sync_always_equals_a_fresh_rebuild(ws, share, tmp_path, seed):
+    """Differential: after each step of a random history the incremental cache must equal one built from nothing. Searching
+    through either must give the same results, whichever way the cache happened to be brought up to date."""
+    rng = random.Random(seed)
+    project = projects.create_project(ws, NewProject(name="HPU", number="J-1", customer="Acme"))
+    folder = projects.project_folder(ws, project)
+    incremental = LocalIndex(ws, tmp_path / "incremental")
+    incremental.sync()
+    docs, tokens, files = [], {}, 0
+
+    def register():
+        nonlocal files
+        files += 1
+        path = folder / "02 CAD" / "Parts" / f"part{files}.ipt"
+        path.write_bytes(b"v%d" % files)
+        docs.append(documents.register_document(ws, project["id"], path, title=f"part {files}",
+                                                capture=rng.random() < 0.8)[0]["id"])
+
+    def checkout():
+        free = [d for d in docs if d not in tokens and ws.get("document", d)["status"] == "active"]
+        if free:
+            d = rng.choice(free)
+            tokens[d] = documents.checkout(ws, d)["token"]
+
+    def checkin():
+        if tokens:
+            d = rng.choice(sorted(tokens))
+            doc = ws.get("document", d)
+            documents.working_path(ws, doc).write_bytes(os.urandom(8))
+            documents.checkin(ws, d, tokens.pop(d), "changed")
+
+    def cancel():
+        if tokens:
+            d = rng.choice(sorted(tokens))
+            documents.cancel_checkout(ws, d, tokens.pop(d))
+
+    def transition():
+        revs = [r for r in ws.list("revision").values()]
+        if revs:
+            rev = rng.choice(revs)
+            targets = {"wip": "in_review", "in_review": "approved", "approved": "released"}.get(rev["state"])
+            if targets and not (targets == "released" and any(
+                    r["number"] > rev["number"] and r["state"] == "released"
+                    for r in revs if r["document_id"] == rev["document_id"])):
+                documents.transition(ws, rev["id"], targets)
+
+    def retitle():
+        if docs:
+            documents.update_document(ws, rng.choice(docs), title=f"retitled {rng.random():.6f}", number="")
+
+    def archive_project():
+        projects.update_project(ws, project["id"], description=f"{rng.random():.6f}")
+    actions = [register, register, checkout, checkin, checkin, cancel, transition, transition, retitle, archive_project]
+    for step in range(40):
+        rng.choice(actions)()
+        if rng.random() < 0.4:
+            incremental.sync()
+            with LocalIndex(ws, tmp_path / f"fresh{step}") as fresh:
+                fresh.rebuild()
+                assert _tables(incremental) == _tables(fresh), f"seed {seed}, step {step}"
+                assert incremental.cursor_seq() == fresh.cursor_seq() == ws.head_seq()
+    incremental.close()

@@ -8,10 +8,10 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, atomicio, documents, projects
+from . import __version__, atomicio, doctor, documents, projects
 from .clientstate import CheckoutTokens
 from .index import open_index
-from .workspace import Workspace, WorkspaceError
+from .workspace import CommittedNotApplied, Workspace, WorkspaceError
 
 
 def _emit(args, obj, text: str | None = None) -> None:
@@ -180,7 +180,14 @@ def cmd_verify(args):
     if report["repaired"]:
         lines.append("Records were rebuilt from the journal; displaced files are in .revisionworx/quarantine/.")
     _emit(args, report, "\n".join(lines))
-    if report["problems"] and not report["repaired"]:
+    if any(p.get("severity") != "info" for p in report["problems"]) and not report["repaired"]:
+        raise SystemExit(1)
+
+
+def cmd_doctor(args):
+    report = doctor.examine(_ws_location(args), hash_content=not args.quick)
+    _emit(args, report, doctor.render(report))
+    if not report["ok"]:
         raise SystemExit(1)
 
 
@@ -190,8 +197,17 @@ def cmd_lock_show(args):
 
 
 def cmd_lock_clear_orphan(args):
-    Workspace.clear_orphaned_release(_ws_location(args), args.file, args.reason)
-    _emit(args, {"cleared": args.file}, f"Cleared {args.file} (kept as evidence; recorded in the journal).")
+    r = Workspace.clear_orphaned_release(_ws_location(args), args.file, args.reason)
+    if r["outcome"] == "refused":
+        raise WorkspaceError(f"{args.file} was NOT cleared: its bytes changed after you inspected them. "
+                             f"They were kept as {r['quarantine']}, which still blocks writers; inspect "
+                             "that file and clear it separately (recorded in the journal).")
+    if r["outcome"] != "completed":
+        raise WorkspaceError(f"{args.file} is being cleared by another administrator; retry shortly.")
+    note = " (resumed your earlier authorisation)" if r["adopted"] else ""
+    _emit(args, {"cleared": args.file, **r},
+          f"Cleared {args.file} as {r['evidence']} (verified against the audited SHA-256; recorded in "
+          f"the journal){note}.")
 
 
 def cmd_lock_break(args):
@@ -250,10 +266,14 @@ def cmd_doc_show(args):
 
 def cmd_doc_checkout(args):
     with _open(args, True) as ws:
-        co = documents.checkout(ws, args.id, note=args.note)
+        note = ""
+        try:
+            co = documents.checkout(ws, args.id, note=args.note)
+        except CommittedNotApplied as exc:       # saved: the token must not be lost with the error
+            co, note = exc.result, f"\nNote: {exc}"
         _tokens(args).put(ws.id, args.id, co["token"])
         _emit(args, {k: v for k, v in co.items() if k != "token"},
-              f"Checked out {args.id}; edit the file in place, then run 'doc checkin'.")
+              f"Checked out {args.id}; edit the file in place, then run 'doc checkin'.{note}")
 
 
 def cmd_doc_checkin(args):
@@ -261,10 +281,14 @@ def cmd_doc_checkin(args):
         token = _tokens(args).get(ws.id, args.id)
         if not token:
             raise WorkspaceError("this machine holds no checkout token for that document")
-        rev = documents.checkin(ws, args.id, token, args.message, label=args.label,
-                                allow_unchanged=args.allow_unchanged)
+        note = ""
+        try:
+            rev = documents.checkin(ws, args.id, token, args.message, label=args.label,
+                                    allow_unchanged=args.allow_unchanged)
+        except CommittedNotApplied as exc:       # saved: reporting a failure here would invite a second check-in
+            rev, note = exc.result, f"\nNote: {exc}"
         _tokens(args).forget(ws.id, args.id)
-        _emit(args, rev, f"Checked in revision {rev['label']} ({rev['sha256'][:12]})")
+        _emit(args, rev, f"Checked in revision {rev['label']} ({rev['sha256'][:12]}){note}")
 
 
 def cmd_doc_cancel(args):
@@ -436,6 +460,9 @@ def build_parser() -> argparse.ArgumentParser:
     ix = sub.add_parser("index").add_subparsers(dest="sub", required=True)
     ix.add_parser("rebuild").set_defaults(fn=cmd_index_rebuild)
 
+    s = sub.add_parser("doctor", help="read-only integrity check of the whole workspace; changes nothing")
+    s.add_argument("--quick", action="store_true", help="check content objects are present without hashing them")
+    s.set_defaults(fn=cmd_doctor)
     s = sub.add_parser("verify", help="check records against the journal (admin)")
     s.add_argument("--repair", action="store_true", help="rebuild records from the journal")
     s.set_defaults(fn=cmd_verify)

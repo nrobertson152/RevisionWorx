@@ -12,11 +12,11 @@ import os
 import re
 import secrets
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import atomicio
-from .atomicio import ExclusiveCreateError
 from .workspace import Workspace, WorkspaceCorruptError
 
 _HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -39,10 +39,40 @@ class StoredContent:
     reused: bool
 
 
+def _signature(st: os.stat_result) -> tuple:
+    """What a writer cannot change without us noticing. File IDs of 0 (some network filesystems) compare
+    equal and so add nothing; ctime is omitted on Windows, where it is the creation time."""
+    sig = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+    return sig if os.name == "nt" else sig + (st.st_ctime_ns,)
+
+
+def _same_file(pinned: os.stat_result, at_path: os.stat_result) -> bool:
+    return stat.S_ISREG(at_path.st_mode) and _signature(pinned) == _signature(at_path)
+
+
+def _hash_pinned(path: Path, expected: os.stat_result) -> str:
+    """Second, independent read: the SHA-256 of the file ``path`` names, which must still be ``expected``
+    before and after the read; any difference raises SourceChangedError."""
+    h = hashlib.sha256()
+    with atomicio._open_for_read(path) as fh:
+        if _signature(os.fstat(fh.fileno())) != _signature(expected):
+            raise SourceChangedError(f"{path} changed while it was being stored; save it, then try again")
+        while True:
+            block = fh.read(CHUNK)
+            if not block:
+                break
+            h.update(block)
+        if _signature(os.fstat(fh.fileno())) != _signature(expected):
+            raise SourceChangedError(f"{path} changed while it was being stored; save it, then try again")
+    if not _same_file(expected, os.stat(path, follow_symlinks=False)):
+        raise SourceChangedError(f"{path} was replaced while it was being stored; save it, then try again")
+    return h.hexdigest()
+
+
 def hash_file(path: Path) -> tuple[str, int]:
     h = hashlib.sha256()
     size = 0
-    with open(path, "rb") as fh:
+    with atomicio._open_for_read(path) as fh:    # a CAD program saving by rename must not fail because of us
         while True:
             block = fh.read(CHUNK)
             if not block:
@@ -73,35 +103,62 @@ class ContentStore:
         return hash_file(path)[0] == sha256
 
     def store_file(self, source: Path) -> StoredContent:
-        """Copy ``source`` into the store, hashing in the same single read.
+        """Copy ``source`` into the store and return what was captured.
 
-        The object is durable (fsynced and published) before this returns. Raises
-        :class:`SourceChangedError` if the source's size or mtime changed during the copy.
-        """
+        Consistency guarantee (docs/CORE_INVARIANTS.md, C1-C4): the stored bytes are the bytes of one
+        regular file that ``source`` named, unchanged, from before the copy began until after a second,
+        independent read of it finished, and both reads hashed to the stored SHA-256. Concretely:
+
+        * the file is pinned by its open handle; the path must name that same file (device and file
+          ID where the platform reports them) before the copy, after it, and after the second read, so
+          save-by-rename and replacement by a link are detected even at equal size and mtime;
+        * size and mtime, and on POSIX ctime (which no writer can set back), must not change across
+          the copy, so same-inode writes are detected even if mtime is preserved or restored;
+        * the second read must produce the same SHA-256, which catches in-place writes that fall
+          within one timestamp tick of a coarse filesystem.
+
+        This is detection, not atomicity: RevisionWorx cannot stop another program writing. A writer
+        that changes the file and restores identical bytes, size, mtime and ctime between the checks
+        is not detectable, nor is one that writes the same bytes in both reads. Anything detected
+        raises :class:`SourceChangedError` and nothing is stored or referenced. The object is durable
+        (fsynced and published) before this returns."""
         self.ws._require_writable()
         source = Path(source)
-        before = os.stat(source)
-        self.root.mkdir(parents=True, exist_ok=True)
+        atomicio.make_dirs(self.root)
         tmp = self.root / f".incoming.{secrets.token_hex(8)}.tmp"
         h = hashlib.sha256()
         size = 0
+
+        def changed(what: str) -> SourceChangedError:
+            return SourceChangedError(f"{source} {what} while it was being stored; save it, then try again")
+
         try:
-            with open(source, "rb") as src, open(tmp, "xb") as dst:
-                while True:
-                    block = src.read(CHUNK)
-                    if not block:
-                        break
-                    h.update(block)
-                    dst.write(block)
-                    size += len(block)
-                dst.flush()
-                os.fsync(dst.fileno())
-            after = os.stat(source)
-            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns) or size != after.st_size:
-                raise SourceChangedError(f"{source} changed while it was being stored; save it, then try again")
+            with atomicio._open_for_read(source) as src:
+                pinned = os.fstat(src.fileno())
+                if not stat.S_ISREG(pinned.st_mode):
+                    raise SourceChangedError(f"{source} is not a regular file")
+                if not _same_file(pinned, os.stat(source, follow_symlinks=False)):
+                    raise changed("was replaced or turned into a link")
+                with open(tmp, "xb") as dst:
+                    while True:
+                        block = src.read(CHUNK)
+                        if not block:
+                            break
+                        h.update(block)
+                        dst.write(block)
+                        size += len(block)
+                    dst.flush()
+                    os.fsync(dst.fileno())
+                after = os.fstat(src.fileno())
+            if _signature(pinned) != _signature(after) or size != after.st_size:
+                raise changed("was modified")
+            if not _same_file(after, os.stat(source, follow_symlinks=False)):
+                raise changed("was replaced (saved by rename?)")
             digest = h.hexdigest()
+            if _hash_pinned(source, after) != digest:
+                raise changed("was modified")
             final = self.path_for(digest)
-            final.parent.mkdir(exist_ok=True)
+            atomicio.make_dirs(final.parent)
             reused = False
             if final.exists():
                 if hash_file(final)[0] != digest:
@@ -109,18 +166,15 @@ class ContentStore:
                 reused = True
             else:
                 try:
-                    if os.name == "nt":
-                        os.rename(tmp, final)
-                    else:
-                        os.link(tmp, final)
+                    atomicio.move_exclusive(tmp, final)
                     atomicio._fsync_dir(final.parent)
-                except (ExclusiveCreateError, FileExistsError):
+                except FileExistsError:
                     if hash_file(final)[0] != digest:
                         raise WorkspaceCorruptError(f"stored content object {digest} is damaged") from None
                     reused = True
             return StoredContent(digest, size, after.st_mtime_ns, reused)
         finally:
-            tmp.unlink(missing_ok=True)
+            atomicio.remove_quietly(tmp)
 
     def read_verified(self, sha256: str, max_bytes: int, expected_size: int | None = None) -> bytes:
         """Return the exact bytes of an immutable content object, verified (ADR-018).
@@ -164,18 +218,12 @@ class ContentStore:
             if hash_file(tmp)[0] != sha256:
                 raise WorkspaceCorruptError(f"content object {sha256} failed verification on export")
             if overwrite:
-                os.replace(tmp, dest)
+                atomicio.retry_sharing(lambda: os.replace(tmp, dest))
             else:  # exclusive, like atomicio.publish_exclusive: never replaces an existing file
-                if os.name == "nt":
-                    try:
-                        os.rename(tmp, dest)
-                    except FileExistsError:
-                        raise FileExistsError(f"{dest} already exists") from None
-                else:
-                    try:
-                        os.link(tmp, dest)
-                    except FileExistsError:
-                        raise FileExistsError(f"{dest} already exists") from None
+                try:
+                    atomicio.move_exclusive(tmp, dest)
+                except FileExistsError:
+                    raise FileExistsError(f"{dest} already exists") from None
         finally:
-            tmp.unlink(missing_ok=True)
+            atomicio.remove_quietly(tmp)
         return dest
