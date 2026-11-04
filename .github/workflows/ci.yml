@@ -13,9 +13,9 @@ permissions:
   contents: read
 
 concurrency:
-  # One run per SHA so every pushed commit has exact-SHA evidence.
-  group: ci-${{ github.sha }}-${{ github.event_name }}
-  cancel-in-progress: false
+  # main keeps a run for every SHA (exact-SHA evidence); on other branches a newer push supersedes the older run.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   tests:
