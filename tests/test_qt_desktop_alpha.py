@@ -323,6 +323,107 @@ def test_checkin_saved_with_warning_is_never_shown_as_failure(qapp, ctl, tmp_pat
     w.close()
 
 
+def test_saved_checkin_stays_saved_when_the_refresh_is_denied(qapp, ctl, tmp_path, monkeypatch, no_modal_boxes):
+    """Windows CI 41711104288: "Cannot read this document: Permission denied: state.json" replaced
+    "Checked in." The read straight after a commit can be refused there, so force exactly that."""
+    from revisionworx import documents
+    from revisionworx.workspace import CommittedNotApplied
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.checkout()
+    ctl.working_file(doc["id"]).write_bytes(b"two")
+    real, real_detail = documents.checkin, ctl.document_detail
+    denied = {"on": False}
+
+    def lagging(ws, *a, **k):
+        rev = real(ws, *a, **k)
+        denied["on"] = True
+        raise CommittedNotApplied(rev["_rev"], k["txid"], OSError("records lag"))
+
+    def detail(*a, **k):
+        if denied["on"]:
+            raise PermissionError(13, "Permission denied", str(home / ".revisionworx" / "state.json"))
+        return real_detail(*a, **k)
+    monkeypatch.setattr(documents, "checkin", lagging)
+    monkeypatch.setattr(ctl, "document_detail", detail)
+    tab.panel.start_checkin("Saved, refresh refused", on_done=lambda _r: tab.list_vm.refresh())
+    pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
+    qapp.processEvents()
+    st = w.observable_state()
+    assert tab.status.text().startswith("Checked in."), tab.status.text()
+    assert "Cannot read" not in tab.status.text() and "Press F5" in tab.status.text()
+    assert st["message_level"] == "warning" and "8a5300" in tab.status.styleSheet()
+    assert not st["actions"]["checkin"] and not st["actions"]["checkout"]  # the panel is out of date
+    assert not [b for b in no_modal_boxes if b[0] == "critical"]
+    denied["on"] = False
+    w.refresh_all()  # F5
+    qapp.processEvents()
+    st = w.observable_state()
+    assert st["selected_document"] == doc["id"] and len(st["history"]) == 2
+    assert tab.status.text().startswith("Checked in.") and "Press F5" not in tab.status.text()
+    w.close()
+
+
+def test_saved_checkin_stays_saved_when_the_list_cannot_be_read(qapp, ctl, tmp_path, monkeypatch, no_modal_boxes):
+    """The same refused read can hit the document list first; the panel must not lose the outcome."""
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    tab.checkout()
+    ctl.working_file(doc["id"]).write_bytes(b"two")
+    real = ctl.documents
+    denied = {"on": True}
+
+    def documents(*a, **k):
+        if denied["on"]:
+            raise PermissionError(13, "Permission denied", "state.json")
+        return real(*a, **k)
+    monkeypatch.setattr(ctl, "documents", documents)
+    tab.panel.start_checkin("Saved, list refused", on_done=lambda _r: tab.list_vm.refresh())
+    pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
+    qapp.processEvents()
+    assert tab.status.text().startswith("Checked in revision"), tab.status.text()
+    assert "Cannot read" not in tab.status.text() and "Press F5" in tab.status.text()
+    assert not tab.checkin_btn.isEnabled() and not tab.checkout_btn.isEnabled()
+    denied["on"] = False
+    w.refresh_all()
+    qapp.processEvents()
+    st = w.observable_state()
+    assert st["selected_document"] == doc["id"] and len(st["history"]) == 2
+    w.close()
+
+
+def test_f5_stays_on_a_document_that_could_not_be_read(qapp, ctl, tmp_path, monkeypatch, no_modal_boxes):
+    """F5 is the advertised retry, so it must retry THIS document, not jump to the first one."""
+    w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)
+    tab = w.documents_tab
+    src = tmp_path / "b.txt"
+    src.write_bytes(b"b")
+    other, _ = ctl.import_document(p["id"], src)
+    tab.list_vm.refresh()
+    second = next(r["id"] for r in tab.list_vm.rows if r["id"] != tab.list_vm.row_id(0))
+    tab.select_document(second)
+    qapp.processEvents()
+    real = ctl.document_detail
+    denied = {"on": True}
+
+    def detail(*a, **k):
+        if denied["on"]:
+            raise PermissionError(13, "Permission denied", "state.json")
+        return real(*a, **k)
+    monkeypatch.setattr(ctl, "document_detail", detail)
+    tab.panel.load_or_report(second)
+    assert tab.panel.failed_id == second and tab.status.text().startswith("⚠ Cannot read")
+    w.refresh_all()  # still denied: same document, same honest message
+    qapp.processEvents()
+    assert tab.panel.failed_id == second and tab.selected_doc_id() == second
+    assert tab.status.text().startswith("⚠ Cannot read")
+    denied["on"] = False
+    w.refresh_all()
+    qapp.processEvents()
+    assert w.observable_state()["selected_document"] == second
+    w.close()
+
+
 def test_ambiguous_checkin_not_in_journal_shows_error_not_success(qapp, ctl, tmp_path, monkeypatch):
     from revisionworx import documents
     w, home, p, doc = _window_with_doc(qapp, ctl, tmp_path)

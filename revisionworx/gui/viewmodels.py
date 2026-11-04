@@ -445,15 +445,34 @@ class DocumentPanel(Observable):
         self.message = ""
         self.message_level = "ok"  # ok | warning | error: colours the message, never implies success
         self.failed_id: str | None = None  # selected, but its details could not be read
+        self._outcome: tuple[str | None, str, str] | None = None  # (doc, text, level) of the last write that happened
 
     def set_message(self, text: str, level: str = "ok") -> None:
         self.message, self.message_level = text, level
         self.changed()
 
+    def _kept_outcome(self, doc_id: str | None) -> tuple[str | None, str, str] | None:
+        """The last write's outcome, if it is for this document and nothing has replaced it since."""
+        o = self._outcome
+        return o if o and o[0] == doc_id and self.message.startswith(o[1]) else None
+
+    def saved(self, text: str, level: str = "ok") -> None:
+        """Report a write that HAS happened, then re-read the document. The re-read can fail (on Windows
+        a file the core just replaced can be refused for a moment), and that must never read as the
+        write having failed: it invites repeating a change that is already saved."""
+        doc_id = self.doc_id or self.failed_id
+        self._outcome = (doc_id, text, level)
+        self.message, self.message_level = text, level
+        self.load_or_report(doc_id)
+
     def load(self, doc_id: str | None, verify_hash: bool = False) -> None:
-        if not self.detail or doc_id != self.doc_id:
+        kept = self._kept_outcome(doc_id)
+        detail = self.ctl.document_detail(doc_id, verify_hash) if doc_id else None
+        if kept:
+            self.message, self.message_level = kept[1], kept[2]
+        elif not self.detail or doc_id != self.doc_id:
             self.message, self.message_level = "", "ok"
-        self.detail = self.ctl.document_detail(doc_id, verify_hash) if doc_id else None
+        self.detail = detail
         self.failed_id = None
         self.changed()
 
@@ -464,10 +483,19 @@ class DocumentPanel(Observable):
             self.load(doc_id)
             return True
         except Exception as exc:
-            self.detail, self.failed_id = None, doc_id
-            self.message, self.message_level = f"⚠ Cannot read this document: {describe_error(exc)}", "error"
-            self.changed()
+            self.report_unreadable(doc_id, describe_error(exc))
             return False
+
+    def report_unreadable(self, doc_id: str | None, reason: str) -> None:
+        """Nothing shown may be acted on any more. If a write just succeeded, say that first."""
+        kept = self._kept_outcome(doc_id)
+        self.detail, self.failed_id = None, doc_id
+        if kept:
+            self.message = f"{kept[1]}\n⚠ This document could not be re-read: {reason} Press F5 to try again."
+            self.message_level = "warning"
+        else:
+            self.message, self.message_level = f"⚠ Cannot read this document: {reason}", "error"
+        self.changed()
 
     @property
     def working_path(self) -> str:
@@ -603,11 +631,9 @@ class DocumentPanel(Observable):
         try:
             self.ctl.checkout(self.doc_id)
         except SavedWithWarning as w:
-            self.reload()
-            self.set_message(w.warning, "warning")
+            self.saved(w.warning, "warning")
             return
-        self.reload()
-        self.set_message("Checked out to you. Edit the working file, save it, then Check in.")
+        self.saved("Checked out to you. Edit the working file, save it, then Check in.")
 
     def can_restore(self, row: int | None) -> bool:
         """Restoring needs this session's checkout and an OLDER revision (row 0 is the latest)."""
@@ -618,9 +644,8 @@ class DocumentPanel(Observable):
             raise ValueError("check the document out first, then choose an earlier revision")
         rev = self.history[row]
         self.ctl.restore_revision(self.doc_id, rev["id"])
-        self.message = (f"Working file replaced with revision {rev['label']}. Check in to record it as a "
-                        "new revision (history is not rewritten), or cancel and discard to undo.")
-        self.reload()
+        self.saved(f"Working file replaced with revision {rev['label']}. Check in to record it as a "
+                   "new revision (history is not rewritten), or cancel and discard to undo.")
 
     def can_compare(self, row: int | None) -> bool:
         return row is not None and 0 <= row < len(self.history) - 1
@@ -649,17 +674,16 @@ class DocumentPanel(Observable):
         try:
             self.ctl.cancel_checkout(self.doc_id, revert)
         except SavedWithWarning as w:
-            self.reload()
-            self.set_message(w.warning, "warning")
+            self.saved(w.warning, "warning")
             return
-        self.reload()
-        self.set_message("Checkout released" + ("; working file restored to the latest revision." if revert
-                                                else "; your working file was left as it is."))
+        self.saved("Checkout released" + ("; working file restored to the latest revision." if revert
+                                          else "; your working file was left as it is."))
 
     def transition_latest(self, state: str, comment: str = "") -> dict:
-        latest = self.detail["latest"]
+        from ..lifecycle import state_name
+        latest, lifecycle = self.detail["latest"], self.detail["lifecycle"]
         rev = self.ctl.transition(latest["id"], state, comment, latest["_rev"])
-        self.reload()
+        self.saved(f"State changed to {state_name(lifecycle, state)}.")
         return rev
 
     def start_export(self, row: int, dest: str, on_done=None) -> bool:
@@ -698,15 +722,10 @@ class DocumentPanel(Observable):
                     self.reload()
                 except Exception:
                     self.changed()
+            elif res.warning:
+                self.saved(res.warning, "warning")
             else:
-                if res.warning:
-                    self.message, self.message_level = res.warning, "warning"
-                else:
-                    self.message, self.message_level = f"Checked in revision {res.value['label']}.", "ok"
-                try:  # saved either way: failing to re-read must not undo the message
-                    self.reload()
-                except Exception:
-                    self.changed()
+                self.saved(f"Checked in revision {res.value['label']}.")
             if on_done:
                 on_done(res)
         started = self.ctl.start_checkin(self.doc_id, message, label=label or None,

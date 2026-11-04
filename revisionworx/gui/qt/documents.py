@@ -160,9 +160,11 @@ class DocumentsTab(QWidget):
     def load_project(self, project_id: str | None) -> None:
         """Show a project's documents. Reloading the SAME project keeps the selected document;
         switching projects clears it."""
-        keep = self.panel.doc_id if project_id and project_id == self.list_vm.project_id else None
-        self.panel.load(None)
-        self.table.clearSelection()
+        same = bool(project_id) and project_id == self.list_vm.project_id
+        keep = (self.panel.doc_id or self.panel.failed_id) if same else None
+        if not same:
+            self.panel.load(None)
+            self.table.clearSelection()
         self.list_vm.load(project_id)
         if not keep and self.list_vm.rows:  # predictable: the actions always have a target when there can be one
             keep = self.list_vm.row_id(0)
@@ -201,6 +203,8 @@ class DocumentsTab(QWidget):
         if keep:
             if any(r["id"] == keep for r in self.list_vm.rows):
                 self.select_document(keep)
+            elif self.list_vm.error:  # the list could not be read, which says nothing about the document
+                self.panel.report_unreadable(keep, self.list_vm.error)
             else:  # no longer listed: its actions must not stay available
                 self.panel.load_or_report(None)
 

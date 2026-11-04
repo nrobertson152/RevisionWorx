@@ -75,6 +75,7 @@ The method is read-only. It returns a JSON-serialisable dict and performs no I/O
 
 - **Success:** `message_level == "ok"` and the history grows.
 - **Saved with a warning** (core `CommittedNotApplied`, or a txid confirmed `committed` after an unexpected error): `message_level == "warning"`, the history grows, and the status starts with "Checked in." or "Imported (saved)". It is never shown as a failure.
+- **Saved, but the document could not be re-read straight afterwards** (a Windows sharing denial, for example): the status starts with the same saved text and continues "⚠ This document could not be re-read: … Press F5 to try again". `message_level == "warning"`, even for a write with no other caveat. `selected_document` is `None` and no document actions are enabled, because what the panel knows is out of date. F5 retries the same document and restores the plain outcome. Never asserted as a failure.
 - **Failure:** `message_level == "error"`. The history is unchanged, and the status never contains "Checked in".
 - **Unknown outcome** (an unexpected error, and the journal could not be read): `message_level == "error"` and the status says it could not confirm. Check the history; do not assume either outcome.
 - **Refused while writing:** a write refused for safety gives the same recovery-blocked state as below, after the next `MainWindow.poll()`. F5 re-checks.
