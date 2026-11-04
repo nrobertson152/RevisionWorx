@@ -338,6 +338,31 @@ class BackupRehearsalTests(unittest.TestCase):
                 mod.restore(archive, root / "restored")
             self.assertFalse((root / "restored").exists())
 
+    def test_archive_mutation_during_restore_is_not_accepted(self):
+        """A post-verification archive mutation must invalidate restoration."""
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, archive, restored = (root / name for name in ("source", "archive", "restored"))
+            src.mkdir()
+            (src / "part.step").write_bytes(b"original")
+            mod.backup(src, archive)
+            real_copy = mod.shutil.copyfile
+
+            def mutating_copy(source, destination, **kwargs):
+                result = real_copy(source, destination, **kwargs)
+                (archive / "part.step").write_bytes(b"tampered")
+                return result
+
+            with patch.object(mod.shutil, "copyfile", side_effect=mutating_copy):
+                with self.assertRaises(mod.BackupError):
+                    mod.restore(archive, restored)
+            self.assertTrue(restored.exists())
+            self.assertEqual((restored / "part.step").read_bytes(), b"original")
+            with self.assertRaises(mod.BackupError):
+                mod.verify(archive)
+            self.assertEqual((src / "part.step").read_bytes(), b"original")
+
     def test_missing_manifest_refused_before_restore_destination_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
