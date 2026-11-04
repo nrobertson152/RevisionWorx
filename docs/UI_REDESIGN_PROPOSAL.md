@@ -1,6 +1,6 @@
 # RevisionWorx UI redesign proposal
 
-**Status: mockup waiting for the Director's review. No UI code has changed for this, and none should until it is reviewed.**
+**Status: PAUSED by the Director's direction ("PAUSE feature additions"). Do not resume without the Director's go-ahead.** No redesign code is on `feature/desktop-alpha`. The unfinished build is on `feature/ui-redesign` (`cf988c2`), where 4 tests still fail.
 
 The Director reviewed the working GUI and said it looks cluttered and outdated, and asked for a very intuitive design. Everything up to `d4e3623` fixed behaviour and made the screens fit. None of it was visual design.
 
