@@ -120,7 +120,8 @@ def test_same_inode_in_place_save_with_preserved_metadata_must_not_silently_capt
                 stored = ContentStore(ws).store_file(source)
             except SourceChangedError:
                 rejected = True
-        assert len(wrappers) == 1 and wrappers[0].changed
+        # Windows also routes the core's second, independent read through the patched opener.
+        assert len(wrappers) >= 1 and wrappers[0].changed
         after = source.stat()
         assert source.read_bytes() == NEW
         assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)

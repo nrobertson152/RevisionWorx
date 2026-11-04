@@ -99,6 +99,19 @@ def checked_out(expected: bool):
     wait_for(f"checked out = {expected}", lambda: ("OUT:" in doc_list()) == expected)
 
 
+def check_out_by_keyboard():
+    """Ctrl+K is refused while a background job (an export, say) has not delivered its result yet: the file
+    can already be on disk by then. A person would press it again; so does this."""
+    end = time.time() + 30
+    while time.time() < end:
+        key("ctrl+k")
+        for _ in range(20):
+            if "OUT:" in doc_list():
+                return
+            time.sleep(0.1)
+    fail("timed out waiting for checked out = True")
+
+
 def launch():
     global current_app
     current_app = sp.Popen([sys.executable, "-m", "revisionworx.gui.app"], env=ENV, stdout=sp.PIPE, stderr=sp.STDOUT,
@@ -163,8 +176,7 @@ if SRC.read_bytes() != b"version one":
     fail("the source file changed")
 
 print("3. check out, edit, check in; an empty description is refused", flush=True)
-key("ctrl+k")
-checked_out(True)
+check_out_by_keyboard()
 WORKING.write_bytes(b"version two")
 key("F5")
 key("ctrl+shift+k")
@@ -204,8 +216,7 @@ wait_for("the replaced file", lambda: EXPORTED.read_bytes() == b"version two")
 window_is("RevisionWorx 1.")
 
 print("5. Tab reaches the history, then restore an older revision", flush=True)
-key("ctrl+k")
-checked_out(True)
+check_out_by_keyboard()
 key("ctrl+shift+f")
 key(*["Tab"] * 12)  # filter, Import, Register, table, Check in, Cancel, Open file, folder, state x2, Export, Compare
 key("Down")

@@ -700,8 +700,19 @@ def test_windows_persistent_lock_unlink_denial_is_reported_and_retained(tmp_path
                 writer.close()
         assert len(attempts) == 3
         assert Workspace.read_writer_lock(store)["token"] == token
-        with pytest.raises(WorkspaceLockedError):
-            Workspace.open(store, writable=True)
+        # The failed close still ends the handle: it can never write again.
+        with pytest.raises(workspace_mod.WorkspaceError):
+            writer.commit("qa.after-close", [RecordPut("settings", "workspace", {"late": True})])
+        # Any other process sees the lock held and is refused. (The owed release is remembered only
+        # inside the process that owns the token; an empty set is what another process has.)
+        with monkeypatch.context() as m:
+            m.setattr(Workspace, "_unreleased", set())
+            with pytest.raises(WorkspaceLockedError):
+                Workspace.open(store, writable=True)
+        # The owning process retries its own release on its next open, then takes a NEW token.
+        with Workspace.open(store, writable=True) as again:
+            assert again._lock_token != token
+        assert Workspace.read_writer_lock(store) is None
     finally:
         # Original ownership is deliberately retained by the application.
         # Remove only the private disposable test's lock after restoring
