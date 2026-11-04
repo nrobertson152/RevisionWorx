@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-03 (session 15: failure injection; read-only integrity doctor)
+**Updated:** 2026-11-04 (session 16: malformed lock, state and record files; working-file authority)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -72,6 +72,27 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | GUI | `gui/viewmodels.py`, `gui/qt/documents.py` | View-models tested headless; Qt Documents tab **not executed** |
 
 ## Session log
+
+### 2026-11-04 (session 16) — malformed files around the journal; working-file authority
+Each was reproduced on `673bec2` first. `tests/test_malformed_files_fail_closed.py`, `tests/test_working_file_authority.py`.
+- **User data:** a read-only, closed or revoked handle overwrote the working file in `restore_to_working` and
+  `cancel_checkout(revert=True)`, then failed at the commit, so unsaved work was lost and nothing was recorded. Authority is now
+  checked first (`require_authority`, invariant D9). A replaced working file also keeps its POSIX permissions.
+- **Path traversal from the journal:** an orphan clear entry with a correct digest could name a file outside `locks/`. The next
+  writer moved it (a record file in the test) or wrote evidence outside `locks/`. Those names are now validated with the entry
+  (J-S4). A digest is not a signature.
+- **Raw errors:** `writer.lock`, `.releasing-*`, `.fencing-*` and record files holding non-object JSON raised `AttributeError`;
+  JSON nested too deeply raised `RecursionError` from nearly every reader; `previous_holder: null` in a lock break raised
+  `AttributeError` from every journal read; a list as a token raised `TypeError`; `applied_seq: 1e999` raised `OverflowError`. All
+  are now controlled. Lock files fail closed with the existing way out, and caches are answered from the journal.
+- **No way out:** a `writer.lock` with valid JSON and no token could not be broken, because the token shown never matched.
+- `commit` refuses data nested more than 64 levels, because parsers differ and one version could otherwise publish an entry
+  another can never read. GC reports what it does not recognise and no longer stops midway on it. `verify(repair=True)` refuses a
+  revoked handle before moving anything. Reusing a content object, and export, now sync the folder.
+- Field fuzz: every field of a change, a lock break, an orphan clear and its result, replaced by nine values with a correct digest,
+  through every core read and `doctor`. It found the `previous_holder` case above.
+- Limits: these checks narrow the window before an unfenceable file write and cannot close it. Record *contents* inside a valid
+  entry are not validated by kind here. `gui/controller.py` still calls `.get` on preferences JSON without a type check (Claude B's file).
 
 ### 2026-11-03 (session 15) — read-only integrity doctor (#28 item 11)
 - `revisionworx doctor [--quick] [--json]` and `revisionworx/doctor.py`. Stable codes are in `docs/CORE_API.md` §5.

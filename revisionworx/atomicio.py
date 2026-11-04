@@ -177,7 +177,27 @@ def atomic_write_json(path: Path, obj: Any) -> None:
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(read_bytes(path).decode("utf-8"))
+    """Parse a JSON file. ValueError means the file is there and is not usable JSON, whatever the kind of damage: bad
+    bytes, nesting too deep to parse, or a folder sitting at that name. Callers treat all of them alike, as damage."""
+    try:
+        raw = read_bytes(path)
+    except OSError:
+        if Path(path).is_dir():
+            raise ValueError(f"{path} is a folder, not a file") from None
+        raise
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except RecursionError:
+        raise ValueError(f"{path} is nested too deeply to read") from None
+
+
+def read_json_object(path: Path) -> dict:
+    """Like :func:`read_json`, for files that must hold a JSON object. Anything else is ValueError, so damage never
+    reaches a caller as an AttributeError on a list or a null."""
+    value = read_json(path)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} does not hold a JSON object")
+    return value
 
 
 def read_bytes(path: Path) -> bytes:

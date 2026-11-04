@@ -357,6 +357,8 @@ def cmd_doc_gc(args):
         verb = "Removed" if r["removed"] else "Would remove"
         _emit(args, r, f"{verb} {len(r['orphans'])} unreferenced content object(s), {r['bytes']} bytes "
                        f"({r['referenced']} referenced, {r['kept_young']} too recent to touch)."
+              + (f" {len(r['unrecognised'])} item(s) in the content folder are not content objects and were left alone: "
+                 f"{', '.join(r['unrecognised'])}." if r["unrecognised"] else "")
               + ("" if args.apply else " Dry run; add --apply to remove."))
 
 

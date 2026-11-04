@@ -116,12 +116,12 @@ def _check_journal(ws: Workspace, out: _Report) -> bool:
             out.add("J002", ERROR, "journal", str(exc), _RESTORE)
     head = seqs[-1] if seqs else 0
     try:
-        applied = int(atomicio.read_json(ws.meta_dir / "state.json")["applied_seq"])
+        applied = int(atomicio.read_json_object(ws.meta_dir / "state.json")["applied_seq"])
     except FileNotFoundError:
         applied = 0
         if head:
             out.add("S001", INFO, "state.json", "is missing. It is only a cache", "the next writer rebuilds it")
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
         applied = 0
         out.add("S001", WARNING, "state.json", f"cannot be read: {exc}. It is only a cache", "the next writer rebuilds it")
     if applied > head:
@@ -156,8 +156,8 @@ def _check_locks(ws: Workspace, out: _Report, journal_whole: bool) -> None:
         name = path.name
         if name.startswith((".releasing-", ".fencing-")):
             try:
-                token = atomicio.read_json(path).get("token")
-            except (OSError, ValueError, AttributeError):
+                token = Workspace._read_holder(path)["token"]
+            except (OSError, ValueError):
                 token = None
             if token:
                 out.add("L004", WARNING, f"locks/{name}", "a displaced lock, or a release interrupted partway",
@@ -170,8 +170,8 @@ def _check_locks(ws: Workspace, out: _Report, journal_whole: bool) -> None:
                     "none: the next writer or a repeat of 'lock clear-orphan' finishes it")
         elif name.startswith(_EVIDENCE) and journal_whole:
             try:
-                token = atomicio.read_json(path).get("token")
-            except (OSError, ValueError, AttributeError):
+                token = Workspace._read_holder(path)["token"]
+            except (OSError, ValueError):
                 continue                             # evidence from an audited clear of an unreadable file
             if token and token not in revoked:
                 out.add("L007", ERROR, f"locks/{name}", f"archived while its token {token} is not revoked: that writer was never "

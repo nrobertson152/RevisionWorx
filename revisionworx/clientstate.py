@@ -43,15 +43,19 @@ class CheckoutTokens:
 
     def _load_old(self) -> dict:
         try:
-            return atomicio.read_json(self.path)
+            return atomicio.read_json_object(self.path)
         except (OSError, ValueError):
             return {}
 
     def get(self, workspace_id: str, document_id: str) -> str | None:
         try:
-            return atomicio.read_json(self._file(workspace_id, document_id))["token"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return self._load_old().get(workspace_id, {}).get(document_id)
+            token = atomicio.read_json_object(self._file(workspace_id, document_id)).get("token")
+        except (OSError, ValueError):
+            token = None
+        if not isinstance(token, str):
+            old = self._load_old().get(workspace_id)
+            token = old.get(document_id) if isinstance(old, dict) else None
+        return token if isinstance(token, str) else None
 
     def put(self, workspace_id: str, document_id: str, token: str) -> None:
         path = self._file(workspace_id, document_id)

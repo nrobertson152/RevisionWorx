@@ -12,6 +12,7 @@ import csv
 import io
 import os
 import secrets
+import shutil
 import stat
 import time
 import uuid
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from . import atomicio, paths, projects, revlabels
 from . import lifecycle as lc_mod
-from .content import ContentStore, hash_file
+from .content import ContentStore, hash_file, is_content_name
 from .filetypes import classify
 from .lifecycle import LifecycleError
 from .workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
@@ -420,11 +421,20 @@ def _sweep_working_temps(path: Path) -> None:
 
 
 def _write_working_from_store(ws: Workspace, sha256: str, path: Path) -> None:
+    """Replace the working file with a stored revision. Nothing can fence this and nothing can undo it, so a handle that
+    may not write stops here, not at the commit that follows, by which time the user's edits are gone."""
+    ws.require_authority()
+    if not path.parent.is_dir():
+        raise MissingFileError(f"the folder {path.parent} does not exist, so the file cannot be written; restore the "
+                               "folder, then try again")
     _sweep_working_temps(path)
     tmp = path.with_name(f".{path.name}.rwx-{uuid.uuid4().hex[:8]}.tmp")
     try:
         ContentStore(ws).export(sha256, tmp)
+        if path.is_file():
+            shutil.copymode(path, tmp)           # a replaced file keeps the permissions the company gave it
         atomicio.retry_sharing(lambda: os.replace(tmp, path))
+        atomicio._fsync_dir(path.parent)
     finally:
         atomicio.remove_quietly(tmp)     # a CAD program holding the file must not leave copies in the project
 
@@ -685,7 +695,7 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
     store = ContentStore(ws)
     referenced = {r["sha256"] for r in ws.list("revision").values()}
     now = time.time()
-    orphans, kept_young = [], 0
+    orphans, unrecognised, kept_young = [], [], 0
     if store.root.is_dir():
         for sub in sorted(store.root.iterdir()):
             if not sub.is_dir():
@@ -693,18 +703,21 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
             for obj in sorted(sub.iterdir()):
                 if obj.name.startswith(".") or obj.name in referenced:
                     continue
+                if not is_content_name(obj.name) or obj.name[:2] != sub.name or not obj.is_file():
+                    unrecognised.append(obj.relative_to(store.root).as_posix())   # not ours to delete
+                    continue
                 st = obj.stat()
                 if now - st.st_mtime < min_age_seconds:
                     kept_young += 1
                     continue
                 orphans.append({"sha256": obj.name, "size": st.st_size})
-    report = {"referenced": len(referenced), "orphans": orphans, "kept_young": kept_young,
+    report = {"referenced": len(referenced), "orphans": orphans, "unrecognised": unrecognised, "kept_young": kept_young,
               "bytes": sum(o["size"] for o in orphans), "removed": False}
     if apply and orphans:
         ws.commit("content.gc", [RecordPut("audit", new_id("aud"), {
             "event": "content-gc", "removed": orphans, "time": now_iso(), "by": current_actor()})])
         for o in orphans:  # audit first: a crash leaves a record of intent, never an unlogged deletion
-            ws._check_lock_still_held()   # a deletion cannot be fenced, but it can stop once authority is gone
+            ws.require_authority()        # a deletion cannot be fenced, but it can stop once authority is gone
             if o["sha256"] not in {r["sha256"] for r in ws.list("revision").values()}:
                 store.path_for(o["sha256"]).unlink(missing_ok=True)
         report["removed"] = True

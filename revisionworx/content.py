@@ -23,6 +23,11 @@ _HEX = re.compile(r"^[0-9a-f]{64}$")
 CHUNK = 1024 * 1024
 
 
+def is_content_name(name: str) -> bool:
+    """Whether a file name is the name of a content object."""
+    return bool(_HEX.match(name))
+
+
 class ContentTooLarge(ValueError):
     """A content object exceeds the caller's read limit; nothing was returned."""
 
@@ -164,6 +169,8 @@ class ContentStore:
                 if hash_file(final)[0] != digest:
                     raise WorkspaceCorruptError(f"stored content object {digest} is damaged")
                 reused = True
+                # A crash may have left it named but not yet synced, and a journal entry is about to rely on it.
+                atomicio._fsync_dir(final.parent)
             else:
                 try:
                     atomicio.move_exclusive(tmp, final)
@@ -172,6 +179,7 @@ class ContentStore:
                     if hash_file(final)[0] != digest:
                         raise WorkspaceCorruptError(f"stored content object {digest} is damaged") from None
                     reused = True
+                    atomicio._fsync_dir(final.parent)
             return StoredContent(digest, size, after.st_mtime_ns, reused)
         finally:
             atomicio.remove_quietly(tmp)
@@ -224,6 +232,7 @@ class ContentStore:
                     atomicio.move_exclusive(tmp, dest)
                 except FileExistsError:
                     raise FileExistsError(f"{dest} already exists") from None
+            atomicio._fsync_dir(dest.parent)
         finally:
             atomicio.remove_quietly(tmp)
         return dest

@@ -115,7 +115,8 @@ and reopens. That is lost availability, never lost data.
 | D2 | A revision, the document update and the checkout release are one journal entry. | `checkin` |
 | D3 | Stored content is never modified. A damaged object is detected, never reused. | Exclusive publish, re-hash on reuse |
 | D4 | A check-in never modifies the working file. Revert and restore replace it atomically from verified content, or not at all. | `_write_working_from_store` |
-| D5 | GC removes only unreferenced content older than its age limit, and records the intent first. | `gc_content` |
+| D5 | GC removes only unreferenced content older than its age limit, and records the intent first. Anything that is not a correctly filed content object is reported and left alone. | `gc_content` |
+| D9 | A handle that may not write leaves working files and content objects alone. No journal entry can fence or undo that work, so authority is checked first. A break in the instant after the check is not seen: this narrows the window and cannot close it. | `require_authority`, `_write_working_from_store`, `gc_content`, `verify(repair=True)` |
 | D8 | A published revision never changes: immutable fields stay, transitions only append, nothing is deleted. `commit` cannot enforce this, so an audit of the journal reports any breach. | `_guard_immutable`, `audit_history` (`doc verify`) |
 | D6 | **A read equals the journal.** A record file is used only if its `_rev` is exactly the journal's last effective write. A late write by a stale writer cannot change an answer or a decision. | `get`, `list`, ADR-022 |
 | D7 | A damaged journal keeps read access to a fully applied workspace and refuses writes. | `_effective_writes`, `commit` |
@@ -137,8 +138,10 @@ and reopens. That is lost availability, never lost data.
 | J-S1 | Every journal entry is structurally validated before any field is used: a non-object, a non-integer or boolean `seq`, wrong-typed optional fields, invalid record kinds or ids (also a path-traversal guard), non-boolean `delete`, a put without object `data`, malformed blob references or revocation holders all raise `WorkspaceCorruptError`, never `AttributeError`/`TypeError`. A consistent digest does not vouch for a bad structure. | `read_entry`, `_entry_shape_problem` |
 | J-S2 | Optional fields stay optional: digestless and pre-ADR-021 entries (no `txid`, `request`, `blobs`, `checks`; null optional fields) are accepted. Only types are enforced. | `_optional` |
 | J-S3 | `health()` fails closed: `ok` is True only after every check completed; corruption and I/O errors report `ok: False` with a reason. Inspection writes nothing. | `health` |
+| J-S4 | An orphan clear entry's `file`, `evidence`, `quarantine` and `clear_id` are checked against their exact patterns before anything renames or writes by those names, so a well-digested entry cannot reach outside `locks/`. | `_orphan_audit_problem` |
+| J-S5 | Lock, state and record files are read through typed readers, so damage of any kind (non-object JSON, too deep, a folder at that name, a token that is not a string) is one controlled case. Lock damage fails closed; state and record damage is answered from the journal. | `_read_holder`, `_read_record_file`, `read_json_object`, `applied_seq` |
 
-**Tests:** `test_journal_entry_shape.py`; independent gates in PR #34 (`test_core_independent_journal_shape.py`, `test_core_crash_integrity_readonly.py`).
+**Tests:** `test_journal_entry_shape.py`, `test_malformed_files_fail_closed.py`; independent gates in PR #34 (`test_core_independent_journal_shape.py`, `test_core_crash_integrity_readonly.py`).
 
 ### 5b. Source-content capture (C)
 

@@ -227,6 +227,13 @@ starting with `_`.
 A new kind is added to this table and to the collision test on PR #7 before use.
 
 ## Change log
+- 2026-11-04 (malformed files; working-file authority): `ws.require_authority()` is new, for work a journal entry cannot fence.
+  `restore_to_working` and `cancel_checkout(revert=True)` now refuse before touching the file when the handle is read-only,
+  closed or revoked (`ReadOnlyError`, `WorkspaceError`, `LockLostError`), and raise `MissingFileError` if the folder is gone.
+  `read_writer_lock` reports every lock file that cannot name a writer as unreadable, including non-objects and missing or
+  non-string tokens. `get`/`list` answer from the journal when a record file is damaged in any way, and raise
+  `WorkspaceCorruptError`, not `ValueError`, when the journal cannot answer either. `commit` raises `ValueError` for record data
+  nested more than 64 levels. `gc_content` adds `unrecognised` to its report. No signature changed.
 - 2026-11-03: `close()` can be retried after a failure. If publishing fails after the entry became visible (the folder sync),
   `commit` raises `CommittedNotApplied` rather than a plain `OSError`, because the change did happen. No signature changed.
 - 2026-11-02: `ws.health()`, `LocalIndex.project_files` and `documents.require_document` are new (Claude B's A1 and A5). All additive.
