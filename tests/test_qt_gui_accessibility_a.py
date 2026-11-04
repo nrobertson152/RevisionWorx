@@ -282,7 +282,8 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
     assert tab.checkin_btn.isEnabled()
     # Pin the managed content tree as well as the external CAD source. A
     # cancelled dialog must not replace immutable revision objects on disk.
-    managed = home / ".revisionworx" / "objects"
+    managed = home / ".revisionworx" / "content" / "sha256"
+    assert managed.is_dir(), "Fixture must have a managed content store"
     objects_at_checkout = {
         str(p.relative_to(managed)): p.read_bytes()
         for p in managed.rglob("*") if p.is_file()
@@ -334,7 +335,8 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
                  for p in managed.rglob("*") if p.is_file()}
                 if managed.exists() else {}) == objects_at_checkout
         # The initial import must remain represented in the journal.
-        assert set(journal_before).issubset(set(journal_at_checkout))
+        assert objects_at_checkout, "Imported revision must create managed content"
+    assert set(journal_before).issubset(set(journal_at_checkout))
     finally:
         reopened.close()
 
@@ -356,8 +358,10 @@ def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(q
     before = tuple((r["id"], r["sha256"]) for r in win.observable_state()["history"])
     journal = home / ".revisionworx" / "journal"
     journal_before = {str(p.relative_to(journal)): p.read_bytes() for p in journal.rglob("*") if p.is_file()}
-    managed = home / ".revisionworx" / "objects"
+    managed = home / ".revisionworx" / "content" / "sha256"
+    assert managed.is_dir(), "Fixture must have a managed content store"
     objects_before = {str(p.relative_to(managed)): p.read_bytes() for p in managed.rglob("*") if p.is_file()} if managed.exists() else {}
+    assert objects_before, "Imported revision must create managed content"
     tab.checkin_btn.setFocus()
     qapp.processEvents()
     assert tab.checkin_btn.hasFocus(), "Check-in button must accept keyboard focus"
@@ -387,6 +391,10 @@ def test_keyboard_space_opens_production_checkin_and_escape_preserves_checkout(q
     # handler after the first modal is rejected. This catches accidental
     # one-shot signal disconnection and disabled-button regressions.
     seen.clear()
+    # Offscreen Qt can leave no active window after a modal closes; reactivate
+    # the existing parent before exercising the second keyboard activation.
+    win.activateWindow()
+    qapp.processEvents()
     tab.checkin_btn.setFocus()
     qapp.processEvents()
     focus = qapp.focusWidget()
