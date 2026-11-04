@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - feature/desktop-alpha
+      - diag/claude-b-trial-core-673bec2
     paths-ignore:
       - 'docs/**'
       - '**.md'
