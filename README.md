@@ -106,7 +106,7 @@ BOM files: `revisionworx bom validate bom.csv`, `revisionworx bom explode bom.xl
 (`revisionworx bom -h` lists all commands).
 
 More: [User guide](docs/USER_GUIDE.md) · [Known limitations](docs/KNOWN_LIMITATIONS.md) ·
-[Changelog](CHANGELOG.md) · [Architecture](docs/ARCHITECTURE.md) · [Core API](docs/CORE_API.md) ·
+[Changelog](CHANGELOG.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Architecture](docs/ARCHITECTURE.md) · [Core API](docs/CORE_API.md) ·
 [Change control](docs/CHANGE_CONTROL.md) · [BOM API](docs/bom/BOM_API.md)
 
 ## Development
