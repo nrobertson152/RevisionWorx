@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Historical-negative oracle: a green job means the OLD source FAILED strict tests.
+name: QA journal precommit historical negative
+
+on:
+  push:
+    branches: [qa/testing-infrastructure]
+    paths:
+      - '.github/workflows/qa-journal-precommit-historical-negative.yml'
+      - 'tests/qa/test_journal_precommit_fail_closed.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical-negative:
+    name: "EXPECTED FAIL Phase 1 / ${{ matrix.os }} / Python ${{ matrix.python }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 412e69ab
+          path: historical
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: qa
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify source identity and stage unmodified QA test
+        shell: python
+        run: |
+          import os, pathlib, shutil, subprocess
+          def sha(p):
+              return subprocess.check_output(['git','-C',p,'rev-parse','HEAD'], text=True).strip()
+          old = sha('historical')
+          test = sha('qa')
+          print('HISTORICAL_SOURCE_SHA=' + old)
+          print('QA_TEST_SHA=' + test)
+          assert old.startswith('412e69ab'), old
+          assert test == os.environ['GITHUB_SHA']
+          src = pathlib.Path('qa/tests/qa/test_journal_precommit_fail_closed.py')
+          assert src.is_file()
+          dst = pathlib.Path('historical/tests/qa/test_journal_precommit_fail_closed.py')
+          dst.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(src, dst)
+      - name: Install historical package and pytest
+        working-directory: historical
+        run: python -m pip install -e . pytest
+      - name: Assert all four historical regressions fail (NOT production acceptance)
+        working-directory: historical
+        shell: python
+        run: |
+          import subprocess, sys, re
+          command = [sys.executable, '-m', 'pytest', '-q', '-ra',
+                     'tests/qa/test_journal_precommit_fail_closed.py']
+          completed = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT)
+          print(completed.stdout, flush=True)
+          print('HISTORICAL_NEGATIVE_PYTEST_EXIT=' + str(completed.returncode))
+          assert completed.returncode == 1, 'Historical negative unexpectedly did not fail as expected'
+          assert re.search(r'\b4 failed\b', completed.stdout), 'Expected four strict historical failures'
+          assert completed.stdout.count('DID NOT RAISE') >= 4, 'Expected fail-open evidence for all four structures'
+          print('HISTORICAL_NEGATIVE_CONFIRMED: 4 expected failures; this is NOT a positive acceptance result')
