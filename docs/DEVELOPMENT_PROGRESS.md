@@ -1,6 +1,6 @@
 # RevisionWorx — Development Progress
 
-**Updated:** 2026-11-02 (session 12: Director MAX-effort reliability assignment, PR #7 comment 6594977622)
+**Updated:** 2026-11-03 (session 15: failure injection across core operations)
 **Branches:**
 - `phase1-foundation`: Phase 1 + review + PySide6.
 - `phase2-documents`: Phase 2, stacked on `phase1-foundation`. **This file on `phase2-documents`
@@ -72,6 +72,14 @@ The GUI was migrated to PySide6, but the Qt widgets have not been executed. No r
 | GUI | `gui/viewmodels.py`, `gui/qt/documents.py` | View-models tested headless; Qt Documents tab **not executed** |
 
 ## Session log
+
+### 2026-11-03 (session 15) — the filesystem refuses, the process survives
+- New `tests/test_fault_injection_matrix.py`: each filesystem change of each core operation fails in turn (disk full, read-only,
+  access denied, one I/O error), the process keeps running, the disk comes back, then the state is checked against the journal.
+- Found and fixed: `close()` could not be retried, so a moment of disk trouble needed an administrator; a failed opener or
+  create could keep the lock with no way to release it; a failed folder sync after publishing told the caller a saved change had
+  failed; a failed `close()` during error handling hid the real error.
+- Limit: a process that ends before a retry succeeds still leaves the lock for an administrator.
 
 ### 2026-11-04 (session 15) — subsystem persistence contract; Phase 1 journal triage
 - **CORE_API §8 (Provisional):** answers Claude D (PR #20) and Claude C (A10, PR #21). Both adapters already use only the

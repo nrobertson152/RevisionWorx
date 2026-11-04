@@ -19,6 +19,9 @@ ws = Workspace.open(location: Path, writable=False)     # read-only by default
 ws.close()                                              # or: with Workspace.open(...) as ws:
 ```
 
+`close()` can raise `WorkspaceError` or `OSError` if the filesystem refuses. The lock is then still held, and nothing is lost. Call
+`close()` again; the next `Workspace.open(..., writable=True)` of that workspace in this process also retries. The handle stays closed.
+
 - `location` is the shared folder that contains (or will contain) `.revisionworx/`.
 - A UI holds **one** writable handle per workspace, opened on demand for a change and closed
   promptly. A writable handle holds the single writer lock, and every other user is read-only
@@ -167,6 +170,8 @@ starting with `_`.
 A new kind is added to this table and to the collision test on PR #7 before use.
 
 ## Change log
+- 2026-11-03: `close()` can be retried after a failure. If publishing fails after the entry became visible (the folder sync),
+  `commit` raises `CommittedNotApplied` rather than a plain `OSError`, because the change did happen. No signature changed.
 - 2026-11-02: `ws.health()`, `LocalIndex.project_files` and `documents.require_document` are new (Claude B's A1 and A5). All additive.
 - 2026-11-02: `MissingFileError` and `CommittedNotApplied.result` are new (Claude B's A4 and A6). `verify` marks `fenced-entry` with
   `severity: info`, and the CLI no longer exits 1 for it alone. `doc verify` also audits the journal for changed revisions.

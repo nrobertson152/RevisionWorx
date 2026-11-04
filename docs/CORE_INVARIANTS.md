@@ -64,6 +64,14 @@ which test would fail if it broke. Design reasoning is in `docs/ARCHITECTURE.md`
 **Accepted cost:** a healthy writer can be revoked by a stale cleanup or break that displaced it. It gets `LockLostError`
 and reopens. That is lost availability, never lost data.
 
+**When the filesystem refuses** (disk full, read-only, I/O error; `tests/test_fault_injection_matrix.py` fails each step in turn)
+
+| # | Invariant | Kept by |
+|---|---|---|
+| W7 | A failed release never pretends: the lock stays held and `close()` raises. | `_unlink_own_lock` |
+| W8 | A release that failed is retried by calling `close()` again and by the next open of that workspace in this process. The handle stays closed either way. Only a process that ends first leaves it to an administrator. | `close`, `_unreleased`, `_retry_unreleased` |
+| W9 | A lock taken but never used is given back without hiding the failure that stopped it being used. | `_give_back` |
+
 ## 3. Journal and effective commits
 
 | # | Invariant | Kept by |
@@ -74,6 +82,7 @@ and reopens. That is lost availability, never lost data.
 | R4 | `expect_rev` is decided from the journal, never from a record file. | `_current_rev` → `get` → view |
 | R5 | "Corrupt" is claimed only for an **effective** entry from another writer at our sequence. An administrative entry or a revoked writer's late publish is not corruption. | `commit` publish loop |
 | R6 | A commit never skips an entry that landed before it. | `commit`: `recover()` when `applied_seq != seq - 1` |
+| R7 | The caller is told the truth when publishing fails partway: if the entry is visible to readers it happened, so the caller gets `CommittedNotApplied`, never a plain failure that invites a second attempt. | `commit`, `_holds_entry` |
 
 **Commit steps and what a crash leaves**
 

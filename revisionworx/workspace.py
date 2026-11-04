@@ -362,7 +362,7 @@ class Workspace:
         try:
             ws.commit("workspace.create", [RecordPut("settings", "workspace", default_settings())])
         except BaseException:
-            ws.close()
+            ws._close_keeping_the_real_error()
             raise
         return ws
 
@@ -408,13 +408,14 @@ class Workspace:
             if writable:
                 ws.recover()
         except BaseException:
-            ws.close()
+            ws._close_keeping_the_real_error()
             raise
         return ws
 
     def close(self) -> None:
-        if self._closed:
-            return
+        """Release the writer lock. If the filesystem refuses, this raises and the lock stays held, as it must. Calling
+        close() again retries, and the next open of this workspace in this process retries too, so a disk that filled for a
+        moment does not need an administrator. Only a process that ends first leaves that to one."""
         self._closed = True
         if self._lock_token:
             lock = self.meta_dir / "locks" / "writer.lock"
@@ -425,8 +426,32 @@ class Workspace:
             except OSError:
                 ours = True   # could not look (issue #10). Release is move-then-verify, so trying is safe.
             if ours:
-                self._unlink_own_lock(lock)
+                try:
+                    self._unlink_own_lock(lock)
+                except (OSError, WorkspaceError):
+                    Workspace._unreleased.add((str(self.meta_dir), self._lock_token))
+                    raise
+            Workspace._unreleased.discard((str(self.meta_dir), self._lock_token))
             self._lock_token = None
+
+    def _close_keeping_the_real_error(self) -> None:
+        try:
+            self.close()
+        except (OSError, WorkspaceError):
+            pass                                     # remembered in _unreleased; the caller is already handling a failure
+
+    _unreleased: set[tuple[str, str]] = set()        # (meta folder, token) this process could not release yet
+
+    @staticmethod
+    def _retry_unreleased(meta: Path) -> None:
+        """Locks this process still owes a release, from a moment when the disk refused. Each is this process's own token
+        and nobody can be writing with it: its handle is closed or was never returned."""
+        for folder, token in list(Workspace._unreleased):
+            if folder == str(meta):
+                try:
+                    Workspace(meta, {"workspace_id": "release"}, False, token).close()
+                except (OSError, WorkspaceError):
+                    pass
 
     LOCK_RELEASE_ATTEMPTS = atomicio.SHARING_RETRIES
     LOCK_RELEASE_DELAY = 0.02
@@ -457,7 +482,7 @@ class Workspace:
                 os.replace(lock, private)
             except FileNotFoundError:
                 return
-            except PermissionError as exc:  # WinError 32: another process has it open right now
+            except OSError as exc:  # WinError 32: another process has it open; or the disk refused for a moment
                 last = exc
                 time.sleep(self.LOCK_RELEASE_DELAY)
                 continue
@@ -468,7 +493,7 @@ class Workspace:
             if holder.get("token") == self._lock_token:
                 try:
                     atomicio.retry_sharing(lambda: private.unlink(missing_ok=True))
-                except PermissionError:
+                except OSError:
                     pass  # released all the same: writer.lock is free, and the next scan clears this file
                 return
             self._restore_foreign_lock(private, lock, holder)
@@ -510,6 +535,7 @@ class Workspace:
     def _acquire_writer_lock(meta: Path) -> str:
         lock = meta / "locks" / "writer.lock"
         existing: dict = {"user": "?", "host": "?", "pid": "?", "acquired": "?", "token": "?"}
+        Workspace._retry_unreleased(meta)
         for _ in range(Workspace.LOCK_ACQUIRE_ATTEMPTS):
             token = uuid.uuid4().hex
             holder = {**current_actor(), "token": token, "acquired": now_iso()}
@@ -533,6 +559,10 @@ class Workspace:
                 except PermissionError:
                     raise WorkspaceLockedError(existing) from None
                 continue
+            except OSError:
+                # It can fail after the name was taken (the folder sync). Nobody will ever use this token.
+                Workspace._give_back(meta, token)
+                raise
             Workspace._fence_orphaned_releases(meta, token)
             return token
         raise WorkspaceLockedError(existing)
@@ -607,9 +637,13 @@ class Workspace:
         except BaseException:
             # We cannot establish that every displaced lock is fenced: refuse to become a writer
             # (fail closed) and give our just-acquired lock back.
-            Workspace(meta, {"workspace_id": "release"}, False, own_token)._unlink_own_lock(
-                locks / "writer.lock")
+            Workspace._give_back(meta, own_token)
             raise
+
+    @staticmethod
+    def _give_back(meta: Path, token: str) -> None:
+        """Release a lock this process took but will not use, without hiding the failure that led here."""
+        Workspace(meta, {"workspace_id": "release"}, False, token)._close_keeping_the_real_error()
 
     @staticmethod
     def _fence_token_orphan(meta: Path, orphan: Path, planned_evidence: dict[str, str] | None = None,
@@ -1209,6 +1243,7 @@ class Workspace:
                  "op": op, "records": [p.as_json() for p in writes], "blobs": blob_refs or [], "checks": checks,
                  "request": {"version": REQUEST_IDENTITY_VERSION, "digest": identity},
                  "writer_token": self._lock_token}
+        unsynced: OSError | None = None
         for _attempt in range(1000):
             seq = entry["seq"] = self.head_seq() + 1
             entry["digest"] = entry_digest({k: v for k, v in entry.items() if k != "digest"})
@@ -1227,6 +1262,11 @@ class Workspace:
                         f"journal entry {seq} was created by another writer; refusing to continue") from exc
                 # An administrative entry or a revoked writer's late publish. Neither changes any record this
                 # commit checked (administrative entries only add new audit records), so take the next one.
+            except OSError as exc:
+                if not self._holds_entry(seq, entry["txid"]):
+                    raise                            # nothing was published: an ordinary failure, nothing happened
+                unsynced = exc                       # visible to every reader: this change happened, so never say it failed
+                break
         else:
             raise WorkspaceError("could not publish to the journal (journal contention)")
         if self.is_fenced(entry):
@@ -1240,7 +1280,15 @@ class Workspace:
                 self.recover()
         except BaseException as exc:  # commit point already passed: report it as committed
             raise CommittedNotApplied(seq, entry["txid"], exc) from exc
+        if unsynced is not None:
+            raise CommittedNotApplied(seq, entry["txid"], unsynced) from unsynced
         return seq
+
+    def _holds_entry(self, seq: int, txid: str) -> bool:
+        try:
+            return atomicio.read_json(self._journal_dir() / f"{seq:020d}.json").get("txid") == txid
+        except (OSError, ValueError, AttributeError):
+            return False
 
     def health(self) -> dict:
         """Read-only summary for a UI (Claude B's A1). Never raises for a damaged journal: it reports it. ``ok`` is False
