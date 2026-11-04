@@ -336,7 +336,7 @@ def test_escape_cancel_survives_controller_restart_without_cad_mutation(qapp, de
                 if managed.exists() else {}) == objects_at_checkout
         # The initial import must remain represented in the journal.
         assert objects_at_checkout, "Imported revision must create managed content"
-    assert set(journal_before).issubset(set(journal_at_checkout))
+        assert set(journal_before).issubset(set(journal_at_checkout))
     finally:
         reopened.close()
 
