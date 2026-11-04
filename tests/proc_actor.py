@@ -18,6 +18,7 @@ import builtins
 import io
 import json
 import os
+import pathlib
 import sys
 import time
 import traceback
@@ -122,6 +123,16 @@ class Failpoints:
             setattr(os, op, move_op(op))
         for op in ("unlink", "mkdir", "rmdir"):
             setattr(os, op, path_op(op))
+        # Python 3.10's pathlib calls these through an accessor that bound the os functions at import, so
+        # Path.unlink() etc. would bypass the hooks above and their crash points would silently vanish.
+        accessor = getattr(pathlib, "_NormalAccessor", None)
+        if accessor is not None:
+            for op in ("replace", "rename", "link"):
+                if hasattr(accessor, op):
+                    setattr(accessor, op, staticmethod(move_op(op)))
+            for op in ("unlink", "mkdir", "rmdir"):
+                if hasattr(accessor, op):
+                    setattr(accessor, op, staticmethod(path_op(op)))
         os.open = os_open
         builtins.open = any_open
         io.open = any_open

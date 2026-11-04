@@ -75,3 +75,78 @@ def resolve_under_root(root: Path, rel: str) -> Path:
     if real != real_root and real_root not in real.parents:
         raise PathValidationError(f"{rel!r} resolves outside its root (symlink or junction?)")
     return candidate
+
+
+# ------------------------------------------------------------------ network locations (1.0.0 notice)
+NETWORK_FS_TYPES = frozenset({
+    "nfs", "nfs4", "cifs", "smb", "smb2", "smb3", "smbfs", "ncpfs", "afs", "9p", "ceph", "glusterfs",
+    "lustre", "gpfs", "davfs", "fuse.sshfs", "sshfs", "fuse.rclone", "fuse.davfs2", "fuse.glusterfs",
+    "fuse.cephfs", "fuse.smbnetfs", "fuse.gvfsd-fuse",
+})
+
+
+def _unescape_mount(field: str) -> str:
+    """/proc/self/mounts escapes space, tab, newline and backslash as octal."""
+    return (field.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n")
+            .replace("\\134", "\\"))
+
+
+def _linux_fs_type(path: Path, mounts_text: str) -> str | None:
+    best, fstype = "", None
+    target = str(path)
+    for line in mounts_text.splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        mount_point = _unescape_mount(fields[1])
+        prefix = mount_point.rstrip("/") + "/"
+        if (target == mount_point or target.startswith(prefix) or mount_point == "/") \
+                and len(mount_point) >= len(best):
+            best, fstype = mount_point, fields[2]
+    return fstype
+
+
+def _windows_is_remote(path: Path) -> bool | None:
+    s = str(path)
+    if s.startswith(("\\\\", "//")) and not s.startswith(("\\\\?\\", "\\\\.\\")):
+        return True                                      # UNC path: \\server\share
+    if s.startswith("\\\\?\\UNC\\"):
+        return True
+    drive = path.drive
+    if s.startswith("\\\\?\\"):
+        drive = s[4:6]
+    if len(drive) != 2 or drive[1] != ":":
+        return None
+    import ctypes
+    drive_remote = 4
+    try:
+        return ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == drive_remote  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return None
+
+
+def is_network_location(location: Path, *, mounts_text: str | None = None) -> bool | None:
+    """True when ``location`` is on a network filesystem (SMB/CIFS, NFS, ...), False when it is local,
+    None when that cannot be told. Used only to warn: the file protocol's guarantees are tested on
+    local disks, not on shares (docs/ARCHITECTURE.md). Never raises."""
+    try:
+        path = Path(os.path.abspath(location))
+        if os.name == "nt":
+            return _windows_is_remote(path)
+        if mounts_text is None:
+            try:
+                mounts_text = Path("/proc/self/mounts").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None                              # e.g. macOS: unknown, no warning
+        path = Path(os.path.realpath(path))
+        fstype = _linux_fs_type(path, mounts_text)
+        if fstype is None:
+            return None
+        return fstype.casefold() in NETWORK_FS_TYPES
+    except Exception:  # noqa: BLE001 - a notice must never break opening a workspace
+        return None
+
+
+NETWORK_NOTICE = ("This workspace is in a shared network folder. RevisionWorx 1.0 protects your data on one "
+                  "computer's local disk; several computers writing to the same network folder at the same "
+                  "time has not been verified. Let only one computer make changes at a time, and keep backups.")

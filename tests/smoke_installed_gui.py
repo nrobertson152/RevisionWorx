@@ -64,7 +64,7 @@ def main() -> int:
     check(code == 0, f"main() exit code {code}")
     first, second = seen.get("first", {}), seen.get("second", {})
     check(first.get("page") == "start", "a clean user sees the start page")
-    check("single user" in first.get("alpha_banner", ""), "the alpha notice is shown")
+    check("local disk" in first.get("alpha_banner", ""), "the scope notice is shown")
     check(bool(seen.get("opened")) and second.get("page") == "workspace", "the new workspace opened")
     check(len(second.get("documents", [])) == 1 and len(second.get("history", [])) == 1,
           "the imported document and its first revision are shown")

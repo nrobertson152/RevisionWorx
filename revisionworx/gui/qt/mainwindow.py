@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         self.list_vm = ProjectListModel(ctl)
         self.detail_vm = ProjectDetailsModel(ctl)
         self.status_vm = AppStatus(ctl)
-        self.setWindowTitle(f"RevisionWorx {__version__} (Alpha)")
+        self.setWindowTitle(f"RevisionWorx {__version__}")
         # No fixed minimum: the layout's own minimum keeps every action and table usable.
         screen = QGuiApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else None
@@ -75,11 +75,11 @@ class MainWindow(QMainWindow):
         shell_layout = QVBoxLayout(shell)
         shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
-        self.alpha_banner = QLabel(self.status_vm.alpha_notice, shell)
+        self.alpha_banner = QLabel(self.status_vm.notice, shell)
         self.alpha_banner.setObjectName("alphaBanner")
         self.alpha_banner.setWordWrap(True)
         self.alpha_banner.setStyleSheet(ALPHA_STYLE)
-        self.alpha_banner.setAccessibleName("Alpha warning")
+        self.alpha_banner.setAccessibleName("Scope notice")
         shell_layout.addWidget(self.alpha_banner)
         self.health_banner = elastic(QLabel(shell))
         self.health_banner.setObjectName("healthBanner")
@@ -379,7 +379,8 @@ class MainWindow(QMainWindow):
             return False
         if previous != Path(location):
             self.close_workspace_windows()
-        self.setWindowTitle(f"RevisionWorx {__version__} (Alpha) — {info['name']}")
+        self.setWindowTitle(f"RevisionWorx {__version__} — {info['name']}")
+        self.alpha_banner.setText(self.status_vm.notice)
         self._fill_recent()
         self.stack.setCurrentWidget(self.workspace_page)
         self.status_vm.check()
@@ -435,7 +436,8 @@ class MainWindow(QMainWindow):
             return
         self.close_workspace_windows()
         self.ctl.close_workspace()
-        self.setWindowTitle(f"RevisionWorx {__version__} (Alpha)")
+        self.setWindowTitle(f"RevisionWorx {__version__}")
+        self.alpha_banner.setText(self.status_vm.notice)
         self.list_vm.refresh()
         self.detail_vm.load(None)
         self.documents_tab.load_project(None)

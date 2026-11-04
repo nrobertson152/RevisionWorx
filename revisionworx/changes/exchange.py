@@ -179,8 +179,14 @@ def parse_requests_csv(text: str, find_document: Callable[[str], str | None] | N
         raise ValidationError("file is too large")
     if text.startswith("﻿"):
         text = text[1:]
+    nul = text.find("\x00")
+    if nul >= 0:  # Python 3.10's csv module raises on NUL instead of returning it as a cell character
+        raise ImportRejected([(text.count("\n", 0, nul) + 1, "contains a control character (NUL)")])
     reader = csv.DictReader(io.StringIO(text, newline=""))
-    header = [h.strip().casefold() for h in (reader.fieldnames or [])]
+    try:
+        header = [h.strip().casefold() for h in (reader.fieldnames or [])]
+    except csv.Error as exc:
+        raise ImportRejected([(1, f"not a readable CSV file: {exc}")]) from None
     errors: list[tuple[int, str]] = []
     if not header or not {"title", "reason"} <= set(header):
         raise ImportRejected([(1, "header must include at least 'title' and 'reason'")])
@@ -191,7 +197,14 @@ def parse_requests_csv(text: str, find_document: Callable[[str], str | None] | N
         raise ImportRejected([(1, "a column appears twice")])
     reader.fieldnames = header
     specs: list[dict] = []
-    for line_no, raw in enumerate(reader, start=2):
+    rows = enumerate(reader, start=2)
+    while True:
+        try:
+            line_no, raw = next(rows)
+        except StopIteration:
+            break
+        except csv.Error as exc:
+            raise ImportRejected([(reader.line_num, f"not a readable CSV file: {exc}")]) from None
         if None in raw:
             errors.append((line_no, "more cells than columns"))
             continue

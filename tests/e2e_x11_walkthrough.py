@@ -109,7 +109,7 @@ def launch():
 
 def quit_app():
     global current_app
-    window_is("(Alpha)")
+    window_is("RevisionWorx 1.")
     key("ctrl+q")
     try:
         code = current_app.wait(15)
@@ -129,7 +129,7 @@ def check_in(description: str):
     key("alt+d")
     typed(description)
     key("alt+i")  # the dialog's Check in button
-    window_is("(Alpha)")
+    window_is("RevisionWorx 1.")
 
 
 sp.Popen(["openbox"], env=ENV, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
@@ -154,7 +154,7 @@ shot("import_typed")
 key("alt+i")
 rev_is("A")
 key("Escape")
-window_is("(Alpha)")
+window_is("RevisionWorx 1.")
 doc_id = doc_list().split()[0]
 if json.loads(sp.run([sys.executable, "-m", "revisionworx", "-w", str(WS), "--json", "doc", "show", doc_id],
                      capture_output=True, text=True, env=ENV).stdout)["document"]["title"] != "bracket":
@@ -175,7 +175,7 @@ shot("checkin_refused")
 if "Check in" not in xdo("getactivewindow", "getwindowname") or "rev A " not in doc_list():
     fail("an empty description was accepted")
 key("Escape")
-window_is("(Alpha)")
+window_is("RevisionWorx 1.")
 check_in("Thicker flange for load case B")
 rev_is("B")
 checked_out(False)
@@ -188,7 +188,7 @@ key("ctrl+a")
 typed(str(EXPORTED))
 key("Return")
 wait_for("the exported file", EXPORTED.exists)
-window_is("(Alpha)")
+window_is("RevisionWorx 1.")
 if EXPORTED.read_bytes() != b"version two":
     fail("wrong exported bytes")
 EXPORTED.write_bytes(b"old")
@@ -201,7 +201,7 @@ time.sleep(0.8)
 shot("export_replace_prompt")
 key("alt+y")
 wait_for("the replaced file", lambda: EXPORTED.read_bytes() == b"version two")
-window_is("(Alpha)")
+window_is("RevisionWorx 1.")
 
 print("5. Tab reaches the history, then restore an older revision", flush=True)
 key("ctrl+k")
@@ -214,7 +214,7 @@ window_is("Restore earlier")
 shot("restore_prompt")
 key("alt+y")
 wait_for("the restored bytes", lambda: WORKING.read_bytes() == b"version one")
-window_is("(Alpha)")
+window_is("RevisionWorx 1.")
 
 print("6. kill -9 while holding the checkout; restart and check in", flush=True)
 current_app.kill()
@@ -243,12 +243,12 @@ key("ctrl+k")
 wait_for("the error dialog", lambda: xdo("getactivewindow", "getwindowname") == "RevisionWorx")
 shot("block_dialog")
 key("Return")
-window_is("(Alpha)")
+window_is("RevisionWorx 1.")
 time.sleep(0.5)
 shot("block_read_only")
 key("ctrl+k")  # disabled now: no write and no second dialog
 time.sleep(0.8)
-if "(Alpha)" not in xdo("getactivewindow", "getwindowname") or "OUT:" in doc_list():
+if "RevisionWorx 1." not in xdo("getactivewindow", "getwindowname") or "OUT:" in doc_list():
     fail("the read-only state still acted on Ctrl+K")
 if "Cleared" not in cli("lock", "clear-orphan", orphan.name, "--reason", "walkthrough"):
     fail("clear-orphan failed")
@@ -262,7 +262,7 @@ key("ctrl+k")
 wait_for("the error dialog", lambda: xdo("getactivewindow", "getwindowname") == "RevisionWorx")
 shot("lock_dialog")
 key("Return")
-window_is("(Alpha)")
+window_is("RevisionWorx 1.")
 if "OUT:" in doc_list():
     fail("a locked workspace accepted a checkout")
 token = json.loads(cli("lock", "show"))["token"]

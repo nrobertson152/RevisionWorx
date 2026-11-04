@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, atomicio, doctor, documents, projects
+from . import __version__, atomicio, doctor, documents, paths, projects
 from .clientstate import CheckoutTokens
 from .index import open_index
 from .workspace import CommittedNotApplied, Workspace, WorkspaceError
@@ -55,7 +55,8 @@ def cmd_status(args):
                     "journal_seq": ws.head_seq(), "applied_seq": ws.applied_seq(),
                     "writer_lock": Workspace.read_writer_lock(ws.meta_dir),
                     "roots": list(ws.list("root").values()), "index": idx.status(),
-                    "coverage": idx.coverage(), "settings": ws.settings()}
+                    "coverage": idx.coverage(), "settings": ws.settings(),
+                    "network_location": paths.is_network_location(ws.meta_dir)}
             lock = info["writer_lock"]
             text = "\n".join([
                 f"Workspace {ws.name!r} ({ws.id})", f"  location: {ws.meta_dir}",
@@ -65,6 +66,8 @@ def cmd_status(args):
                 f"  projects: {info['coverage']['registered_projects']}",
                 f"  index: {info['index']['cache_path']} (seq {info['index']['cache_seq']})",
                 f"  {info['coverage']['note']}"])
+            if info["network_location"]:
+                text += f"\n  warning: {paths.NETWORK_NOTICE}"
             _emit(args, info, text)
 
 
@@ -412,6 +415,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--state-dir", type=Path, default=None, help="local client state (checkout tokens)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    # Listed for --help only; main() hands these to their own command lines before parsing.
+    sub.add_parser("bom", help="BOM files: validate, explode, roll up, compare (run 'revisionworx bom -h')",
+                   add_help=False)
+    sub.add_parser("change", help="engineering changes (ECR/ECO): list, show, impact, verify, export, "
+                   "import-csv (run 'revisionworx change -h')", add_help=False)
 
     s = sub.add_parser("init", help="create a new workspace")
     s.add_argument("location"); s.add_argument("--name", required=True); s.set_defaults(fn=cmd_init)
@@ -531,7 +539,44 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _delegate(argv: list[str]) -> int | None:
+    """``revisionworx bom ...`` and ``revisionworx change ...`` run the BOM and change-control command
+    lines, which have their own parsers. Global options before the subcommand are honoured for
+    ``change`` (the workspace); ``bom`` works on files and never opens a workspace."""
+    workspace = None
+    i = 0
+    while i < len(argv) and argv[i].startswith("-"):
+        if argv[i] in ("-w", "--workspace") and i + 1 < len(argv):
+            workspace = argv[i + 1]
+            i += 2
+        elif argv[i].startswith("--workspace="):
+            workspace = argv[i].split("=", 1)[1]
+            i += 1
+        else:
+            return None                       # --help, --version etc.: the main parser handles them
+    if i >= len(argv) or argv[i] not in ("bom", "change"):
+        return None
+    rest = argv[i + 1:]
+    if argv[i] == "bom":
+        from .bom.__main__ import main as bom_main
+        return bom_main(rest)
+    from .changes.__main__ import main as change_main
+    if rest and rest[0] in ("-h", "--help"):
+        return change_main(["--help"])
+    if rest and rest[0] == "verify-package":
+        return change_main(["-", *rest])
+    workspace = workspace or os.environ.get("REVISIONWORX_WORKSPACE")
+    if not workspace:
+        print("error: no workspace: use -w FOLDER or set REVISIONWORX_WORKSPACE", file=sys.stderr)
+        return 2
+    return change_main([workspace, *rest])
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    delegated = _delegate(argv)
+    if delegated is not None:
+        return delegated
     args = build_parser().parse_args(argv)
     try:
         args.fn(args)

@@ -53,7 +53,7 @@ def test_window_starts_on_start_page_with_alpha_banner(qapp, ctl):
     from revisionworx.gui.qt.mainwindow import MainWindow
     w = MainWindow(ctl)
     assert w.stack.currentWidget() is w.start_page
-    assert "single user" in w.alpha_banner.text() and "irreplaceable" in w.alpha_banner.text()
+    assert "local disk" in w.alpha_banner.text() and "backups" in w.alpha_banner.text()
     assert not w.alpha_banner.isHidden()
     assert "Alpha" in w.windowTitle()
     w.close()
@@ -268,7 +268,7 @@ def test_observable_state_and_object_names_are_stable(qapp, ctl, tmp_path):
     assert st["contract"] == 1 and st["page"] == "workspace" and st["selected_project"] == p["id"]
     assert st["selected_document"] == doc["id"] and len(st["history"]) == 1
     assert st["actions"]["checkout"] and not st["actions"]["checkin"] and not st["read_only"]
-    assert "single user" in st["alpha_banner"]
+    assert "local disk" in st["alpha_banner"]
     for name in ("start_create_btn", "start_name_edit", "main_new_btn", "documents_import_btn",
                  "documents_checkout_btn", "documents_checkin_btn", "documents_history"):
         assert w.findChild(QtWidgets.QWidget, name) is not None, name

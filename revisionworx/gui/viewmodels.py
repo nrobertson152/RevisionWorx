@@ -942,6 +942,14 @@ class AppStatus(Observable):
         return bool(self.health.get("blocked"))
 
     @property
+    def notice(self) -> str:
+        """The permanent scope notice, plus the network-folder notice when the open workspace is on one."""
+        if getattr(self.ctl, "network_location", None):
+            from ..paths import NETWORK_NOTICE
+            return f"{self.alpha_notice}\n\u26a0 {NETWORK_NOTICE}"
+        return self.alpha_notice
+
+    @property
     def health_text(self) -> str:
         text = self.health.get("message", "")
         if self.health.get("unavailable"):

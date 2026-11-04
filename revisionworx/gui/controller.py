@@ -6,7 +6,7 @@ background thread; results come back through a queue that the GUI drains on its 
 UI never blocks on slow disk I/O.
 
 The writer lock is held only for the duration of each write operation, not while the window is
-open (Phase 1 single-writer model). The 0.1.0 Alpha is single user and local disk only.
+open (Phase 1 single-writer model). RevisionWorx 1.0 is supported on one computer's local disk.
 """
 from __future__ import annotations
 
@@ -32,8 +32,10 @@ from ..workspace import Workspace
 
 PAGE_SIZE = 200
 
-ALPHA_NOTICE = ("RevisionWorx 0.1.0 Alpha \u2014 single user, local disk only. Not suitable for "
-                "irreplaceable production data: use disposable test projects and keep your own backups.")
+SCOPE_NOTICE = ("RevisionWorx 1.0 \u2014 made for one computer's local disk (several windows on that computer "
+                "are safe together). Shared network folders: let only one computer make changes at a time. "
+                "Keep regular backups.")
+ALPHA_NOTICE = SCOPE_NOTICE  # former name, kept for callers written against the 0.1.0 alpha
 DEFAULT_ROOT_NAME = "Projects"
 
 
@@ -97,6 +99,7 @@ class Controller:
         self.tokens = CheckoutTokens(state_dir)
         self.workspace_id: str | None = None
         self.location: Path | None = None
+        self.network_location: bool | None = None  # True: open workspace is on a network share (notice only)
         self.results: "queue.Queue[JobResult | Progress]" = queue.Queue()
         self._cancel = threading.Event()
         self._busy = threading.Lock()
@@ -147,6 +150,7 @@ class Controller:
             info = {"id": ws.id, "name": ws.name}
         self.location = location
         self.workspace_id = info["id"]
+        self.network_location = paths.is_network_location(location)
         self._set_block(None)
         self._remember(location)
         return info
@@ -154,6 +158,7 @@ class Controller:
     def close_workspace(self) -> None:
         self.location = None
         self.workspace_id = None
+        self.network_location = None
         self._set_block(None)
 
     def _set_block(self, reason: str | None, found_by_write: bool = False) -> None:

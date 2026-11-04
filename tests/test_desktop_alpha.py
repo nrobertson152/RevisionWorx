@@ -441,8 +441,9 @@ def test_import_committed_not_applied_reports_saved(started, monkeypatch):
 # ---------------------------------------------------------------------------- workflow 6
 def test_alpha_notice_is_explicit():
     s = AppStatus.__init__.__code__  # noqa: F841 - ensure class importable
-    assert "single user" in ALPHA_NOTICE and "local" in ALPHA_NOTICE
-    assert "irreplaceable production data" in ALPHA_NOTICE
+    # 1.0 scope notice: what is supported, the network-folder rule, and backups.
+    assert "local disk" in ALPHA_NOTICE and "network folders" in ALPHA_NOTICE
+    assert "one computer make changes at a time" in ALPHA_NOTICE and "backups" in ALPHA_NOTICE
 
 
 # ---------------------------------------------------------------------------- checkpoint 2
