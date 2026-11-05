@@ -33,9 +33,9 @@ runs are both green (Actions tab, filter by branch `main`). Record that SHA belo
       issue. Nobody has done this yet.
 - [ ] **Accept the 1.0 scope** in `docs/KNOWN_LIMITATIONS.md`, in particular: several computers writing one
       network folder is **not verified** (warned in the product, one writer at a time).
-- [ ] **Optional: the official logo.** Supply the original logo file (PNG, ideally 1024×1024 or larger) to add
-      as the application icon (`docs/REVISIONWORX_BRANDING_DIRECTIVE.md`). Without it the builds use the default
-      icon. Adding it means a new candidate commit.
+- [x] **The official logo.** Supplied by the Director on 2026-11-05 and used for the window, taskbar, splash,
+      About, Windows executables and the Linux desktop entry (`docs/REVISIONWORX_BRANDING_DIRECTIVE.md`). Check it
+      during GUI acceptance (Workflow 1, step 1).
 
 ## Release steps (after the boxes above)
 

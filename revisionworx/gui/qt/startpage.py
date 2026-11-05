@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
 from ..controller import Controller, SavedWithWarning, describe_error
 from ...workspace import CommittedNotApplied
 from ..viewmodels import QuickStartForm
-from . import theme
+from . import branding, theme
 from .models import elastic
 
 
@@ -34,11 +34,20 @@ class StartPage(QWidget):
         self.last_created_id: str | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(32, 24, 32, 24)
+        head = QHBoxLayout()
+        head.setSpacing(16)
+        self.logo = QLabel(self)
+        self.logo.setObjectName("startLogo")
+        self.logo.setPixmap(branding.logo_pixmap(64))
+        self.logo.setFixedSize(64, 64)
+        self.logo.setAccessibleName("RevisionWorx logo")
+        head.addWidget(self.logo, 0, Qt.AlignmentFlag.AlignTop)
         title = QLabel("<h2>Welcome to RevisionWorx</h2>"
                        "<p>Revision control for your engineering files, entirely on this computer. "
                        "No account or network connection is needed.</p>", self)
         title.setWordWrap(True)
-        outer.addWidget(title)
+        head.addWidget(title, 1)
+        outer.addLayout(head)
 
         box = QGroupBox("Create a new local project", self)
         form = QFormLayout(box)

@@ -36,7 +36,7 @@ Mark each step Pass or Fail. If a step fails, note what you saw, keep going if y
 
 | # | Do | Expect |
 |---|---|---|
-| 1 | Turn off Wi-Fi or unplug the network, then start the app. | It opens with no account or sign-in prompt. The amber notice says RevisionWorx 1.0 is made for one computer's local disk, that in shared network folders only one computer should make changes at a time, and to keep backups. The window title says RevisionWorx 1.0.0. |
+| 1 | Turn off Wi-Fi or unplug the network, then start the app. | While it starts, a small window shows the RevisionWorx logo (white R on the blue rounded square), the name and "Version 1.0.0"; it closes by itself as soon as the main window appears. The title bar and the taskbar (Windows) or dock/panel (Linux) show the same logo, not a Python or generic icon. It opens with no account or sign-in prompt. The amber notice says RevisionWorx 1.0 is made for one computer's local disk, that in shared network folders only one computer should make changes at a time, and to keep backups. The window title says RevisionWorx 1.0.0. |
 | 2 | On the start page, choose a new empty folder as `F`. Enter name `Test Bracket` and number `T-1`. Click **Create project**. | The project opens. `F\Projects\T-1 Test Bracket` exists on disk. |
 
 ### Workflow 2: import and browse
@@ -134,6 +134,9 @@ Results come from exact-commit CI recorded in [`DESKTOP_ALPHA_PROGRESS.md`](DESK
 - Display scaling above 100%, or a real high-DPI monitor.
 - This GUI on the final core, because that core does not exist yet.
 - Installers or packaged builds. These steps use a Python install from source.
+- The logo at real sizes on real screens: the title bar (16 px), the taskbar (24-48 px), Alt+Tab and the
+  Windows Explorer icon of `revisionworx-gui.exe` (up to 256 px), and the Linux application menu after
+  `install-desktop-entry.sh`. CI checks the files, their sizes and that the window loads them; nobody has looked.
 - Step 18 on Windows. The `icacls` commands and the resulting message have not been tried there.
 
 ## Known limitations

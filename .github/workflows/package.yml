@@ -65,6 +65,37 @@ jobs:
           print(names)
           assert "LGPL-3.0.txt" in names
           EOF
+      - name: Add the Linux desktop entry and icons
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          out=dist/RevisionWorx
+          mkdir -p "$out/icons"
+          cp revisionworx/gui/resources/revisionworx-*.png "$out/icons/"
+          cp packaging/linux/install-desktop-entry.sh packaging/linux/revisionworx.desktop.in "$out/"
+          chmod +x "$out/install-desktop-entry.sh"
+      - name: Check the logo is in the build
+        shell: bash
+        run: |
+          # the window's icon/splash images (branding.RESOURCES) must be inside the bundle
+          for s in 16 24 32 48 64 128 256 512; do
+            find dist/RevisionWorx -path "*revisionworx/gui/resources/revisionworx-$s.png" | grep -q . || { echo "missing $s px icon"; exit 1; }
+          done
+          find dist/RevisionWorx -path "*revisionworx/gui/resources/revisionworx.ico" | grep -q .
+      - name: Check the Linux desktop entry installs and is valid
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y -qq desktop-file-utils
+          home="$RUNNER_TEMP/desktop-home"
+          XDG_DATA_HOME="$home" dist/RevisionWorx/install-desktop-entry.sh
+          entry="$home/applications/revisionworx.desktop"
+          cat "$entry"
+          desktop-file-validate "$entry"
+          grep -q "Exec=\"$PWD/dist/RevisionWorx/revisionworx-gui\" %f" "$entry"
+          for s in 16 32 48 256; do test -s "$home/icons/hicolor/${s}x${s}/apps/revisionworx.png"; done
+          XDG_DATA_HOME="$home" dist/RevisionWorx/install-desktop-entry.sh --remove
+          test ! -e "$entry"
       - name: Check the build (command line)
         shell: bash
         run: |

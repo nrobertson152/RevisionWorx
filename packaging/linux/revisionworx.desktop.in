@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RevisionWorx
+GenericName=Engineering revision control
+Comment=Offline engineering document and revision control
+Exec="@EXEC@" %f
+Icon=revisionworx
+Terminal=false
+Categories=Office;Engineering;
+Keywords=PDM;revision;CAD;engineering;documents;
+StartupWMClass=revisionworx-gui

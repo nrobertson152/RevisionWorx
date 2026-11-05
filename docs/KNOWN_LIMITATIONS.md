@@ -46,5 +46,5 @@ gap behind it.
   use `revisionworx change ...`.
 - Where Used / Before You Revise across projects, CAD reference extraction, OpenSchematix import.
 - Built-in backup and restore commands (see "Backups" in the [user guide](USER_GUIDE.md)).
-- An installer. The standalone builds are folders you unpack; they have no custom icon until the official logo
-  file is committed (`docs/REVISIONWORX_BRANDING_DIRECTIVE.md`).
+- An installer. The standalone builds are folders you unpack. They carry the official icon; on Linux,
+  `install-desktop-entry.sh` in the folder adds RevisionWorx to your application menu.

@@ -15,7 +15,7 @@ from ... import __version__
 from ...workspace import CommittedNotApplied
 from ..controller import Controller, Progress, SavedWithWarning, describe_error
 from ..viewmodels import AppStatus, CommandPalette, ProjectDetailsModel, ProjectListModel
-from . import theme
+from . import branding, theme
 from .about import DOCS_URL, AboutDialog
 from .dialogs import AdoptDialog, NewProjectDialog
 from .documents import DocumentsTab
@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         self.detail_vm = ProjectDetailsModel(ctl)
         self.status_vm = AppStatus(ctl)
         self.setWindowTitle(f"RevisionWorx {__version__}")
+        self.setWindowIcon(branding.app_icon())
         # No fixed minimum: the layout's own minimum keeps every action and table usable.
         screen = QGuiApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else None

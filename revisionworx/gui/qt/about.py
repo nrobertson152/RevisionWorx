@@ -10,7 +10,7 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ... import __version__
-from . import theme
+from . import branding, theme
 
 APP_NAME = "RevisionWorx"
 TAGLINE = "Offline engineering document and revision control"
@@ -51,13 +51,26 @@ class AboutDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 20, 24, 16)
         lay.setSpacing(6)
+        top = QHBoxLayout()
+        top.setSpacing(16)
+        self.logo = QLabel(self)
+        self.logo.setObjectName("aboutLogo")
+        self.logo.setPixmap(branding.logo_pixmap(72))
+        self.logo.setFixedSize(72, 72)
+        self.logo.setAccessibleName("RevisionWorx logo")
+        top.addWidget(self.logo, 0, Qt.AlignmentFlag.AlignTop)
+        names = QVBoxLayout()
+        names.setSpacing(2)
         name = QLabel(APP_NAME, self)
         name.setObjectName("projectHeading")
         version = QLabel(f"Version {__version__}", self)
         tag = QLabel(TAGLINE, self)
         theme.set_flag(tag, "role", "muted")
         for w in (name, version, tag):
-            lay.addWidget(w)
+            names.addWidget(w)
+        names.addStretch(1)
+        top.addLayout(names, 1)
+        lay.addLayout(top)
         self.body = QLabel(BODY, self)
         self.body.setWordWrap(True)
         self.body.setMinimumWidth(460)
