@@ -185,7 +185,7 @@ def test_missing_working_file_status_is_red(qapp, ctl, tmp_path):
     tab.table.selectRow(0)
     qapp.processEvents()
     assert "missing" in tab.status.text().lower()
-    assert "b00020" in tab.status.styleSheet()
+    assert tab.status.property("tone") == "danger"
     assert not tab.open_file_btn.isEnabled()
     w.close()
 
@@ -318,7 +318,7 @@ def test_checkin_saved_with_warning_is_never_shown_as_failure(qapp, ctl, tmp_pat
     tab.panel.start_checkin("Saved but records lag", on_done=lambda _r: tab.list_vm.refresh())
     pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
     assert tab.status.text().startswith("Checked in.")
-    assert "8a5300" in tab.status.styleSheet()  # amber warning, not red error
+    assert tab.status.property("tone") == "warn"  # amber warning, not red error
     assert tab.history_model.rowCount() == 2 and not tab.checkin_btn.isEnabled()
     assert not [b for b in no_modal_boxes if b[0] == "critical"]
     w.close()
@@ -353,7 +353,7 @@ def test_saved_checkin_stays_saved_when_the_refresh_is_denied(qapp, ctl, tmp_pat
     st = w.observable_state()
     assert tab.status.text().startswith("Checked in."), tab.status.text()
     assert "Cannot read" not in tab.status.text() and "Press F5" in tab.status.text()
-    assert st["message_level"] == "warning" and "8a5300" in tab.status.styleSheet()
+    assert st["message_level"] == "warning" and tab.status.property("tone") == "warn"
     assert not st["actions"]["checkin"] and not st["actions"]["checkout"]  # the panel is out of date
     assert not [b for b in no_modal_boxes if b[0] == "critical"]
     denied["on"] = False
@@ -475,7 +475,7 @@ def test_ambiguous_checkin_not_in_journal_shows_error_not_success(qapp, ctl, tmp
     monkeypatch.setattr(documents, "checkin", lambda *a, **k: (_ for _ in ()).throw(OSError(5, "I/O error")))
     tab.panel.start_checkin("Must not claim success")
     pump(qapp, ctl, lambda: not tab.panel.message.startswith("Checking in"))
-    assert "Checked in" not in tab.status.text() and "b00020" in tab.status.styleSheet()
+    assert "Checked in" not in tab.status.text() and tab.status.property("tone") == "danger"
     assert tab.history_model.rowCount() == 1 and tab.checkin_btn.isEnabled()
     w.close()
 

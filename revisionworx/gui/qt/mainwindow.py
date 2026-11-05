@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QKeySequence
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
+from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication, QKeySequence
+from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPushButton, QSplitter, QStackedWidget, QTableView, QTabWidget,
                                QVBoxLayout, QWidget)
@@ -14,26 +14,30 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFormLayout, QHBoxLayout,
 from ... import __version__
 from ...workspace import CommittedNotApplied
 from ..controller import Controller, Progress, SavedWithWarning, describe_error
-from ..viewmodels import AppStatus, ProjectDetailsModel, ProjectListModel
+from ..viewmodels import AppStatus, CommandPalette, ProjectDetailsModel, ProjectListModel
+from . import theme
+from .about import DOCS_URL, AboutDialog
 from .dialogs import AdoptDialog, NewProjectDialog
 from .documents import DocumentsTab
 from .models import EnterTable, ViewModelTable, elastic
+from .palette import PaletteDialog
 from .startpage import StartPage
 
-SHORTCUTS_TEXT = """Ctrl+N\tNew project (start page when no workspace is open)
+SHORTCUTS_TEXT = """Ctrl+P\tGo to anything: projects, documents and actions
+Ctrl+N\tNew project (start page when no workspace is open)
 Ctrl+O\tOpen workspace
 Ctrl+W\tClose workspace
 F5\tRefresh (keeps your selection)
 Ctrl+F\tSearch projects
 Ctrl+Shift+F\tFilter documents
-Ctrl+I\tImport file into the selected project
+Ctrl+I\tImport file into the selected project (or drop files on the window)
 Ctrl+K\tCheck out the selected document
 Ctrl+Shift+K\tCheck in the selected document
-Enter / double-click\tOpen project folder or document file"""
-
-ALPHA_STYLE = "background: #fff4ce; color: #4a3b00; padding: 6px; border-bottom: 1px solid #e0c96b;"
-BLOCKED_STYLE = "background: #fde7e9; color: #8b0016; padding: 6px; font-weight: bold;"
-PENDING_STYLE = "background: #eef4fb; color: #1b3a5c; padding: 6px;"
+Ctrl+Shift+C\tCopy the selected document's file path
+Ctrl+Shift+M\tMy checkouts
+Enter / double-click\tOpen project folder or document file
+Right-click a document\tEverything you can do with it
+F1\tThis list"""
 
 
 def configure_table(view: QTableView, columns) -> None:
@@ -67,20 +71,15 @@ class MainWindow(QMainWindow):
         self.resize(min(1200, avail.width()) if avail else 1200, min(760, avail.height() - 40) if avail else 760)
         self._restoring_selection = False
         self._write_actions: list[QAction] = []
-        # Errors hold paths and commands people need to copy; 3 = selectable by mouse and keyboard.
-        self.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 3; }")
+        self.theme_name = theme.apply(QApplication.instance(), ctl.preference("theme", theme.DEFAULT_THEME)) \
+            if QApplication.instance() is not None else theme.DEFAULT_THEME
+        self.setAcceptDrops(True)
         self._build_menu()
 
         shell = QWidget(self)
         shell_layout = QVBoxLayout(shell)
         shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
-        self.alpha_banner = QLabel(self.status_vm.notice, shell)
-        self.alpha_banner.setObjectName("alphaBanner")
-        self.alpha_banner.setWordWrap(True)
-        self.alpha_banner.setStyleSheet(ALPHA_STYLE)
-        self.alpha_banner.setAccessibleName("Scope notice")
-        shell_layout.addWidget(self.alpha_banner)
         self.health_banner = elastic(QLabel(shell))
         self.health_banner.setObjectName("healthBanner")
         self.health_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -89,39 +88,63 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget(shell)
         shell_layout.addWidget(self.stack, 1)
         self.start_page = StartPage(ctl, self.stack)
+        self.start_page.setObjectName("startPage")
         self.start_page.opened.connect(
             lambda loc: self.open_location(Path(loc), select_project=self.start_page.last_created_id))
         self.start_page.open_requested.connect(self.open_ws)
         self.stack.addWidget(self.start_page)
 
         central = QWidget(self.stack)
-        outer = QVBoxLayout(central)
-        bar = QHBoxLayout()
-        self.search = QLineEdit(central)
-        self.search.setPlaceholderText("Search projects by name, number, customer…  (Ctrl+F)")
-        self.search.setAccessibleName("Search projects")
-        self.search.returnPressed.connect(lambda *_: self.apply_search())
-        self.archived = QCheckBox("Include archived", central)
-        self.archived.toggled.connect(lambda _: self.apply_search())
-        self.adopt_btn = QPushButton("&Adopt existing…", central)
-        self.adopt_btn.clicked.connect(lambda *_: self.adopt())
-        self.new_btn = QPushButton("&New project", central)
-        self.new_btn.clicked.connect(lambda *_: self.new_project())
-        bar.addWidget(self.search, 1)
-        bar.addWidget(self.archived)
-        bar.addWidget(self.adopt_btn)
-        bar.addWidget(self.new_btn)
-        outer.addLayout(bar)
-        self.projects_notice = QLabel(central)
-        self.projects_notice.setObjectName("projectsNotice")
-        self.projects_notice.setWordWrap(True)
-        outer.addWidget(self.projects_notice)
-
+        central.setObjectName("workspacePage")
+        outer = QHBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
         split = QSplitter(central)
         split.setChildrenCollapsible(False)
+        self.main_split = split
+
+        # ---- sidebar: workspace, search, projects, help, scope notice
         left = QWidget(split)
+        left.setObjectName("sidebar")
+        left.setMinimumWidth(210)
         ll = QVBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setContentsMargins(12, 14, 12, 12)
+        ll.setSpacing(8)
+        self.ws_name = elastic(QLabel("RevisionWorx", left))
+        self.ws_name.setObjectName("workspaceName")
+        self.ws_sub = elastic(QLabel("", left))
+        self.ws_sub.setObjectName("workspaceSub")
+        ll.addWidget(self.ws_name)
+        ll.addWidget(self.ws_sub)
+        self.search = QLineEdit(left)
+        self.search.setPlaceholderText("Search projects…  (Ctrl+F)")
+        self.search.setAccessibleName("Search projects")
+        self.search.setClearButtonEnabled(True)
+        self.search.returnPressed.connect(lambda *_: self.apply_search())
+        ll.addWidget(self.search)
+        self.archived = QCheckBox("Include archived", left)
+        self.archived.toggled.connect(lambda _: self.apply_search())
+        ll.addWidget(self.archived)
+        head = QHBoxLayout()
+        projects_title = QLabel("Projects", left)
+        theme.set_flag(projects_title, "role", "section")
+        head.addWidget(projects_title, 1)
+        ll.addLayout(head)
+        self.adopt_btn = QPushButton("&Adopt existing…", left)
+        self.adopt_btn.setToolTip("Register an existing project folder as it is (read-only preview first)")
+        self.adopt_btn.clicked.connect(lambda *_: self.adopt())
+        self.new_btn = QPushButton("&New project", left)
+        self.new_btn.setToolTip("Create a project folder from a template (Ctrl+N)")
+        self.new_btn.clicked.connect(lambda *_: self.new_project())
+        theme.set_flag(self.new_btn, "primary", True)
+        add_row = QHBoxLayout()
+        add_row.addWidget(self.new_btn)
+        add_row.addWidget(self.adopt_btn)
+        ll.addLayout(add_row)
+        self.projects_notice = elastic(QLabel(left))
+        self.projects_notice.setObjectName("projectsNotice")
+        theme.set_flag(self.projects_notice, "role", "muted")
+        ll.addWidget(self.projects_notice)
         self.table = EnterTable(left)
         self.table.setAccessibleName("Projects")
         ll.addWidget(self.table, 1)
@@ -129,45 +152,76 @@ class MainWindow(QMainWindow):
                                           self.list_vm.cell, self)
         self.table.setModel(self.table_model)
         configure_table(self.table, ProjectListModel.COLUMNS)
+        self.table.setAlternatingRowColors(False)
+        self.table.setShowGrid(False)
         keys = [c.key for c in ProjectListModel.COLUMNS]
-        for key in ("customer", "mode", "rel_path"):  # all shown in Project details; keep the list narrow
+        for key in ("customer", "mode", "rel_path", "status"):  # all shown in Project details; keep the list narrow
             self.table.setColumnHidden(keys.index(key), True)
         self.table.setColumnWidth(keys.index("number"), 80)
-        self.table.setColumnWidth(keys.index("status"), 65)
-        self.table.setMinimumWidth(220)
+        self.table.setMinimumWidth(180)
         self.table.selectionModel().selectionChanged.connect(self.selection_changed)
         self.table.doubleClicked.connect(lambda _: self.open_folder())
         self.table.enter_pressed.connect(self.open_folder)
+        nav = QHBoxLayout()
+        self.prev_btn = QPushButton("◀ Previous", left)
+        self.prev_btn.clicked.connect(lambda *_: self.list_vm.prev_page())
+        self.next_btn = QPushButton("Next ▶", left)
+        self.next_btn.clicked.connect(lambda *_: self.list_vm.next_page())
+        nav.addWidget(self.prev_btn)
+        nav.addWidget(self.next_btn)
+        nav.addStretch(1)
+        ll.addLayout(nav)
+        self.help_btn = QPushButton("Help and shortcuts  (F1)", left)
+        theme.set_flag(self.help_btn, "flat", True)
+        self.help_btn.clicked.connect(lambda *_: self.show_shortcuts())
+        ll.addWidget(self.help_btn)
+        self.alpha_banner = QLabel(self.status_vm.notice, left)
+        self.alpha_banner.setObjectName("alphaBanner")
+        self.alpha_banner.setWordWrap(True)
+        self.alpha_banner.setAccessibleName("Scope notice")
+        ll.addWidget(self.alpha_banner)
 
+        # ---- main area: project header, warning, tabs
         detail = QWidget(split)
         dl = QVBoxLayout(detail)
-        dl.setContentsMargins(0, 0, 0, 0)
+        dl.setContentsMargins(20, 16, 16, 8)
+        dl.setSpacing(6)
         buttons = QHBoxLayout()
+        title_col = QVBoxLayout()
+        title_col.setSpacing(0)
         self.project_heading = elastic(QLabel(detail))
         self.project_heading.setObjectName("projectHeading")
         self.project_heading.setTextFormat(Qt.TextFormat.PlainText)
-        self.project_heading.setStyleSheet("font-weight: bold")
+        self.project_sub = elastic(QLabel(detail))
+        self.project_sub.setTextFormat(Qt.TextFormat.PlainText)
+        theme.set_flag(self.project_sub, "role", "muted")
+        title_col.addWidget(self.project_heading)
+        title_col.addWidget(self.project_sub)
         self.open_btn = QPushButton("Open folder", detail)
+        self.open_btn.setToolTip("Open the project folder (Enter on the project list)")
         self.open_btn.clicked.connect(lambda *_: self.open_folder())
         self.archive_btn = QPushButton("Archive", detail)
         self.archive_btn.clicked.connect(lambda *_: self.toggle_archive())
-        buttons.addWidget(self.project_heading, 1)
-        buttons.addWidget(self.open_btn)
-        buttons.addWidget(self.archive_btn)
+        buttons.addLayout(title_col, 1)
+        buttons.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignTop)
+        buttons.addWidget(self.archive_btn, 0, Qt.AlignmentFlag.AlignTop)
         dl.addLayout(buttons)
         self.warning_label = elastic(QLabel(detail))  # above the tabs: must not hide on another tab
-        self.warning_label.setStyleSheet("color: #8a5300")
+        self.warning_label.setObjectName("projectWarning")
         dl.addWidget(self.warning_label)
         tabs = QTabWidget(detail)
         tabs.setAccessibleName("Project contents")
+        tabs.setDocumentMode(True)
         self.tabs = tabs
         self.documents_tab = DocumentsTab(ctl, configure_table, tabs)
         tabs.addTab(self.documents_tab, "Documents")
         files_page = QWidget(tabs)
         fl = QVBoxLayout(files_page)
+        fl.setContentsMargins(0, 8, 0, 0)
         self.file_filter = QLineEdit(files_page)
         self.file_filter.setPlaceholderText("Filter files…")
         self.file_filter.setAccessibleName("Filter baseline files")
+        self.file_filter.setClearButtonEnabled(True)
         self.file_filter.returnPressed.connect(lambda *_: self.filter_files())
         fl.addWidget(self.file_filter)
         self.files = QTableView(files_page)
@@ -180,25 +234,18 @@ class MainWindow(QMainWindow):
         tabs.addTab(files_page, "Baseline files")
         details_page = QWidget(tabs)
         self.detail_form = QFormLayout(details_page)
+        self.detail_form.setContentsMargins(4, 12, 4, 4)
         tabs.addTab(details_page, "Project details")
         dl.addWidget(tabs, 1)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 3)
-        split.setSizes([300, 900])
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([270, 930])
         outer.addWidget(split, 1)
 
-        nav = QHBoxLayout()
-        self.prev_btn = QPushButton("◀ Previous", central)
-        self.prev_btn.clicked.connect(lambda *_: self.list_vm.prev_page())
-        self.next_btn = QPushButton("Next ▶", central)
-        self.next_btn.clicked.connect(lambda *_: self.list_vm.next_page())
-        nav.addWidget(self.prev_btn)
-        nav.addWidget(self.next_btn)
-        nav.addStretch(1)
-        ll.addLayout(nav)
         QWidget.setTabOrder(self.table, self.prev_btn)  # they sit under the list, so they follow it
         QWidget.setTabOrder(self.prev_btn, self.next_btn)
-        QWidget.setTabOrder(self.next_btn, self.open_btn)
+        QWidget.setTabOrder(self.next_btn, self.help_btn)
+        QWidget.setTabOrder(self.help_btn, self.open_btn)
         self.workspace_page = central
         self.stack.addWidget(central)
         self.setCentralWidget(shell)
@@ -210,14 +257,18 @@ class MainWindow(QMainWindow):
         self.render_details()
         self.busy_label = QLabel(self)
         self.busy_label.setAccessibleName("Background task status")
+        self.checkouts_label = QLabel(self)
+        self.checkouts_label.setAccessibleName("Your checkouts")
+        self.statusBar().addPermanentWidget(self.checkouts_label)
         self.statusBar().addPermanentWidget(self.busy_label)
         self._was_busy = False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(100)
         for name in ("search", "archived", "adopt_btn", "new_btn", "table", "open_btn", "archive_btn",
-                     "prev_btn", "next_btn", "file_filter", "files", "stack", "busy_label"):
+                     "prev_btn", "next_btn", "file_filter", "files", "stack", "busy_label", "help_btn"):
             getattr(self, name).setObjectName("main_" + name)
+        self._restore_layout()
 
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
@@ -252,14 +303,36 @@ class MainWindow(QMainWindow):
         adopt_act.triggered.connect(lambda *_: self.adopt())
         prj.addAction(adopt_act)
         self._write_actions.append(adopt_act)
+        view = self.menuBar().addMenu("&View")
+        goto = QAction("Go to anything…", self)
+        goto.setShortcut(QKeySequence("Ctrl+P"))
+        goto.triggered.connect(lambda *_: self.open_palette())
+        view.addAction(goto)
+        mine = QAction("My checkouts…", self)
+        mine.setShortcut(QKeySequence("Ctrl+Shift+M"))
+        mine.triggered.connect(lambda *_: self.show_my_checkouts())
+        view.addAction(mine)
+        view.addSeparator()
+        theme_menu = view.addMenu("Colour theme")
+        self.theme_actions = QActionGroup(self)
+        for key, spec in theme.THEMES.items():
+            act = QAction(spec["label"], self, checkable=True)
+            act.setData(key)
+            act.setChecked(key == self.theme_name)
+            act.triggered.connect(lambda *_, k=key: self.set_theme(k))
+            self.theme_actions.addAction(act)
+            theme_menu.addAction(act)
         help_menu = self.menuBar().addMenu("&Help")
+        guide_act = QAction("User guide", self)
+        guide_act.triggered.connect(lambda *_: QDesktopServices.openUrl(QUrl(DOCS_URL)))
+        help_menu.addAction(guide_act)
         keys_act = QAction("Keyboard shortcuts", self)
-        keys_act.triggered.connect(lambda *_: QMessageBox.information(self, "Keyboard shortcuts", SHORTCUTS_TEXT))
+        keys_act.setShortcut(QKeySequence("F1"))
+        keys_act.triggered.connect(lambda *_: self.show_shortcuts())
         help_menu.addAction(keys_act)
+        help_menu.addSeparator()
         about_act = QAction("About RevisionWorx", self)
-        about_act.triggered.connect(lambda *_: QMessageBox.about(
-            self, "About RevisionWorx", f"RevisionWorx {__version__}\n\n{self.status_vm.alpha_notice}\n\n"
-            "Offline engineering PDM. GPL-3.0-or-later."))
+        about_act.triggered.connect(lambda *_: self.show_about())
         help_menu.addAction(about_act)
         find = QAction("Find", self)
         find.setShortcut(QKeySequence(QKeySequence.StandardKey.Find))
@@ -280,8 +353,7 @@ class MainWindow(QMainWindow):
         if st.health_text:
             self.health_banner.setText(st.health_text)
             self.health_banner.setToolTip(st.health_text)
-            self.health_banner.setStyleSheet(BLOCKED_STYLE if (st.blocked or not st.health.get("ok"))
-                                             else PENDING_STYLE)
+            theme.set_tone(self.health_banner, "danger" if (st.blocked or not st.health.get("ok")) else "info")
             self.health_banner.show()
         else:
             self.health_banner.hide()
@@ -324,9 +396,17 @@ class MainWindow(QMainWindow):
             v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.detail_form.addRow(label, v)
         p = self.detail_vm.project
-        self.project_heading.setText(
-            " ".join(x for x in (p.get("number"), p.get("name")) if x)
-            + f"  ({p.get('mode')}, {p.get('status')})" if p else "")
+        self.project_heading.setText(p.get("name") or p.get("number") or "" if p else "Select a project")
+        self.project_heading.setToolTip(self.project_heading.text())
+        sub = []
+        if p:
+            sub = [x for x in (p.get("number"), p.get("customer")) if x]
+            if p.get("mode") != "managed":
+                sub.append("indexed (search only)")
+            if p.get("status") != "active":
+                sub.append(p.get("status", ""))
+        self.project_sub.setText("  ·  ".join(sub))
+        self.project_sub.setVisible(bool(sub))
         self.warning_label.setText("\n".join(f"⚠ {w}" for w in self.detail_vm.warnings))
         self.warning_label.setToolTip(self.warning_label.text())
         self.warning_label.setVisible(bool(self.detail_vm.warnings))
@@ -357,9 +437,11 @@ class MainWindow(QMainWindow):
         if self.refuse_while_busy():
             event.ignore()
         else:
+            self._save_layout()
             event.accept()
 
-    def open_location(self, location: Path, quiet: bool = False, select_project: str | None = None) -> bool:
+    def open_location(self, location: Path, quiet: bool = False, select_project: str | None = None,
+                      restore_selection: bool = False) -> bool:
         """Open a workspace; on failure stay on (or return to) the start page with the reason."""
         if self.refuse_while_busy(quiet):
             return False
@@ -381,6 +463,11 @@ class MainWindow(QMainWindow):
             self.close_workspace_windows()
         self.setWindowTitle(f"RevisionWorx {__version__} — {info['name']}")
         self.alpha_banner.setText(self.status_vm.notice)
+        self.ws_name.setText(info["name"])
+        self.ws_sub.setText(str(location))
+        self.ws_sub.setToolTip(str(location))
+        if select_project is None and restore_selection:  # app start: back where you left off
+            select_project = (self.ctl.preference("last_project", {}) or {}).get(info["id"])
         self._fill_recent()
         self.stack.setCurrentWidget(self.workspace_page)
         self.status_vm.check()
@@ -388,6 +475,7 @@ class MainWindow(QMainWindow):
         self.select_project(select_project)
         if self.ctl.preferences_warning:
             self.statusBar().showMessage(self.ctl.preferences_warning, 15000)
+        self.update_checkouts_label()
         return True
 
     def close_workspace_windows(self) -> None:
@@ -438,6 +526,9 @@ class MainWindow(QMainWindow):
         self.ctl.close_workspace()
         self.setWindowTitle(f"RevisionWorx {__version__}")
         self.alpha_banner.setText(self.status_vm.notice)
+        self.ws_name.setText("RevisionWorx")
+        self.ws_sub.setText("")
+        self.checkouts_label.setText("")
         self.list_vm.refresh()
         self.detail_vm.load(None)
         self.documents_tab.load_project(None)
@@ -495,6 +586,11 @@ class MainWindow(QMainWindow):
             self.documents_tab.load_project(pid)
         except Exception as exc:
             self.error("Cannot load project", exc)
+        if pid and self.ctl.workspace_id:
+            last = dict(self.ctl.preference("last_project", {}) or {})
+            if last.get(self.ctl.workspace_id) != pid:
+                last[self.ctl.workspace_id] = pid
+                self.ctl.set_preference("last_project", last)
 
     def filter_files(self) -> None:
         self.detail_vm.file_filter = self.file_filter.text()
@@ -555,10 +651,179 @@ class MainWindow(QMainWindow):
             self.update_write_actions()
             self.documents_tab.update_add_actions()  # no list rebuild: that re-reads the workspace mid-write
             self.documents_tab.render_panel()
+            if not busy:
+                self.update_checkouts_label()
         for ev in events:
             if isinstance(ev, Progress):
                 for d in self.adopt_dialogs:
                     d.flow.on_progress(ev)
+
+    # ------------------------------------------------------------------ redesign: themes, palette, about, layout
+    def set_theme(self, name: str) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        self.theme_name = theme.apply(app, name)
+        self.ctl.set_preference("theme", self.theme_name)
+        for act in self.theme_actions.actions():
+            act.setChecked(act.data() == self.theme_name)
+        for view in (self.table, self.documents_tab.table, self.documents_tab.history, self.files):
+            view.viewport().update()
+        self.documents_tab.render_panel()
+        self.render_health()
+
+    def show_shortcuts(self) -> None:
+        QMessageBox.information(self, "Keyboard shortcuts", SHORTCUTS_TEXT)
+
+    def show_about(self) -> None:
+        AboutDialog(self).exec()
+
+    def palette_actions(self) -> list:
+        tab, p = self.documents_tab, self.documents_tab.panel
+        has_ws = lambda: self.ctl.location is not None  # noqa: E731
+        return [
+            ("Check out the selected document", "edit reserve lock", tab.checkout, lambda: p.can_checkout),
+            ("Check in the selected document…", "save revision commit", tab.checkin, lambda: p.can_checkin),
+            ("Import a file into this project…", "add upload copy", tab.import_file, lambda: tab.list_vm.can_add),
+            ("Open the selected document's file", "launch cad", tab.open_file, lambda: p.can_open_file),
+            ("Show the selected document in its folder", "explorer finder", tab.open_folder, lambda: bool(p.detail)),
+            ("My checkouts…", "mine checked out", self.show_my_checkouts, has_ws),
+            ("New project…", "create", self.new_project, lambda: has_ws() and not self.ctl.read_only),
+            ("Adopt an existing project…", "register folder", self.adopt, lambda: has_ws() and not self.ctl.read_only),
+            ("Open the project folder", "explorer", self.open_folder, lambda: self.detail_vm.can_open_folder),
+            ("Check workspace health", "doctor verify", lambda: self.status_vm.check(), has_ws),
+            ("Refresh", "reload f5", self.refresh_all, has_ws),
+            ("Open workspace…", "switch", self.open_ws, lambda: True),
+            *[(f"Colour theme: {spec['label']}", "theme dark light colour color", (lambda k=k: self.set_theme(k)),
+               lambda: True) for k, spec in theme.THEMES.items()],
+            ("Keyboard shortcuts", "help keys", self.show_shortcuts, lambda: True),
+            ("About RevisionWorx", "version licence", self.show_about, lambda: True),
+        ]
+
+    def open_palette(self) -> PaletteDialog:
+        model = CommandPalette(self.ctl, self.palette_actions())
+        dlg = PaletteDialog(model, self._palette_chose, self)
+        dlg.show()
+        dlg.search.setFocus()
+        self._palette = dlg
+        return dlg
+
+    def _palette_chose(self, kind: str, payload) -> None:
+        if kind == "action":
+            payload()
+        elif kind == "project":
+            self.reveal_project(payload)
+        elif kind == "document":
+            self.go_to_document(*payload)
+
+    def reveal_project(self, project_id: str) -> None:
+        """Select a project even if the current search or page hides it."""
+        if self.list_vm.index_of(project_id) is None:
+            self.search.clear()
+            self.archived.setChecked(True)
+            self.list_vm.set_query("", True)
+        self.select_project(project_id)
+        self.tabs.setCurrentWidget(self.documents_tab)
+
+    def go_to_document(self, project_id: str | None, doc_id: str) -> bool:
+        if project_id is None:
+            try:
+                project_id = self.ctl.document_detail(doc_id)["document"]["project_id"]
+            except Exception as exc:
+                self.error("Cannot show the document", exc)
+                return False
+        self.reveal_project(project_id)
+        self.documents_tab.filter.clear()
+        if self.documents_tab.list_vm.text:
+            self.documents_tab.apply_filter()
+        found = self.documents_tab.select_document(doc_id)
+        if found:
+            self.documents_tab.table.setFocus()
+        return found
+
+    def show_my_checkouts(self) -> None:
+        if self.ctl.location is None:
+            return
+        try:
+            mine = self.ctl.my_checkouts()
+        except Exception as exc:
+            self.error("Cannot list your checkouts", exc)
+            return
+        if not mine:
+            QMessageBox.information(self, "My checkouts", "You have no documents checked out in this workspace.")
+            return
+        model = CommandPalette(self.ctl, [])
+        model.items = [{"kind": "document", "title": " ".join(x for x in (d["number"], d["title"]) if x) or d["rel_path"],
+                        "subtitle": f"Checked out by you · {d['rel_path']}", "payload": (d["project_id"], d["id"])}
+                       for d in mine]
+        dlg = PaletteDialog(model, self._palette_chose, self)
+        dlg.setWindowTitle("My checkouts")
+        dlg.search.hide()
+        dlg.render()
+        dlg.show()
+        dlg.list.setFocus()
+        self._palette = dlg
+
+    def update_checkouts_label(self) -> None:
+        if self.ctl.location is None:
+            self.checkouts_label.setText("")
+            return
+        try:
+            n = len(self.ctl.my_checkouts())
+        except Exception:  # noqa: BLE001 - a status hint must never raise
+            n = 0
+        self.checkouts_label.setText(f"{n} checked out by you  (Ctrl+Shift+M)" if n else "")
+
+    # drag and drop: files dropped on the window are imported into the selected project
+    def _dropped_files(self, event) -> list[Path]:
+        md = event.mimeData()
+        if not md.hasUrls():
+            return []
+        return [Path(u.toLocalFile()) for u in md.urls() if u.isLocalFile() and Path(u.toLocalFile()).is_file()]
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._dropped_files(event) and self.documents_tab.list_vm.can_add:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt API
+        files = self._dropped_files(event)
+        if files:
+            event.acceptProposedAction()
+            self.import_dropped(files)
+
+    def import_dropped(self, files: list[Path]) -> None:
+        if not self.documents_tab.list_vm.can_add:
+            return
+        if len(files) > 10:
+            QMessageBox.information(self, "Too many files", "Drop up to 10 files at a time; each gets its own "
+                                    "import window so you can give it a number and title.")
+            return
+        self.tabs.setCurrentWidget(self.documents_tab)
+        for f in files:
+            self.documents_tab.import_file(f)
+
+    # remembered window layout
+    def _save_layout(self) -> None:
+        try:
+            self.ctl.set_preference("window", {
+                "geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
+                "main_split": self.main_split.sizes(), "doc_split": self.documents_tab.split.sizes()})
+        except Exception:  # noqa: BLE001 - never stop the window closing
+            pass
+
+    def _restore_layout(self) -> None:
+        saved = self.ctl.preference("window", {}) or {}
+        try:
+            if saved.get("geometry"):
+                self.restoreGeometry(QByteArray.fromBase64(saved["geometry"].encode("ascii")))
+            if isinstance(saved.get("main_split"), list) and len(saved["main_split"]) == 2:
+                self.main_split.setSizes([int(x) for x in saved["main_split"]])
+            if isinstance(saved.get("doc_split"), list) and len(saved["doc_split"]) == 2:
+                self.documents_tab.split.setSizes([int(x) for x in saved["doc_split"]])
+        except (TypeError, ValueError, AttributeError):
+            pass
 
     # ------------------------------------------------------------------ test observable (stable)
     def observable_state(self) -> dict:

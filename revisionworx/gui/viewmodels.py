@@ -8,7 +8,7 @@ form validates, what text a report contains - lives here and is tested headless.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from .. import projects
 from .controller import (ALPHA_NOTICE, Controller, JobResult, Progress, SavedWithWarning,
@@ -378,7 +378,11 @@ class DocumentListModel(Observable):
         self.project: dict | None = None
         self.text = ""
         self.rows: list[dict] = []
+        self.all_rows: list[dict] = []
+        self.quick = "all"            # all | mine | attention (the filter chips above the list)
         self.error: str | None = None
+
+    QUICK_FILTERS = (("all", "All"), ("mine", "Checked out by me"), ("attention", "Needs attention"))
 
     def load(self, project_id: str | None) -> None:
         self.project_id = project_id
@@ -395,10 +399,35 @@ class DocumentListModel(Observable):
         try:
             rows = self.ctl.documents(self.project_id, self.text) if self.project_id else []
             states = self.ctl.file_states([r["id"] for r in rows]) if rows else {}
-            self.rows = [{**r, "file_state": states.get(r["id"], "unavailable")} for r in rows]
+            self.all_rows = [{**r, "file_state": states.get(r["id"], "unavailable")} for r in rows]
         except Exception as exc:
-            self.rows, self.error = [], describe_error(exc)
+            self.all_rows, self.error = [], describe_error(exc)
+        self.rows = [r for r in self.all_rows if self._passes(r, self.quick)]
         self.changed()
+
+    def _passes(self, row: dict, quick: str) -> bool:
+        if quick == "mine":
+            from ..workspace import current_actor
+            me = current_actor()
+            return bool(row.get("checked_out_by")) and row.get("checked_out_by") == me["user"] and \
+                row.get("checked_out_host") == me["host"]
+        if quick == "attention":
+            return self._severity_of(row) != "ok"
+        return True
+
+    def set_quick(self, quick: str) -> None:
+        self.quick = quick if quick in dict(self.QUICK_FILTERS) else "all"
+        self.rows = [r for r in self.all_rows if self._passes(r, self.quick)]
+        self.changed()
+
+    @property
+    def quick_counts(self) -> dict[str, int]:
+        return {key: sum(1 for r in self.all_rows if self._passes(r, key)) for key, _ in self.QUICK_FILTERS}
+
+    @staticmethod
+    def _severity_of(row: dict) -> str:
+        return {"missing": "error", "unavailable": "error", "modified-externally": "warning"}.get(
+            row.get("file_state"), "ok")
 
     def cell(self, row: int, col: int) -> str:
         key = self.COLUMNS[col].key
@@ -408,12 +437,15 @@ class DocumentListModel(Observable):
         return "" if v is None else str(v)
 
     def row_severity(self, row: int) -> str:
-        state = self.rows[row].get("file_state")
-        return {"missing": "error", "unavailable": "error", "modified-externally": "warning"}.get(state, "ok")
+        return self._severity_of(self.rows[row])
+
+    def row_state(self, row: int) -> str:
+        """The latest revision's lifecycle state id (colours the State column)."""
+        return self.rows[row].get("latest_state") or ""
 
     @property
     def problem_count(self) -> int:
-        return sum(1 for i in range(len(self.rows)) if self.row_severity(i) != "ok")
+        return sum(1 for r in self.all_rows if self._severity_of(r) != "ok")
 
     @property
     def can_add(self) -> bool:
@@ -436,8 +468,13 @@ class DocumentListModel(Observable):
                     "project.")
         if p.get("status") != "active":
             return "This project is archived. Restore it to add or change documents."
-        if not self.rows and not self.text:
-            return "No documents yet. Use “Import file…” to copy a file into this project."
+        if not self.all_rows and not self.text:
+            return ("No documents yet. Use “Import file…” (or drop files on this window) to bring files into "
+                    "this project.")
+        if not self.rows and self.quick == "mine":
+            return "You have no documents checked out in this project."
+        if not self.rows and self.quick == "attention":
+            return "Nothing needs attention in this project."
         if self.problem_count:
             return (f"⚠ {self.problem_count} document(s) need attention: working file missing or changed "
                     "without a checkout. Select one for details.")
@@ -615,6 +652,40 @@ class DocumentPanel(Observable):
     @property
     def can_checkin(self) -> bool:
         return bool(self.detail) and self.detail["mine"] and not self.ctl.busy and not self.ctl.read_only
+
+    @property
+    def headline(self) -> tuple[str, str, str]:
+        """(title, one-sentence explanation, tone) for the status card: what is true and what to do next.
+        Tone: ok | info | warn | danger | neutral (see gui/qt/theme.py)."""
+        if not self.detail:
+            return ("", "", "neutral")
+        st = self.detail["status"]["state"]
+        co = self.detail["checkout"]
+        if st == "missing":
+            return ("File missing", "The working file is not where RevisionWorx expects it. Restore it, or cancel "
+                    "the checkout and discard edits to bring back the latest revision.", "danger")
+        if co and not self.detail["mine"]:
+            who = f"{co['owner'].get('user')}@{co['owner'].get('host')}"
+            return (f"Checked out by {who}", "Read-only for you until they check it in.", "warn")
+        if st == "modified-externally":
+            return ("Changed without a checkout", "Someone edited the file without checking it out. Check it "
+                    "out, then check it in to keep the edits as a new revision.", "warn")
+        if co:
+            if st == "modified":
+                return ("Checked out by you · edited", "Check in to record your edits as a new revision.", "info")
+            return ("Checked out by you", "Edit the file, save it, then Check in.", "info")
+        if st == "unrevisioned":
+            return ("No revision yet", "Nothing has been captured for this document.", "neutral")
+        return ("Available", "Check it out before you change the file.", "ok")
+
+    @property
+    def primary_action(self) -> str:
+        """The one obvious next step: checkout | checkin | none."""
+        if self.can_checkin:
+            return "checkin"
+        if self.can_checkout:
+            return "checkout"
+        return "none"
 
     @property
     def ownership_text(self) -> str:
@@ -958,3 +1029,56 @@ class AppStatus(Observable):
         elif self.blocked:
             text += "\n\nRevisionWorx is READ-ONLY for this workspace: browsing and exporting work; all changes are disabled."
         return text
+
+
+class CommandPalette(Observable):
+    """"Go to anything" (Ctrl+P): actions, projects and documents of the open workspace in one list.
+
+    ``actions`` is a list of ``(title, keywords, callback, enabled)``: the window supplies them, so this stays
+    toolkit-free. Choosing an item returns ``(kind, payload)``: ("action", callback), ("project", project_id) or
+    ("document", (project_id, document_id))."""
+
+    LIMIT = 40
+
+    def __init__(self, ctl: Controller, actions: list[tuple[str, str, Callable[[], None], Callable[[], bool]]]):
+        super().__init__()
+        self.ctl = ctl
+        self.actions = actions
+        self.text = ""
+        self.items: list[dict] = []
+        self.error: str | None = None
+        self.search("")
+
+    def search(self, text: str) -> None:
+        self.text = text
+        needle = text.strip().casefold()
+        items: list[dict] = []
+        for title, keywords, callback, enabled in self.actions:
+            if not needle or needle in title.casefold() or needle in keywords.casefold():
+                if enabled():
+                    items.append({"kind": "action", "title": title, "subtitle": "Action", "payload": callback})
+        self.error = None
+        if self.ctl.location is not None and needle:
+            try:
+                found = self.ctl.search_everything(text, limit=15)
+            except Exception as exc:  # noqa: BLE001 - shown in the palette, never raised at the user
+                found, self.error = {"projects": [], "documents": []}, describe_error(exc)
+            for p in found["projects"]:
+                items.append({"kind": "project", "title": p.get("name") or p["id"],
+                              "subtitle": "Project" + (f" · {p['number']}" if p.get("number") else ""),
+                              "payload": p["id"]})
+            for d in found["documents"]:
+                label = " ".join(x for x in (d.get("number"), d.get("title")) if x) or d["rel_path"]
+                sub = f"Document · {d['rel_path']}" + (f" · {d['project_name']}" if d.get("project_name") else "")
+                if d.get("latest_label"):
+                    sub += f" · rev {d['latest_label']}"
+                items.append({"kind": "document", "title": label, "subtitle": sub,
+                              "payload": (d["project_id"], d["id"])})
+        self.items = items[: self.LIMIT]
+        self.changed()
+
+    def choose(self, row: int) -> tuple[str, Any] | None:
+        if 0 <= row < len(self.items):
+            item = self.items[row]
+            return item["kind"], item["payload"]
+        return None

@@ -125,6 +125,21 @@ class Controller:
         recent = self._preferences().get("recent")
         return [r for r in recent if r and isinstance(r, str)] if isinstance(recent, list) else []
 
+    def preference(self, key: str, default: Any = None) -> Any:
+        """A per-user setting (theme, window layout, last selection). Never fails: damage reads as default."""
+        value = self._preferences().get(key, default)
+        return default if value is None else value
+
+    def set_preference(self, key: str, value: Any) -> None:
+        """Save a per-user setting. Failing to is never a failure of what the user was doing."""
+        prefs = self._preferences()
+        prefs[key] = value
+        try:
+            self.cfg_dir.mkdir(parents=True, exist_ok=True)
+            atomicio.atomic_write_json(self._prefs_path(), prefs)
+        except OSError as exc:
+            self.preferences_warning = f"Preferences could not be saved in {self.cfg_dir}: {exc.strerror or exc}"
+
     def _remember(self, location: Path) -> None:
         """Failing to record a convenience list is not a failure to open the workspace."""
         recent = [str(location)] + [r for r in self.recent_workspaces() if r != str(location)]
@@ -432,6 +447,29 @@ class Controller:
     def documents(self, project_id: str, text: str = "") -> list[dict]:
         with self._read() as ws, self._index(ws) as idx:
             return idx.documents(project_id, text)
+
+    def search_everything(self, text: str, limit: int = 25) -> dict:
+        """Projects and documents of the whole workspace matching ``text`` (local index; never unmanaged folders)."""
+        with self._read() as ws, self._index(ws) as idx:
+            projects_ = idx.search_projects(text, include_archived=True, limit=limit)
+            docs = idx.documents(None, text, limit=limit) if text.strip() else []
+            names = {p["id"]: p for p in ws.list("project").values()}
+            for d in docs:
+                p = names.get(d["project_id"]) or {}
+                d["project_name"], d["project_number"] = p.get("name", ""), p.get("number", "")
+            return {"projects": projects_, "documents": docs}
+
+    def my_checkouts(self) -> list[dict]:
+        """Documents this session has checked out (it holds their tokens), across the workspace."""
+        with self._read() as ws:
+            out = []
+            for co in ws.list("checkout").values():
+                if self.tokens.get(ws.id, co["document_id"]) == co.get("token"):
+                    doc = ws.get("document", co["document_id"])
+                    if doc:
+                        out.append({"id": doc["id"], "project_id": doc["project_id"], "number": doc.get("number", ""),
+                                    "title": doc.get("title", ""), "rel_path": doc["rel_path"]})
+            return out
 
     def document_detail(self, doc_id: str, verify_hash: bool = False) -> dict:
         with self._read() as ws:

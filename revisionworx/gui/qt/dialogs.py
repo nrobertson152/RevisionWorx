@@ -9,12 +9,13 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from ...workspace import CommittedNotApplied
 from ..controller import Controller, SavedWithWarning, describe_error
 from ..viewmodels import AdoptFlow, CheckinForm, ImportFlow, NewProjectForm
+from . import theme
 
 
 def error_label(parent) -> QLabel:
     label = QLabel(parent)
     label.setObjectName("formError")
-    label.setStyleSheet("color: #b00020")
+    theme.set_flag(label, "role", "error")
     label.setWordWrap(True)
     return label
 
@@ -119,6 +120,10 @@ class ImportDialog(QDialog):
             self.title.setText(self.flow.title)
         self.render()
 
+    def set_source(self, path: str) -> None:
+        """Pre-fill the file to import (a file dropped on the window)."""
+        self.source.setText(path)
+
     def browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "File to import (it is copied, not moved)")
         if path:
@@ -139,7 +144,7 @@ class ImportDialog(QDialog):
         self.dest.setText(self.flow.destination_preview or "—")
         self.import_btn.setEnabled(self.flow.can_import)
         error = self.flow.state == "error" or bool(self.flow.errors)
-        self.message.setStyleSheet("color: #b00020" if error else "")
+        theme.set_flag(self.message, "role", "error" if error else "")
         self.message.setText(self.flow.message)
 
 
@@ -169,7 +174,7 @@ class NewProjectDialog(QDialog):
         self.tpl_box.setCurrentIndex(max(0, self.tpl_box.findData("standard")))
         layout.addRow("Folder template", self.tpl_box)
         self.error_label = QLabel(self)
-        self.error_label.setStyleSheet("color: #b00020")
+        self.error_theme.set_flag(label, "role", "error")
         self.error_label.setWordWrap(True)
         layout.addRow(self.error_label)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |

@@ -110,6 +110,33 @@ jobs:
           path: dist
           retention-days: 14
 
+  screenshots:
+    name: "ubuntu-latest / screenshots for design review"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Qt runtime libraries and fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0 fonts-dejavu-core fonts-noto-core
+      - run: python -m pip install -e ".[dev]"
+      - name: Take screenshots
+        run: python tests/screenshot_gui.py shots
+      - name: Print screenshots (base64, for reviewers without artifact access)
+        run: |
+          for f in shots/*.png; do echo "===BEGIN $(basename $f)==="; base64 -w0 "$f"; echo; echo "===END==="; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-screenshots
+          path: shots
+          retention-days: 14
+
   real-display:
     name: "ubuntu-latest / keyboard walkthrough on a real X display"
     runs-on: ubuntu-latest
