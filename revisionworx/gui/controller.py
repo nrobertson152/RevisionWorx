@@ -487,6 +487,11 @@ class Controller:
                     "latest": latest,
                     "transitions": allowed_targets(lc, latest["state"]) if latest else []}
 
+    def state_names(self) -> dict[str, str]:
+        """Lifecycle state id -> display name (the workspace's lifecycle)."""
+        with self._read() as ws:
+            return {st["id"]: st["name"] for st in documents.get_lifecycle(ws)["states"]}
+
     def doctypes(self) -> dict[str, dict]:
         with self._read() as ws:
             return documents.list_doctypes(ws)

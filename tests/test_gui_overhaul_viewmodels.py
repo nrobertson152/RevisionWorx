@@ -65,6 +65,8 @@ def test_quick_filters_and_counts(started, tmp_path):
     lst.set_quick("bogus")
     assert lst.quick == "all" and len(lst.rows) == 3
     assert lst.row_state(0) == "wip"
+    col = [c.key for c in lst.COLUMNS].index("latest_state")
+    assert lst.cell(0, col) == "Work in Progress"       # the lifecycle's name, never the internal id
     c.cancel_checkout(docs[1]["id"])
     lst.set_quick("mine")
     lst.refresh()
@@ -129,3 +131,15 @@ def test_command_palette_lists_actions_projects_and_documents(started):
     c.close_workspace()
     pal.search("manifold")
     assert pal.items == [] and pal.error is None
+
+
+def test_history_dates_are_short_in_the_table(started):
+    from revisionworx.gui.viewmodels import short_time
+    assert short_time("2026-11-05T00:49:05+00:00") == "2026-11-05 00:49"
+    assert short_time("") == "" and short_time("odd") == "odd"
+    c, p, docs = started
+    panel = DocumentPanel(c)
+    panel.load(docs[0]["id"])
+    col = [k.key for k in panel.HISTORY_COLUMNS].index("created")
+    assert panel.history_cell(0, col) == short_time(panel.history[0]["created"])
+    assert "T" not in panel.history_cell(0, col)

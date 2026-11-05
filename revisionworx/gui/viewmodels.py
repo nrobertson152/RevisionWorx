@@ -7,6 +7,8 @@ form validates, what text a report contains - lives here and is tested headless.
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -362,12 +364,18 @@ def preview_report(s: dict) -> str:
     return "\n".join(lines)
 
 
+def short_time(stamp: str) -> str:
+    """'2026-11-05T00:49:05+00:00' -> '2026-11-05 00:49' for tables (the full stamp stays in the details)."""
+    m = re.match(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})", stamp or "")
+    return f"{m.group(1)} {m.group(2)}" if m else (stamp or "")
+
+
 # ---------------------------------------------------------------------------- Phase 2: documents
 class DocumentListModel(Observable):
-    COLUMNS = (Column("number", "Number", 100), Column("title", "Title", 200, True),
-               Column("latest_label", "Rev", 50), Column("latest_state", "State", 100),
-               Column("released_label", "Released", 70), Column("checked_out_by", "Checked out by", 120),
-               Column("file_state", "Working file", 130), Column("rel_path", "File", 260, True))
+    COLUMNS = (Column("number", "Number", 96), Column("title", "Title", 200, True),
+               Column("latest_label", "Rev", 42), Column("latest_state", "State", 128),
+               Column("released_label", "Released", 70), Column("checked_out_by", "Checked out by", 112),
+               Column("file_state", "Working file", 104), Column("rel_path", "File", 260, True))
     FILE_STATE_TEXT = {"unchanged": "OK", "modified": "Edited", "modified-externally": "⚠ Changed, not checked out",
                        "missing": "⚠ Missing", "unrevisioned": "No revision", "unavailable": "⚠ Unavailable"}
 
@@ -381,6 +389,7 @@ class DocumentListModel(Observable):
         self.all_rows: list[dict] = []
         self.quick = "all"            # all | mine | attention (the filter chips above the list)
         self.error: str | None = None
+        self.state_names: dict[str, str] = {}
 
     QUICK_FILTERS = (("all", "All"), ("mine", "Checked out by me"), ("attention", "Needs attention"))
 
@@ -400,6 +409,7 @@ class DocumentListModel(Observable):
             rows = self.ctl.documents(self.project_id, self.text) if self.project_id else []
             states = self.ctl.file_states([r["id"] for r in rows]) if rows else {}
             self.all_rows = [{**r, "file_state": states.get(r["id"], "unavailable")} for r in rows]
+            self.state_names = self.ctl.state_names() if rows else self.state_names
         except Exception as exc:
             self.all_rows, self.error = [], describe_error(exc)
         self.rows = [r for r in self.all_rows if self._passes(r, self.quick)]
@@ -434,6 +444,8 @@ class DocumentListModel(Observable):
         v = self.rows[row].get(key)
         if key == "file_state":
             return self.FILE_STATE_TEXT.get(v, v or "")
+        if key == "latest_state":
+            return self.state_names.get(v, v or "")
         return "" if v is None else str(v)
 
     def row_severity(self, row: int) -> str:
@@ -486,8 +498,8 @@ class DocumentListModel(Observable):
 
 class DocumentPanel(Observable):
     """Selected document: details, history and which actions are currently possible."""
-    HISTORY_COLUMNS = (Column("label", "Rev", 50), Column("state_name", "State", 110),
-                       Column("created", "Date", 160), Column("author", "Author", 100),
+    HISTORY_COLUMNS = (Column("label", "Rev", 42), Column("state_name", "State", 128),
+                       Column("created", "Date", 128), Column("author", "Author", 100),
                        Column("description", "Change", 260, True))
 
     def __init__(self, ctl: Controller):
@@ -625,6 +637,8 @@ class DocumentPanel(Observable):
             return state_name(self.detail["lifecycle"], r["state"])
         if key == "author":
             return r["author"].get("user", "")
+        if key == "created":
+            return short_time(r.get("created", ""))
         return str(r.get(key, ""))
 
     @property
