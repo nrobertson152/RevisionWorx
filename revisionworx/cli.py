@@ -420,6 +420,8 @@ def build_parser() -> argparse.ArgumentParser:
                    add_help=False)
     sub.add_parser("change", help="engineering changes (ECR/ECO): list, show, impact, verify, export, "
                    "import-csv (run 'revisionworx change -h')", add_help=False)
+    sub.add_parser("link", help="JSON commands for other programs: status, publish, fetch, open "
+                   "(see docs/INTEGRATION.md)", add_help=False)
 
     s = sub.add_parser("init", help="create a new workspace")
     s.add_argument("location"); s.add_argument("--name", required=True); s.set_defaults(fn=cmd_init)
@@ -554,9 +556,12 @@ def _delegate(argv: list[str]) -> int | None:
             i += 1
         else:
             return None                       # --help, --version etc.: the main parser handles them
-    if i >= len(argv) or argv[i] not in ("bom", "change"):
+    if i >= len(argv) or argv[i] not in ("bom", "change", "link"):
         return None
     rest = argv[i + 1:]
+    if argv[i] == "link":
+        from .integration import main as link_main
+        return link_main(rest, workspace)
     if argv[i] == "bom":
         from .bom.__main__ import main as bom_main
         return bom_main(rest, prog="revisionworx bom")

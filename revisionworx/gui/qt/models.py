@@ -35,14 +35,20 @@ class EnterTable(QTableView):
 class ViewModelTable(QAbstractTableModel):
     """Read-only table over any view-model exposing ``rows``-like data through callbacks."""
 
-    SEVERITY_COLORS = {"warning": "#8a5300", "error": "#b00020"}
-
     def __init__(self, columns: Sequence[Column], count: Callable[[], int],
                  cell: Callable[[int, int], str], parent=None,
-                 severity: Callable[[int], str] | None = None):
+                 severity: Callable[[int], str] | None = None, chip_column: int | None = None,
+                 chip_tone: Callable[[int], str] | None = None):
         super().__init__(parent)
         self._columns, self._count, self._cell = tuple(columns), count, cell
         self._severity = severity
+        self._chip_column, self._chip_tone = chip_column, chip_tone
+
+    @staticmethod
+    def _theme() -> str:
+        from PySide6.QtWidgets import QApplication
+        from . import theme
+        return theme.current(QApplication.instance())
 
     def reload(self) -> None:
         self.beginResetModel()
@@ -59,9 +65,15 @@ class ViewModelTable(QAbstractTableModel):
             return None
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             return self._cell(index.row(), index.column())
+        from . import theme
+        if (self._chip_column is not None and self._chip_tone is not None and index.column() == self._chip_column
+                and role in (Qt.ItemDataRole.ForegroundRole, Qt.ItemDataRole.BackgroundRole)
+                and self._cell(index.row(), index.column())):
+            bg, fg = theme.tone_colors(self._theme(), self._chip_tone(index.row()))
+            return QColor(fg if role == Qt.ItemDataRole.ForegroundRole else bg)
         if role == Qt.ItemDataRole.ForegroundRole and self._severity is not None:
-            color = self.SEVERITY_COLORS.get(self._severity(index.row()))
-            return QColor(color) if color else None
+            tone = {"warning": "warn", "error": "danger"}.get(self._severity(index.row()))
+            return QColor(theme.tone_colors(self._theme(), tone)[1]) if tone else None
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802

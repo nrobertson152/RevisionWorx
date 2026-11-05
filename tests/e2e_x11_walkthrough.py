@@ -218,7 +218,8 @@ window_is("RevisionWorx 1.")
 print("5. Tab reaches the history, then restore an older revision", flush=True)
 check_out_by_keyboard()
 key("ctrl+shift+f")
-key(*["Tab"] * 12)  # filter, Import, Register, table, Check in, Cancel, Open file, folder, state x2, Export, Compare
+key(*["Tab"] * 15)  # filter, Import, Register, 3 filter chips, table, Check in, Cancel, Open file, folder, Export,
+#                    state x2, Compare
 key("Down")
 key("alt+t")
 window_is("Restore earlier")

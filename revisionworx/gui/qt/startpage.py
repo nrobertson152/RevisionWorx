@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
 from ..controller import Controller, SavedWithWarning, describe_error
 from ...workspace import CommittedNotApplied
 from ..viewmodels import QuickStartForm
+from . import theme
 from .models import elastic
 
 
@@ -65,7 +66,7 @@ class StartPage(QWidget):
         self.preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addRow("Will create", self.preview)
         self.error_label = elastic(QLabel(box))
-        self.error_label.setStyleSheet("color: #b00020")
+        theme.set_flag(self.error_label, "role", "error")
         form.addRow(self.error_label)
         self.create_btn = QPushButton("Create &project", box)
         self.create_btn.setDefault(True)

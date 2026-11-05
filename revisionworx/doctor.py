@@ -163,8 +163,17 @@ def _check_locks(ws: Workspace, out: _Report, journal_whole: bool) -> None:
         if name.startswith((".releasing-", ".fencing-")):
             try:
                 token = Workspace._read_holder(path)["token"]
-            except (OSError, ValueError):
-                token = None
+            except FileNotFoundError:
+                continue                             # its release finished while we looked
+            except ValueError:
+                token = None                         # present and damaged: nobody can revoke its writer
+            except OSError:
+                # Busy, not damaged (ADR-019 rev. 5): on Windows a live writer's in-flight release file, or one a
+                # virus scanner holds, refuses reads for a moment. Writers answer "busy, retry" here; so does this.
+                if path.exists():
+                    out.add("L009", WARNING, f"locks/{name}", "could not be read right now: a release is in progress "
+                            "or another program has the file open", "run the check again; if this stays, see L005")
+                continue
             if token:
                 out.add("L004", WARNING, f"locks/{name}", "a displaced lock, or a release interrupted partway",
                         "none: the next writer revokes it and files it as evidence")

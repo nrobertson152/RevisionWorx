@@ -110,14 +110,31 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication([sys.argv[0], *argv])
     app.setApplicationName("RevisionWorx")
     app.setOrganizationName("RevisionWorx")
+    location, document = _parse(argv)
     window = MainWindow(Controller())
     window.show()
     recent = window.ctl.recent_workspaces()
-    if argv:
-        window.open_location(Path(argv[0]))
+    if location:
+        if window.open_location(Path(location), restore_selection=document is None) and document:
+            window.go_to_document(None, document)
     elif recent and Path(recent[0]).exists():
-        window.open_location(Path(recent[0]), quiet=True)  # failure -> start page shows why
+        window.open_location(Path(recent[0]), quiet=True, restore_selection=True)  # failure -> start page shows why
     return app.exec()
+
+
+def _parse(argv: list[str]) -> tuple[str | None, str | None]:
+    """``[WORKSPACE] [--document DOC_ID]`` (``revisionworx link open`` starts the window this way)."""
+    location = document = None
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--document" and i + 1 < len(argv):
+            document = argv[i + 1]
+            i += 2
+            continue
+        if not argv[i].startswith("-") and location is None:
+            location = argv[i]
+        i += 1
+    return location, document
 
 
 if __name__ == "__main__":
