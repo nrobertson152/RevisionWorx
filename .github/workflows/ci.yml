@@ -21,7 +21,7 @@ jobs:
   tests:
     name: "${{ matrix.os }} / Python ${{ matrix.python }}"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90   # the Windows full suite + Qt pass takes ~57 min on hosted runners (CI 41955450785)
     env:
       QT_QPA_PLATFORM: offscreen
     strategy:
