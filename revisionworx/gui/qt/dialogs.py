@@ -174,7 +174,7 @@ class NewProjectDialog(QDialog):
         self.tpl_box.setCurrentIndex(max(0, self.tpl_box.findData("standard")))
         layout.addRow("Folder template", self.tpl_box)
         self.error_label = QLabel(self)
-        self.error_theme.set_flag(label, "role", "error")
+        theme.set_flag(self.error_label, "role", "error")
         self.error_label.setWordWrap(True)
         layout.addRow(self.error_label)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |

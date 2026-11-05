@@ -190,13 +190,16 @@ def test_window_layout_and_last_project_are_remembered(win, qapp, tmp_path):
     from revisionworx.gui.qt.mainwindow import MainWindow
     w, ctl, p, docs, other = win
     w.select_project(other["id"])
-    w.main_split.setSizes([300, 900])
+    total = sum(w.main_split.sizes())
+    w.main_split.setSizes([300, total - 300])
+    chosen = w.main_split.sizes()[0]          # what the splitter really gave (it scales to its own width)
+    assert chosen != 270                      # differs from the default, so restoring is observable
     w.close()
     again = MainWindow(make_ctl(tmp_path))
     again.show()
     assert again.open_location(tmp_path / "home", quiet=True, restore_selection=True)
     assert again.selected_project_id() == other["id"]
-    assert abs(again.main_split.sizes()[0] - 300) <= 40
+    assert abs(again.main_split.sizes()[0] - chosen) <= 40
     again.close()
     third = MainWindow(make_ctl(tmp_path))
     assert third.open_location(tmp_path / "home", quiet=True)          # a plain open keeps the predictable choice

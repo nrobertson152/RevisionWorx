@@ -11,9 +11,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-                               QStyle, QTableView, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel,
+                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
+                               QSplitter, QStyle, QTableView, QVBoxLayout, QWidget)
 
 from ..controller import Controller, SavedWithWarning, describe_error
 from ..viewmodels import DocumentListModel, DocumentPanel
@@ -114,9 +114,16 @@ class DocumentsTab(QWidget):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.context_menu)
 
-        detail = QWidget(split)
+        # The panel scrolls rather than squeezing: its buttons keep their full width and the history its rows at
+        # any window size, and a tall panel does not raise the window's minimum height.
+        panel_scroll = QScrollArea(split)
+        panel_scroll.setObjectName("documentPanelScroll")
+        panel_scroll.setWidgetResizable(True)
+        panel_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        panel_scroll.setMinimumWidth(330)
+        panel_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)     # not a Tab stop: the Tab order is a tested contract
+        detail = QWidget()
         detail.setObjectName("documentPanel")
-        detail.setMinimumWidth(330)
         dl = QVBoxLayout(detail)
         dl.setContentsMargins(16, 4, 4, 0)
         dl.setSpacing(8)
@@ -197,6 +204,8 @@ class DocumentsTab(QWidget):
         hist_split.setStretchFactor(1, 1)
         self.revision_detail.setMinimumHeight(self.revision_detail.fontMetrics().lineSpacing() * 3 + 12)
         dl.addWidget(hist_split, 1)
+        panel_scroll.setWidget(detail)
+        self.panel_scroll = panel_scroll
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         split.setSizes([620, 380])
