@@ -10,6 +10,7 @@ tests cannot (focus, real dialogs, typed input), but it is not a person using th
 Windows or native file dialogs.
 """
 import argparse
+import base64
 import json
 import os
 import subprocess as sp
@@ -51,6 +52,17 @@ def shot(name: str) -> None:
 def fail(message: str):
     shot("FAILED")
     print(f"FAILED: {message}\nlast window: {xdo('getactivewindow', 'getwindowname')}", flush=True)
+    # The GUI reports most failures inline, where stdout cannot see them, and screenshot artifacts are not
+    # always reachable: print the workspace's own view and the screen into the log as well (issue #45).
+    for title, args_ in (("doc list", ("doc", "list")), ("lock show", ("lock", "show"))):
+        try:
+            print(f"{title}:\n{cli(*args_)}", flush=True)
+        except Exception as exc:
+            print(f"{title}: could not run ({exc})", flush=True)
+    failed = sorted(args.shots.glob("*_FAILED.png"))
+    if failed:
+        encoded = base64.encodebytes(failed[-1].read_bytes()).decode()
+        print(f"===BEGIN {failed[-1].name}===\n{encoded}===END===", flush=True)
     if current_app:
         current_app.kill()
         print(current_app.communicate()[0][-2000:])
@@ -89,6 +101,15 @@ def cli(*a) -> str:
 
 def doc_list() -> str:
     return cli("doc", "list")
+
+
+def doc_show(doc_id: str) -> dict:
+    return json.loads(sp.run([sys.executable, "-m", "revisionworx", "-w", str(WS), "--json", "doc", "show", doc_id],
+                             capture_output=True, text=True, env=ENV).stdout)
+
+
+def lock_free() -> bool:
+    return "No writer lock is held." in cli("lock", "show")
 
 
 def rev_is(label: str):
@@ -169,8 +190,7 @@ rev_is("A")
 key("Escape")
 window_is("RevisionWorx 1.")
 doc_id = doc_list().split()[0]
-if json.loads(sp.run([sys.executable, "-m", "revisionworx", "-w", str(WS), "--json", "doc", "show", doc_id],
-                     capture_output=True, text=True, env=ENV).stdout)["document"]["title"] != "bracket":
+if doc_show(doc_id)["document"]["title"] != "bracket":
     fail("wrong document title")
 if SRC.read_bytes() != b"version one":
     fail("the source file changed")
@@ -227,16 +247,27 @@ shot("restore_prompt")
 key("alt+y")
 wait_for("the restored bytes", lambda: WORKING.read_bytes() == b"version one")
 window_is("RevisionWorx 1.")
+# The bytes land before the restore records itself and releases the writer lock. Step 6 is about a session that
+# holds a checkout, not one killed in the middle of a write (step 9 covers a lock left by a crash), so let the
+# write finish first. Killing at the bytes made step 6 flaky (issue #45).
+rev_a = next(r["id"] for r in doc_show(doc_id)["history"] if r["label"] == "A")
+wait_for("the restore to be recorded", lambda: (doc_show(doc_id)["checkout"] or {}).get("restored_from") == rev_a)
+wait_for("the writer lock to be released", lock_free)
 
 print("6. kill -9 while holding the checkout; restart and check in", flush=True)
 current_app.kill()
 current_app.wait()
 current_app = None
+if not lock_free():
+    fail("the kill left a writer lock, so it did not land between writes")
+checked_out(True)  # the checkout outlives the process that took it
 launch()
 shot("after_kill9")
 check_in("Restored the first version")
 rev_is("C")
 checked_out(False)
+if next(r for r in doc_show(doc_id)["history"] if r["label"] == "C").get("restored_from") != rev_a:
+    fail("revision C does not record that it restores revision A")
 
 print("7. a quit and restart keeps the history; a missing file is shown", flush=True)
 quit_app()
