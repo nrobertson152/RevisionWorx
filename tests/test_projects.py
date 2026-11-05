@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
 import shutil
+import zipfile
 
 import pytest
 
@@ -176,6 +177,26 @@ def test_openschematix_content_verification_uses_real_files(ws, share):
     assert files["control.osch"].get("verified_format") == "openschematix"
     assert files["circuit.schematix"].get("verified_format") == "openschematix"
     assert "verified_format" not in files["fake.schematix"]  # extension alone is not proof
+
+
+def test_fluidworx_content_verification_uses_a_real_file(ws, share):
+    d = share / "Engineering" / "sim"
+    d.mkdir(parents=True)
+    shutil.copy(FIXTURES / "fluidworx" / "sample.fluidworx", d / "real.fluidworx")
+    (d / "fake.fluidworx").write_text("not a study", encoding="utf-8")
+    with zipfile.ZipFile(d / "other.fluidworx", "w") as z:      # a ZIP, but somebody else's
+        z.writestr("mimetype", "application/x-openschematix-project")
+    rec = projects.adopt_project(ws, d, name="sim")
+    files = {f["path"].rsplit("/", 1)[-1]: f for f in ws.read_blob(rec["baseline"]["blob"])["files"]}
+    assert files["real.fluidworx"].get("verified_format") == "fluidworx"
+    assert "verified_format" not in files["fake.fluidworx"]     # extension alone is not proof
+    assert "verified_format" not in files["other.fluidworx"]
+
+
+def test_fluidworx_file_type():
+    assert filetypes.classify("A.FLUIDWORX").category == "simulation"
+    assert filetypes.classify("a.fluidworx").label == "FluidWorx simulation study"
+    assert not filetypes.sniff_fluidworx(FIXTURES / "openschematix" / "demo_project.schematix")
 
 
 def test_filetype_classification_is_case_insensitive_and_honest():

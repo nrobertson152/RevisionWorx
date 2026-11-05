@@ -43,8 +43,8 @@ Keep regular backups of your project folders and their `.revisionworx` folder, a
   checks records against the journal. Damage is reported and writing stops (fail closed) rather than guessing.
 - **Search.** A fast local index of projects, files and documents (a disposable cache, rebuilt from the
   journal whenever needed).
-- Recognises Inventor, SolidWorks, STEP/IGES, DXF/DWG, PDF and OpenSchematix files (OpenSchematix files are
-  checked by content). Native CAD files are stored and versioned byte-for-byte; RevisionWorx does not rewrite
+- Recognises Inventor, SolidWorks, STEP/IGES, DXF/DWG, PDF, OpenSchematix and FluidWorx files (OpenSchematix and
+  FluidWorx files are checked by content). Native CAD files are stored and versioned byte-for-byte; RevisionWorx does not rewrite
   CAD references.
 
 ## Install

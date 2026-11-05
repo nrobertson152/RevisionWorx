@@ -42,6 +42,8 @@ DEFAULT_DOCTYPES = {
                      "revision_scheme": "alpha", "category": "cad"},
     "schematic": {"name": "Schematic", "extensions": [".schematix", ".osch"],
                   "revision_scheme": "alpha", "category": "schematic"},
+    "simulation": {"name": "Simulation study", "extensions": [".fluidworx"],
+                   "revision_scheme": "alpha", "category": "simulation"},
     "pdf": {"name": "PDF document", "extensions": [".pdf"], "revision_scheme": "alpha", "category": "document"},
     "manufacturing": {"name": "Manufacturing document", "extensions": [],
                       "revision_scheme": "numeric2", "category": "manufacturing"},
