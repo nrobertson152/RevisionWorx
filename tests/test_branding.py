@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The official logo (docs/REVISIONWORX_BRANDING_DIRECTIVE.md): the derived icon files exist with the right sizes
 and transparency, are packaged, and are what the window, About, start page and splash show."""
+import json
 import os
 import re
 import struct
+import subprocess
+import sys
 import zlib
 from pathlib import Path
 
@@ -82,7 +85,6 @@ def test_icons_are_packaged_for_wheels_and_the_standalone_build():
 def test_linux_desktop_entry_installer(tmp_path):
     """The installer from the Linux build, run against a fake build folder and a private data folder."""
     import shutil
-    import subprocess
     build = tmp_path / "RevisionWorx"
     (build / "icons").mkdir(parents=True)
     for s in SIZES:
@@ -159,33 +161,48 @@ def test_splash_shows_logo_name_and_real_version(qapp):
     splash.close()
 
 
-@qt
-def test_startup_shows_the_splash_then_the_window(qapp, tmp_path, monkeypatch):
-    """main() shows the splash before building the window and closes it once the window is up."""
-    import sys
-    from PySide6.QtCore import QTimer
-    from revisionworx.gui import app as gui_app
-    from revisionworx.gui.qt import branding
-    for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
-        monkeypatch.setenv(var, str(tmp_path / var))
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)   # main() installs its own; restore it afterwards
-    seen = []
-    real_finish = branding.Splash.finish
+STARTUP_PROBE = r"""
+import json, sys
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from revisionworx.gui import app as gui_app
+from revisionworx.gui.qt import branding
 
-    def finish(self, window):
-        seen.append((self.isVisible(), window.isVisible()))
-        real_finish(self, window)
-    monkeypatch.setattr(branding.Splash, "finish", finish)
-    def quit_once_running():
-        # main() processes events before exec() (the splash), so a plain quit() could land before the loop runs
-        # and be lost; quit only from inside the event loop.
-        if qapp.thread().loopLevel() >= 1:
-            qapp.quit()
-        else:
-            QTimer.singleShot(50, quit_once_running)
-    QTimer.singleShot(0, quit_once_running)
-    assert gui_app.main([]) == 0
-    assert seen == [(True, True)]                            # splash up until the window was shown
-    assert not qapp.windowIcon().isNull()
-    for w in qapp.topLevelWidgets():
-        w.close()
+seen = []
+real_finish = branding.Splash.finish
+def finish(self, window):
+    seen.append([self.isVisible(), window.isVisible()])
+    real_finish(self, window)
+branding.Splash.finish = finish
+qapp = QApplication([sys.argv[0]])          # main() reuses this instance
+def quit_once_running():
+    # main() processes events before exec() (the splash), so a plain quit() could land before the loop runs and
+    # be lost; quit only from inside the event loop.
+    if qapp.thread().loopLevel() >= 1:
+        qapp.quit()
+    else:
+        QTimer.singleShot(50, quit_once_running)
+QTimer.singleShot(0, quit_once_running)
+code = gui_app.main([])
+print("PROBE " + json.dumps({"code": code, "seen": seen, "icon": not qapp.windowIcon().isNull()}))
+"""
+
+
+@qt
+def test_startup_shows_the_splash_then_the_window(qapp, tmp_path):
+    """main() shows the splash before building the window and closes it once the window is up.
+
+    main() runs the application's event loop, so it runs in a process of its own. In the shared test process, the
+    Quit event Qt posts when the last window closes inside exec() outlived exec() and was delivered during a later
+    test, which left every later QDialog.exec() returning at once (four real-modal tests failed on b2efede)."""
+    env = {**os.environ, "QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", "offscreen")}
+    for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
+        env[var] = str(tmp_path / var)                       # a fresh profile: no recent workspace to open
+    run = subprocess.run([sys.executable, "-c", STARTUP_PROBE], env=env, capture_output=True, text=True,
+                         timeout=180)
+    lines = [ln for ln in run.stdout.splitlines() if ln.startswith("PROBE ")]
+    assert run.returncode == 0 and lines, run.stdout + run.stderr
+    result = json.loads(lines[-1][len("PROBE "):])
+    assert result["code"] == 0
+    assert result["seen"] == [[True, True]]                  # splash up until the window was shown
+    assert result["icon"]
