@@ -2,6 +2,7 @@
 """`revisionworx doctor`: one fixture per kind of damage, an exact expected code, and proof that nothing was changed."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -463,3 +464,42 @@ def test_the_commands_it_recommends_exist():
             parser.parse_args(argv)
         except SystemExit as exc:                    # --help
             assert exc.code == 0
+
+
+def test_a_busy_release_file_is_a_warning_not_damage(world, monkeypatch):
+    """Windows CI 41940970385: a live writer's in-flight .releasing-* file refused reads for a moment and doctor
+    called it L005 (unreadable, writers refused), although writers treat exactly this as busy (ADR-019 rev. 5)."""
+    locks = world["root"] / ".revisionworx" / "locks"
+    busy = locks / (".releasing-" + "b" * 32)
+    busy.write_text(json.dumps({"token": "t" * 32, "user": "u", "host": "h", "pid": 1, "acquired": "x"}))
+    real = Workspace._read_holder
+
+    def refuse(path):
+        if path == busy:
+            raise PermissionError(13, "sharing violation", str(path))
+        return real(path)
+    monkeypatch.setattr(Workspace, "_read_holder", staticmethod(refuse))
+    report = doctor.examine(world["root"])
+    codes = {f["code"]: f["severity"] for f in report["findings"] if busy.name in f["subject"]}
+    assert codes == {"L009": "warning"}
+    damaged = locks / (".releasing-" + "d" * 32)
+    damaged.write_text("{not json")
+    report = doctor.examine(world["root"])
+    assert any(f["code"] == "L005" and damaged.name in f["subject"] and f["severity"] == "error"
+               for f in report["findings"])
+
+
+def test_a_release_file_that_vanishes_while_examined_is_ignored(world, monkeypatch):
+    locks = world["root"] / ".revisionworx" / "locks"
+    gone = locks / (".releasing-" + "g" * 32)
+    gone.write_text("{}")
+    real = Workspace._read_holder
+
+    def finish(path):
+        if path == gone:
+            gone.unlink()
+            raise FileNotFoundError(2, "gone", str(path))
+        return real(path)
+    monkeypatch.setattr(Workspace, "_read_holder", staticmethod(finish))
+    report = doctor.examine(world["root"])
+    assert not [f for f in report["findings"] if gone.name in f["subject"]]

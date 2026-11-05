@@ -154,6 +154,7 @@ Codes are stable; scripts can rely on them.
 | `L006` | warning | Administrative clear did not finish |
 | `L007` | error | Lock archived with its token not revoked: invariant W2 violated |
 | `L008` | error | Audited clear evidence missing or altered |
+| `L009` | warning | Release file busy (in progress, or held by another program): check again |
 | `R001` | warning | Record differs from the journal |
 | `R002` | warning | Record missing |
 | `R003` | warning | Record the journal never wrote |
