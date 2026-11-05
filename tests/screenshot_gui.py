@@ -93,6 +93,13 @@ def main(out: Path) -> int:
     about.show()
     shot(about, "about")
     about.close()
+    from revisionworx import __version__
+    from revisionworx.gui.qt.branding import Splash
+    splash = Splash(__version__)
+    splash.show()
+    splash.say("Opening Engineering…")
+    shot(splash, "splash")
+    splash.close()
     pal = w.open_palette()
     pal.search.setText("manifold")
     shot(pal, "palette")

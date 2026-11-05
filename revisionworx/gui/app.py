@@ -59,10 +59,16 @@ def self_test(report: Path) -> int:
         from .. import __version__
         from .controller import Controller
         from .qt.mainwindow import MainWindow
+        from .qt.branding import Splash, app_icon, set_platform_identity
         app = QApplication.instance() or QApplication([sys.argv[0]])
+        set_platform_identity(app)
+        splash = Splash(__version__)
+        splash.show()
         window = MainWindow(Controller())
         window.show()
-        result: dict = {}
+        splash.finish(window)
+        result: dict = {"icon sizes": sorted(s.width() for s in app_icon().availableSizes()),
+                        "splash": not splash.pixmap().isNull()}
 
         def drive() -> None:
             try:
@@ -84,7 +90,8 @@ def self_test(report: Path) -> int:
         lines.append(f"version {__version__}")
         lines += [f"{k}: {v}" for k, v in result.items()]
         ok = (not result.get("error") and result.get("opened") is True and result.get("documents") == 1
-              and __version__ in str(result.get("title", "")))
+              and __version__ in str(result.get("title", "")) and result.get("splash") is True
+              and {16, 32, 48, 256} <= set(result.get("icon sizes", [])))
     except BaseException as exc:  # noqa: BLE001
         lines.append("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
     finally:
@@ -106,19 +113,33 @@ def main(argv: list[str] | None = None) -> int:
     from .controller import Controller
     from .qt.mainwindow import MainWindow
 
+    from .. import __version__
+    from .qt.branding import Splash, set_platform_identity
+
     sys.excepthook = exception_reporter()
     app = QApplication.instance() or QApplication([sys.argv[0], *argv])
     app.setApplicationName("RevisionWorx")
     app.setOrganizationName("RevisionWorx")
+    app.setApplicationVersion(__version__)
+    set_platform_identity(app)
+    # The splash covers the real start-up work (building the window, opening the last workspace) and closes as
+    # soon as the window is ready: it never adds a delay of its own.
+    splash = Splash(__version__)
+    splash.show()
+    splash.say("Starting…")
     location, document = _parse(argv)
     window = MainWindow(Controller())
-    window.show()
     recent = window.ctl.recent_workspaces()
+    target = Path(location) if location else (Path(recent[0]) if recent and Path(recent[0]).exists() else None)
+    if target is not None:
+        splash.say(f"Opening {target.name or target}…")
+    window.show()
     if location:
         if window.open_location(Path(location), restore_selection=document is None) and document:
             window.go_to_document(None, document)
-    elif recent and Path(recent[0]).exists():
-        window.open_location(Path(recent[0]), quiet=True, restore_selection=True)  # failure -> start page shows why
+    elif target is not None:
+        window.open_location(target, quiet=True, restore_selection=True)  # failure -> start page shows why
+    splash.finish(window)
     return app.exec()
 
 

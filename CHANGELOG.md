@@ -38,6 +38,10 @@ The first release. Everything below is new.
 - Recognition of Inventor, SolidWorks, STEP/IGES, DXF/DWG, PDF and OpenSchematix files.
 
 ### Desktop window (PySide6)
+- The official RevisionWorx logo (supplied by the Director): window, taskbar and dock icon, a start-up splash
+  with the name and version that stays only while the window and the last workspace load, the About dialog and
+  the start page. Windows executables carry it as their icon; the Linux build adds `install-desktop-entry.sh`
+  for the application menu.
 - Start page with one-step project creation, recent workspaces, projects list and details, adopt dialog,
   documents tab (import, register, check out/in, cancel, open, show in folder, change state, export, compare,
   restore), workspace health banner, F5 refresh, keyboard shortcuts and accessible names.

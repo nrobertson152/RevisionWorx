@@ -38,6 +38,9 @@ version = { attr = "revisionworx.__version__" }
 [tool.setuptools.packages.find]
 include = ["revisionworx*"]
 
+[tool.setuptools.package-data]
+"revisionworx.gui" = ["resources/*.png", "resources/*.ico"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers"

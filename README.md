@@ -1,3 +1,5 @@
+<img src="revisionworx/gui/resources/revisionworx-128.png" alt="RevisionWorx logo" width="96" align="right">
+
 # RevisionWorx
 
 Offline, accountless engineering Product Data Management (PDM) for small engineering teams, on Windows and
