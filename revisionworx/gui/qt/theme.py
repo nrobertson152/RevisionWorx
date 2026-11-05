@@ -179,7 +179,7 @@ QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle {{ background: {t['line_strong']}; border-radius: 4px; min-height: 24px; min-width: 24px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
-QWidget#documentPanel, QScrollArea#documentPanelScroll {{ background: {t['surface']}; }}
+QWidget#documentPanel {{ background: {t['surface']}; }}
 QWidget#paletteBox {{ background: {t['surface']}; border: 1px solid {t['line_strong']}; border-radius: 12px; }}
 QMessageBox {{ messagebox-text-interaction-flags: 3; }}
 """

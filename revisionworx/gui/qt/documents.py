@@ -11,9 +11,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-                               QSplitter, QStyle, QTableView, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
+                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
+                               QStyle, QTableView, QVBoxLayout, QWidget)
 
 from ..controller import Controller, SavedWithWarning, describe_error
 from ..viewmodels import DocumentListModel, DocumentPanel
@@ -114,15 +114,9 @@ class DocumentsTab(QWidget):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.context_menu)
 
-        # The panel scrolls rather than squeezing: its buttons keep their full width and the history its rows at
-        # any window size, and a tall panel does not raise the window's minimum height.
-        panel_scroll = QScrollArea(split)
-        panel_scroll.setObjectName("documentPanelScroll")
-        panel_scroll.setWidgetResizable(True)
-        panel_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        panel_scroll.setMinimumWidth(330)
-        panel_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)     # not a Tab stop: the Tab order is a tested contract
-        detail = QWidget()
+        # No fixed minimum width: the panel's own layout decides it, so the splitter can never squeeze its buttons
+        # below their natural size (tests/test_qt_desktop_alpha_rc.py checks every action is fully on screen).
+        detail = QWidget(split)
         detail.setObjectName("documentPanel")
         dl = QVBoxLayout(detail)
         dl.setContentsMargins(16, 4, 4, 0)
@@ -177,13 +171,12 @@ class DocumentsTab(QWidget):
 
         hist_title = QLabel("History", detail)
         theme.set_flag(hist_title, "role", "section")
-        dl.addWidget(hist_title)
         self.compare_btn = QPushButton("Co&mpare with previous", detail)
         self.compare_btn.setToolTip("Metadata comparison of the selected revision and the one before it")
         self.restore_btn = QPushButton("Res&tore to working file…", detail)
         self.restore_btn.setToolTip("While checked out: replace the working file with the selected older "
                                     "revision. History is never rewritten.")
-        dl.addLayout(_row(self.compare_btn, self.restore_btn, stretch_at=2))
+        dl.addLayout(_row(hist_title, self.compare_btn, self.restore_btn, stretch_at=1))   # heading and its actions
         self.compare_btn.clicked.connect(lambda *_: self.compare())
         self.restore_btn.clicked.connect(lambda *_: self.restore())
         hist_split = QSplitter(Qt.Orientation.Vertical, detail)
@@ -194,7 +187,7 @@ class DocumentsTab(QWidget):
                                             self.panel.history_cell, self)
         self.history.setModel(self.history_model)
         configure_table(self.history, DocumentPanel.HISTORY_COLUMNS)
-        show_at_least_rows(self.history, 4)
+        show_at_least_rows(self.history, 3)
         self.history.selectionModel().selectionChanged.connect(lambda *_: self.revision_selected())
         self.revision_detail = QPlainTextEdit(hist_split)
         self.revision_detail.setReadOnly(True)
@@ -202,10 +195,8 @@ class DocumentsTab(QWidget):
         self.revision_detail.setPlaceholderText("Select a revision to see its full description and state changes.")
         hist_split.setStretchFactor(0, 3)
         hist_split.setStretchFactor(1, 1)
-        self.revision_detail.setMinimumHeight(self.revision_detail.fontMetrics().lineSpacing() * 3 + 12)
+        self.revision_detail.setMinimumHeight(self.revision_detail.fontMetrics().lineSpacing() * 2 + 12)
         dl.addWidget(hist_split, 1)
-        panel_scroll.setWidget(detail)
-        self.panel_scroll = panel_scroll
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         split.setSizes([620, 380])
