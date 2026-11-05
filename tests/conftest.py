@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import contextlib
 import hashlib
 import os
 import sys
@@ -51,3 +52,43 @@ def ws(share):
 @pytest.fixture
 def cache_dir(tmp_path):
     return tmp_path / "cache"
+
+
+
+@contextlib.contextmanager
+def qt_window_cleanup():
+    """Delete, on exit, the hidden top-level windows created inside the block. Windows that are still shown, that
+    have a parent, or that existed before the block are left alone. Does nothing without PySide6 or an application."""
+    try:
+        import shiboken6
+        from PySide6.QtCore import QCoreApplication, QEvent
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        yield
+        return
+
+    def alive() -> dict:
+        app = QApplication.instance()
+        return {shiboken6.getCppPointer(w)[0]: w for w in app.topLevelWidgets()} if app is not None else {}
+
+    before = set(alive())
+    try:
+        yield
+    finally:
+        for pointer, widget in alive().items():
+            if pointer not in before and widget.parent() is None and not widget.isVisible():
+                widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture(autouse=True)
+def _delete_closed_qt_windows(request):
+    """Qt tests close their windows but nothing deletes them, and every new main window applies the colour theme to
+    the whole application, which re-styles every widget still alive: by the later Qt modules a fixture took ~13 s to
+    set up and as long to tear down (main 098a805). Once a Qt test is over, delete the hidden top-level windows it
+    created (qt_window_cleanup)."""
+    if request.node.get_closest_marker("qt") is None:
+        yield
+        return
+    with qt_window_cleanup():
+        yield
