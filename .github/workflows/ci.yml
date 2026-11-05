@@ -21,7 +21,8 @@ jobs:
   tests:
     name: "${{ matrix.os }} / Python ${{ matrix.python }}"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90   # the Windows full suite + Qt pass takes ~57 min on hosted runners (CI 41955450785)
+    timeout-minutes: 90   # Windows took 66-72 min when the Qt tests ran twice (main 1c73af6); each test now runs
+                          # once
     env:
       QT_QPA_PLATFORM: offscreen
     strategy:
@@ -46,10 +47,10 @@ jobs:
       - name: Versions
         run: python -c "import sys, PySide6, PySide6.QtCore as c; print(sys.version); print('PySide6', PySide6.__version__, 'Qt', c.qVersion())"
       - name: Qt widget tests (must not be skipped)
-        run: python -m pytest -q -ra -m qt
-      - name: Full suite
+        run: python -m pytest -q -ra --durations=10 -m qt
+      - name: Everything else (the Qt tests ran above; together this is the full suite, each test once)
         if: success() || failure()   # still report everything when the Qt step failed
-        run: python -m pytest -q -ra --durations=15
+        run: python -m pytest -q -ra --durations=15 -m "not qt"
       - name: Windows contention, repeated (real sharing violations)
         if: runner.os == 'Windows'
         shell: bash
