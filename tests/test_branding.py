@@ -176,7 +176,14 @@ def test_startup_shows_the_splash_then_the_window(qapp, tmp_path, monkeypatch):
         seen.append((self.isVisible(), window.isVisible()))
         real_finish(self, window)
     monkeypatch.setattr(branding.Splash, "finish", finish)
-    QTimer.singleShot(0, qapp.quit)                          # end main()'s event loop as soon as it starts
+    def quit_once_running():
+        # main() processes events before exec() (the splash), so a plain quit() could land before the loop runs
+        # and be lost; quit only from inside the event loop.
+        if qapp.thread().loopLevel() >= 1:
+            qapp.quit()
+        else:
+            QTimer.singleShot(50, quit_once_running)
+    QTimer.singleShot(0, quit_once_running)
     assert gui_app.main([]) == 0
     assert seen == [(True, True)]                            # splash up until the window was shown
     assert not qapp.windowIcon().isNull()

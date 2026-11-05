@@ -11,7 +11,10 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
+
+WATCHDOG_SECONDS = 180      # a start-up that never reaches its event loop fails here instead of hanging the job
 
 
 def check(ok: bool, what: str) -> None:
@@ -44,8 +47,14 @@ def main() -> int:
     seen: dict = {}
 
     def drive() -> None:
+        # main() processes events before exec() while its start-up splash is up (Qt's documented pattern), so a
+        # timer can fire before the window exists or before the event loop runs. Drive only from inside the loop.
+        windows = [w for w in qapp.topLevelWidgets() if isinstance(w, MainWindow) and w.isVisible()]
+        if qapp.thread().loopLevel() < 1 or not windows:
+            QTimer.singleShot(100, drive)
+            return
         try:
-            window = next(w for w in qapp.topLevelWidgets() if isinstance(w, MainWindow))
+            window = windows[0]
             seen["first"] = window.observable_state()
             home = tmp / "Acceptance"
             project = window.ctl.quick_start(home, "Smoke", number="S-1")
@@ -58,8 +67,15 @@ def main() -> int:
         finally:
             qapp.quit()
 
+    def watchdog() -> None:
+        print(f"FAIL the window did not finish starting within {WATCHDOG_SECONDS} s (seen: {sorted(seen)})", flush=True)
+        os._exit(1)
+    timer = threading.Timer(WATCHDOG_SECONDS, watchdog)
+    timer.daemon = True
+    timer.start()
     QTimer.singleShot(500, drive)
     code = gui_app.main([])
+    timer.cancel()
     print("platform", qapp.platformName(), flush=True)
     check(code == 0, f"main() exit code {code}")
     first, second = seen.get("first", {}), seen.get("second", {})
