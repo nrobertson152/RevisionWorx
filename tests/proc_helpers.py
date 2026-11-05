@@ -90,13 +90,23 @@ def put_tokens(state_dir: str, who: int, barrier) -> None:
         tokens.put("ws", f"doc_{who}_{j}", f"token-{who}-{j}")
 
 
-def commit_loop(location: str, rid: str, rounds: int, results) -> None:
-    """A writer doing ordinary work: open, read, commit on what it read, close. Reports anything unexpected."""
+def commit_loop(location: str, rid: str, rounds: int, results, min_commits: int = 0, deadline_s: float = 0.0) -> None:
+    """A writer doing ordinary work: open, read, commit on what it read, close. Reports anything unexpected.
+
+    It makes ``rounds`` attempts, then keeps going while it has fewer than ``min_commits`` commits and fewer than
+    ``deadline_s`` seconds have passed since it started. Under an administrator who breaks every lock it sees, a slow
+    machine can spend every round refused, and a soak without a single commit proves nothing (CI 42083782414 on main
+    098a805, Windows: 0 commits in 400 attempts)."""
+    import time
     from pathlib import Path
     from revisionworx.workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordPut, Workspace,
                                         WorkspaceError, WorkspaceLockedError)
-    tally = {"committed": 0, "locked": 0, "lock_lost": 0, "conflict": 0, "not_applied": 0, "errors": []}
-    for _ in range(rounds):
+    tally = {"committed": 0, "locked": 0, "lock_lost": 0, "conflict": 0, "not_applied": 0, "errors": [],
+             "attempts": 0}
+    start = time.monotonic()
+    while tally["attempts"] < rounds or (tally["committed"] < min_commits
+                                         and time.monotonic() - start < deadline_s):
+        tally["attempts"] += 1
         try:
             ws = Workspace.open(Path(location), writable=True)
         except WorkspaceLockedError:
