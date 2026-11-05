@@ -90,11 +90,11 @@ def put_tokens(state_dir: str, who: int, barrier) -> None:
         tokens.put("ws", f"doc_{who}_{j}", f"token-{who}-{j}")
 
 
-def commit_loop(location: str, rid: str, rounds: int, results, min_commits: int = 0, deadline_s: float = 0.0) -> None:
+def commit_loop(location: str, rid: str, rounds: int, results, until_committed_s: float = 0.0) -> None:
     """A writer doing ordinary work: open, read, commit on what it read, close. Reports anything unexpected.
 
-    It makes ``rounds`` attempts, then keeps going while it has fewer than ``min_commits`` commits and fewer than
-    ``deadline_s`` seconds have passed since it started. Under an administrator who breaks every lock it sees, a slow
+    It makes ``rounds`` attempts. Then, until ``until_committed_s`` seconds after it started, it keeps going while no
+    writer has committed yet (the record does not exist). Under an administrator who breaks every lock it sees, a slow
     machine can spend every round refused, and a soak without a single commit proves nothing (CI 42083782414 on main
     098a805, Windows: 0 commits in 400 attempts)."""
     import time
@@ -102,10 +102,18 @@ def commit_loop(location: str, rid: str, rounds: int, results, min_commits: int 
     from revisionworx.workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordPut, Workspace,
                                         WorkspaceError, WorkspaceLockedError)
     tally = {"committed": 0, "locked": 0, "lock_lost": 0, "conflict": 0, "not_applied": 0, "errors": [],
-             "attempts": 0}
+             "attempts": 0, "unreadable": 0}
     start = time.monotonic()
-    while tally["attempts"] < rounds or (tally["committed"] < min_commits
-                                         and time.monotonic() - start < deadline_s):
+
+    def nobody_has_committed() -> bool:
+        try:
+            with Workspace.open(Path(location)) as reader:
+                return reader.get("root", rid) is None
+        except Exception:  # noqa: BLE001 - cannot tell: keep trying (counted; the deadline still applies)
+            tally["unreadable"] += 1
+            return True
+
+    while tally["attempts"] < rounds or (time.monotonic() - start < until_committed_s and nobody_has_committed()):
         tally["attempts"] += 1
         try:
             ws = Workspace.open(Path(location), writable=True)

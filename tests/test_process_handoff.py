@@ -266,16 +266,19 @@ def test_readers_never_disturb_a_committing_writer(tmp_path):
         assert ws.get("root", rid)[REV_FIELD] == ws.head_seq()
 
 
-def test_commit_loop_keeps_trying_until_it_has_committed(tmp_path):
-    """The soak's writers must not stop before they have done real work (see commit_loop)."""
+def test_commit_loop_keeps_trying_while_nobody_has_committed(tmp_path):
+    """The soak's writers must not stop before anyone has done real work (see commit_loop)..."""
     import queue
     root = tmp_path / "share"
     with Workspace.create(root, "loop"):
         pass
     q = queue.Queue()
-    proc_helpers.commit_loop(str(root), "root_" + "b" * 32, 0, q, min_commits=3, deadline_s=60)
+    proc_helpers.commit_loop(str(root), "root_" + "b" * 32, 0, q, until_committed_s=60)
     tally = q.get_nowait()
-    assert (tally["committed"], tally["attempts"], tally["errors"]) == (3, 3, [])
+    assert (tally["committed"], tally["attempts"], tally["errors"]) == (1, 1, [])
+    proc_helpers.commit_loop(str(root), "root_" + "b" * 32, 0, q, until_committed_s=60)   # someone already has
+    tally = q.get_nowait()
+    assert (tally["committed"], tally["attempts"]) == (0, 0)
     proc_helpers.commit_loop(str(root), "root_" + "b" * 32, 2, q)          # the old contract: exactly ``rounds``
     tally = q.get_nowait()
     assert (tally["committed"], tally["attempts"]) == (2, 2)
@@ -292,7 +295,7 @@ def test_commit_loop_gives_up_at_its_deadline(tmp_path):
     held = Workspace.open(root, writable=True)
     try:
         started = time.monotonic()
-        proc_helpers.commit_loop(str(root), "root_" + "c" * 32, 1, q, min_commits=1, deadline_s=0.5)
+        proc_helpers.commit_loop(str(root), "root_" + "c" * 32, 1, q, until_committed_s=0.5)
         elapsed = time.monotonic() - started
     finally:
         held.close()
@@ -311,8 +314,9 @@ def test_soak_with_competing_writers_and_an_impatient_administrator(tmp_path):
     stop = tmp_path / "stop"
     ctx = mp.get_context("spawn")
     results, admin_results = ctx.Queue(), ctx.Queue()
-    # each writer keeps trying (up to 120 s) until it has committed once: the safety checks below need real commits
-    writers = [ctx.Process(target=proc_helpers.commit_loop, args=(str(root), rid, 100, results, 1, 120.0))
+    # after their 100 rounds the writers keep trying (up to 120 s) while nobody has committed: the safety checks
+    # below need real commits
+    writers = [ctx.Process(target=proc_helpers.commit_loop, args=(str(root), rid, 100, results, 120.0))
                for _ in range(4)]
     admin = ctx.Process(target=proc_helpers.break_loop, args=(str(root), str(stop), admin_results))
     admin.start()
