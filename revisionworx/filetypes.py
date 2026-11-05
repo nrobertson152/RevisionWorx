@@ -9,6 +9,10 @@ OpenSchematix detection is verified against the format documented in the OpenSch
 (docs/FILE_FORMAT.md, v1.1.0): ``.schematix`` is a ZIP whose ``mimetype`` member is
 ``application/x-openschematix-project``; legacy ``.osch`` is a JSON document with
 ``"format": "OpenSchematix"``.
+
+FluidWorx detection is verified against the format documented in the FluidWorx repository
+(docs/FILE_FORMAT.md, version 1): ``.fluidworx`` is a ZIP whose first member, ``mimetype``, is
+``application/x-fluidworx-study``.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 OPENSCHEMATIX_MIMETYPE = "application/x-openschematix-project"
+FLUIDWORX_MIMETYPE = "application/x-fluidworx-study"
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ _reg(".dwg", "drawing-export", "DWG drawing")
 _reg(".pdf", "document", "PDF document")
 _reg(".schematix", "schematic", "OpenSchematix project")
 _reg(".osch", "schematic", "OpenSchematix legacy sheet")
+_reg(".fluidworx", "simulation", "FluidWorx simulation study")
 
 GENERIC = FileType("other", "Other file", "generic")
 
@@ -79,3 +85,18 @@ def sniff_openschematix(path: Path) -> bool:
     except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError):
         return False
     return False
+
+
+def sniff_fluidworx(path: Path) -> bool:
+    """Return True only if the file's *content* matches the documented FluidWorx study format."""
+    path = Path(path)
+    try:
+        if path.suffix.lower() != ".fluidworx" or not zipfile.is_zipfile(path):
+            return False
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+            if not names or names[0] != "mimetype":
+                return False
+            return zf.read("mimetype").decode("ascii", "replace").strip() == FLUIDWORX_MIMETYPE
+    except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError):
+        return False

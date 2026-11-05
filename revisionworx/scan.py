@@ -169,6 +169,8 @@ def scan_scope(scope: Path, exclusions: list[str], max_files: int, hash_files: b
             sf = ScannedFile(rel, st.st_size, st.st_mtime_ns, ft.category)
             if ft.category == "schematic" and filetypes.sniff_openschematix(Path(entry.path)):
                 sf.verified_format = "openschematix"
+            elif ft.category == "simulation" and filetypes.sniff_fluidworx(Path(entry.path)):
+                sf.verified_format = "fluidworx"
             if hash_files:
                 try:
                     sf.sha256 = sha256_file(Path(entry.path))

@@ -6,6 +6,10 @@ All notable changes to RevisionWorx. Versions follow [Semantic Versioning](https
 
 The first release. Everything below is new.
 
+### FluidWorx
+- `.fluidworx` simulation studies are recognised by content and registered under a new built-in "Simulation study"
+  document type with alpha revisions. They are versioned byte for byte, like any other file.
+
 ### Supported use
 - One computer's local disk, Windows or Linux. Several RevisionWorx windows or command-line sessions on that
   computer are safe together. Shared network folders: one computer making changes at a time (a warning is
