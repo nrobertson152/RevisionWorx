@@ -73,6 +73,16 @@ def test_publish_creates_then_revises_then_reports_unchanged(env, capsys):
         assert sorted(r["description"] for r in revs) == ["Bigger pump", "Initial"]
 
 
+def test_a_draftworx_drawing_is_published_as_an_engineering_drawing(env, capsys):
+    """As DraftWorx checks its drawings in: lettered revisions, and in the drawing register's category."""
+    tmp, ws = env
+    src = tmp / "bracket.draftworx"
+    src.write_bytes((Path(__file__).parent / "fixtures" / "draftworx" / "bracket.draftworx").read_bytes())
+    code, made = link(capsys, "-w", str(ws), "link", "publish", str(src), "--project", "J-1", "--number", "DWG-1",
+                      "--title", "Bracket", "-m", "First issue")
+    assert code == 0 and made["document"]["type"] == "drawing" and made["document"]["latest"]["label"] == "A"
+
+
 def test_publish_refuses_a_document_someone_else_has_checked_out(env, capsys, tmp_path):
     tmp, ws = env
     src = tmp / "a.txt"

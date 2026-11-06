@@ -86,6 +86,7 @@ if rwx.available():
         show_message(str(exc))      # e.g. "DWG-1 is checked out by alex on SHOP-PC; ask them to check it in first"
 ```
 
-Programs that use this: Caldera (publishes calculation reports), Ledgerbook (RevisionWorx document fields),
-OpenSchematix Viewer (revision status and opening controlled revisions), TraceMarx (reads the schematic,
-publishes wire lists and labels).
+Programs that use this: Caldera (publishes calculation reports), DraftWorx (a drawing's revision status in its window,
+check-in, adding drawings to projects, and parts lists as BOMs next to them; it checks out with `revisionworx --json doc checkout`),
+Ledgerbook (RevisionWorx document fields), OpenSchematix Viewer (revision status and opening controlled revisions), TraceMarx (reads
+the schematic, publishes wire lists and labels).
