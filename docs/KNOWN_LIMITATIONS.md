@@ -12,18 +12,37 @@ gap behind it.
 
 ## Not verified
 
-1. **Several computers writing to one shared network folder (SMB/CIFS, NFS).** The protocol relies on
-   exclusive file creation, rename and directory listing behaving on the share as they do on a local disk. That
-   has not been tested across real computers and servers, so RevisionWorx makes no multi-computer safety claim.
-   You may keep a workspace in a network folder and open it from several computers to *read*, but let only one
-   computer *make changes* at a time. RevisionWorx shows a warning when it detects a network folder (on Linux
-   from the mount table; on Windows for mapped network drives and `\\server\share` paths). Detection can miss
-   unusual setups, so the rule applies even without the warning. A server-side coordinator for true
-   multi-user use is a future design (ADR-014, issue #5).
+1. **A team working from one shared network folder (SMB/CIFS, NFS), across real computers.** A workspace can be set up for a team
+   (ADR-024): each person logs in, and they take turns saving changes through the folder, with no server. Its design doesn't rely on
+   fresh directory listings, clocks or locks, but it does rely on the file server deciding who gets a name, and it has **not been tested
+   between real computers and servers**. Tested so far: real processes on one disk, simulated client caches, and a real SMB share on
+   one Windows machine, where every client shares one set of caches. To find out about your share, run `revisionworx share test FOLDER`
+   at the same time on two or more computers, then `revisionworx share report FOLDER`. Please report what you find, either way.
+
+   Without team setup, the rule stays: you may keep a workspace in a network folder and open it from several computers to *read*, but let
+   only one computer *make changes* at a time. RevisionWorx shows a warning when it detects a network folder (on Linux from the
+   mount table; on Windows for mapped network drives and `\\server\share` paths). Detection can miss unusual setups, so the rule
+   applies even without the warning.
 2. **macOS** is not tested or supported.
 3. **The desktop window has not yet been accepted by a person** following `docs/GUI_ACCEPTANCE.md`. It is
    exercised automatically (offscreen widget tests on Windows and Linux, a keystroke-driven walkthrough on a real
    X display, and a packaged self-test), which does not replace a person judging that it is usable.
+
+## By design, in a team workspace
+
+- **A shared folder can't enforce anything against someone who can write to it.** There's no server to refuse them. Every change is
+  signed, and every computer checks every signature and the rules, so nobody can make themselves an administrator, act in someone else's
+  name or forge an approval. But anyone with write access can delete or damage files. RevisionWorx notices and stops accepting changes,
+  and `revisionworx team repair` can put back journal entries from any computer that has read them. It can't prevent it, and it can't
+  bring back a deleted drawing's content. Use folder permissions, and keep backups.
+- **Anyone who can read the folder can try to guess passwords on their own computer.** Passwords are stretched hard, and an
+  administrator's key also needs a secret kept on their computer, but a weak password can be guessed. Choose long ones.
+- **Checkout doesn't stop anyone editing a file.** As ever, RevisionWorx detects edits made without a checkout, and doesn't prevent them.
+- **There are no per-project permissions.** An account is an administrator or a regular user, and every regular user can do the same things.
+- **It can't be undone**, and older versions of RevisionWorx can't open the workspace afterwards. Make a backup first.
+- **Saves take turns.** A long check-in holds everyone else's saves until it finishes. Reading is never held up.
+- **If the computer that has the only administrator account is lost and the recovery code is too,** nobody can administer accounts any
+  more. Everyone can still work.
 
 ## By design, within the 1.0 threat model
 

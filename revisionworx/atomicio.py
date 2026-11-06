@@ -16,6 +16,7 @@ workspace stays disabled until the Phase 3 verification gate (see docs/ARCHITECT
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import secrets
@@ -104,6 +105,9 @@ def _fsync_dir(directory: Path) -> None:
     fd = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(fd)
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.ENOTSUP, errno.ENOSYS):  # some network filesystems can't sync a folder at all
+            raise
     finally:
         os.close(fd)
 

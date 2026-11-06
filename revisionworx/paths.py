@@ -149,4 +149,5 @@ def is_network_location(location: Path, *, mounts_text: str | None = None) -> bo
 
 NETWORK_NOTICE = ("This workspace is in a shared network folder. RevisionWorx 1.0 protects your data on one "
                   "computer's local disk; several computers writing to the same network folder at the same "
-                  "time has not been verified. Let only one computer make changes at a time, and keep backups.")
+                  "time has not been verified. Let only one computer make changes at a time, or set it up for a team "
+                  "(Team menu), and keep backups.")

@@ -204,7 +204,26 @@ What a revision's bytes are guaranteed to be. RevisionWorx cannot stop another p
 **Tests:** `test_windows_sharing.py` (injected everywhere, real on Windows), `test_process_handoff.py::test_readers_*`,
 `::test_soak_*`. Real share-mode behaviour is only proven by the Windows CI jobs.
 
-## 8. How the evidence is built
+## 8. A team working from a shared folder (ADR-024)
+
+| # | Invariant | Kept by |
+|---|---|---|
+| G1 | A published entry was built on the complete history before it. | Exclusive create of the next number, after reading and checking every earlier one (`SharedWorkspace.commit`) |
+| G2 | A stale or paused writer can't publish on what it read. | G1. Its number is taken. And a change that arrived during its turn stops it (`_refuse_foreign_changes`) |
+| G3 | An entry has the same effect on every computer. | `shared.judge` decides from the entries before it and nothing else. Nothing about the computer goes in |
+| G4 | Nobody can act in someone else's name, make themselves an administrator, or forge an approval or a release. | Signatures and the rules in `judge`. A modified program gets no further |
+| G5 | A change to history is noticed. | Each entry names the one before (`prev`). `shared.enable` seals what came before it. A computer compares the folder with its own copy |
+| G6 | Editing `workspace.json` doesn't switch the rules off. | A plain handle refuses a journal holding `shared.enable` |
+| G7 | Nothing relies on a fresh listing, a fresh "not found", or agreement between clocks. | Forward walk by name; `lock_silence` counts on one computer's monotonic clock |
+| G8 | A stuck lock costs a minute, and the record says so. | `_clear_lock` and its audit entry. Integrity doesn't depend on the lock (G1), which is why it can be cleared |
+| G9 | Passwords, recovery codes and signing keys aren't in the shared folder. | Only public keys go in the journal |
+| G10 | A workspace not set up this way is untouched. | `SharedWorkspace` is a separate code path, reached only through `format_version: 2` |
+
+**Tests:** `test_team_authority.py` (the same contract as a plain workspace), `test_team_rules.py` (forged and damaged entries, read by several computers),
+`test_team_concurrency.py` (racing processes, a process killed before every file change, simulated client caches), `test_accounts.py`, `test_sharecheck.py`,
+`test_team_on_a_share.py` (real SMB and NFS on one machine, in `.github/workflows/shares.yml`). None of these is evidence between real computers.
+
+## 9. How the evidence is built
 
 | Technique | Finds | Limits |
 |---|---|---|

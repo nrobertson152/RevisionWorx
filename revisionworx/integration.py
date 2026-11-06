@@ -119,7 +119,7 @@ def _doc_summary(ws: Workspace, doc: dict, tokens=None) -> dict:
     if co:
         owner = co.get("owner") or {}
         out["checkout"] = {"user": owner.get("user", ""), "host": owner.get("host", ""), "since": co.get("acquired"),
-                           "mine": bool(tokens is not None and tokens.get(ws.id, doc["id"]) == co.get("token"))}
+                           "mine": bool(tokens is not None and documents.is_mine(ws, tokens, {**co, "document_id": doc["id"]}))}
     return out
 
 

@@ -8,7 +8,7 @@
 
 ## 1. Mission and operating principles
 
-Develop a fast, dependable, offline, accountless and telemetry-free desktop PDM system for small and medium engineering departments. Manage engineering projects, revisions, drawings, parts, BOMs, native CAD files, dependencies, and collaboration without imposing enterprise infrastructure or reorganizing existing engineering archives.
+Develop a fast, dependable, offline and telemetry-free desktop PDM, with no online accounts, system for small and medium engineering departments. Manage engineering projects, revisions, drawings, parts, BOMs, native CAD files, dependencies, and collaboration without imposing enterprise infrastructure or reorganizing existing engineering archives.
 
 Priorities, in order: data integrity; non-destructive CAD reference preservation; safe collaboration; correct dependency/impact reporting; performance; usability.
 
@@ -51,15 +51,15 @@ All implementation claims require verification. Unsupported integrations must be
 
 ## 5. Collaboration and authoritative shared data
 
-**Amended 2026-11-01 by project director decision (issue #5, ADR-014):**
-- **Standalone single-user mode** (no coordinator) remains fully functional offline: local clients, local SQLite caches, and an authoritative `.revisionworx` journal on local disk or a share, with one writer at a time. No accounts, cloud services or subscriptions in any mode.
-- **Supported multi-user mode** uses an **optional on-premise local-network coordinator**. The coordinator owns authoritative write control, fencing tokens, transaction ordering and safe recovery. Immutable content objects remain on the shared folder.
-- **Initial multi-user target:** a Windows-hosted coordinator with SMB shared folders. Linux hosting and other share types will be evaluated later.
-- Multi-user operation is **not production-ready** until the stale-writer vulnerability (issue #8) is resolved by coordinator fencing and verified on real SMB shares.
+**Amended 2026-11-05 by Director decision (ADR-024), replacing the 2026-11-01 coordinator decision (issue #5, ADR-014):**
+- **Standalone single-user mode** remains fully functional offline, and unchanged: local clients, local SQLite caches, and an authoritative `.revisionworx` journal on local disk or a share, with one writer at a time. No accounts in this mode.
+- **Team mode** is opt-in per workspace: several people work from one shared network folder, peer to peer, with **no server**. An administrator account is created on the boss's computer, the administrator creates regular accounts, and people log in. Accounts live in the workspace: no cloud services or subscriptions in any mode.
+- **Initial target:** SMB shared folders from Windows clients. Other share types are refused if they don't pass `revisionworx share check`.
+- Team mode is **not verified between real computers** until `revisionworx share test` has been run on real shares. See `docs/KNOWN_LIMITATIONS.md`. It must say so to its users until then.
 
-A file share alone is **not** a transactional database. Design, prove and test atomic coordination semantics on supported SMB/NFS filesystem configurations, including race prevention, interrupted writes, disk-full, lost connectivity, permissions, competing clients and stale locks. Never use naive check-then-create locks, silently steal a stale lock, or place a single writable SQLite database on a network share for concurrent clients.
+A file share alone is **not** a transactional database. Design, prove and test atomic coordination semantics on supported SMB/NFS filesystem configurations, including race prevention, interrupted writes, disk-full, lost connectivity, permissions, competing clients and stale locks. Never use naive check-then-create locks, silently steal a stale lock (a team workspace clears one on the record, because its data doesn't depend on the lock: ADR-024), or place a single writable SQLite database on a network share for concurrent clients.
 
-If safe lock and publication guarantees cannot be established on a filesystem, fail closed for writes and propose an optional on-premise LAN coordinator; do not market unsafe collaboration as reliable. Local indexes are caches only and must never authorize a checkout based on stale information.
+If safe lock and publication guarantees cannot be established on a filesystem, fail closed for writes; do not market unsafe collaboration as reliable. Local indexes are caches only and must never authorize a checkout based on stale information.
 
 ## 6. Parts, BOMs and configurable numbering
 
@@ -139,7 +139,7 @@ Require tests for:
 
 1. Repository foundation, architecture decision, app skeleton, workspace setup, opt-in registry, template/project creation, local index and tests.
 2. Drawing register, lifecycle, immutable revision storage, verified checkout/check-in and failure recovery.
-3. Tested shared-folder collaboration or demonstrably safe optional coordinator.
+3. Tested shared-folder collaboration (ADR-024).
 4. Parts/assemblies, numbering rules, dependency graph, Where Used and Before You Revise.
 5. OpenSchematix adapter, BOMs, source/derivative associations.
 6. CAD adapters, reference-safe duplication and assembly-aware operations.

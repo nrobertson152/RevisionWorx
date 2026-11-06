@@ -14,7 +14,7 @@ For installation see the [README](../README.md). For what is and is not verified
   is ever scanned.
 - **Document:** a file RevisionWorx controls. **Register** controls a file where it already is; **Import**
   copies a file into the project first. Each **revision** is an immutable copy with a SHA-256 hash.
-- **Checkout:** permission for one session to edit a document's working file. Only that session can check it in.
+- **Checkout:** permission for one session to edit a document's working file. Only that session can check it in. In a workspace set up for a team, it belongs to the person, on whichever computer.
 - **Lifecycle state:** each revision moves Work in Progress → In Review → Approved → Released (or Obsolete);
   releasing a newer revision supersedes the older one.
 - **Change request / order (ECR / ECO):** the formal record of why something changes, who approved it, and
@@ -69,9 +69,49 @@ Local, per-user files (safe to delete; they are rebuilt or only hold preferences
 | Preferences, recent workspaces | `%APPDATA%\RevisionWorx` | `~/.config/revisionworx` |
 | Search cache | `%LOCALAPPDATA%\RevisionWorx\cache` | `~/.cache/revisionworx` |
 | Checkout tokens | `%LOCALAPPDATA%\RevisionWorx\state` | `~/.local/state/revisionworx` |
+| Team workspace: this computer's copy of the journal, your login, an administrator's computer secret | `%LOCALAPPDATA%\RevisionWorx\state\shared` | `~/.local/state/revisionworx/shared` |
 
 Do not delete the checkout tokens while you have documents checked out: without them this session can no
-longer check those documents in (an administrator can still release the checkouts).
+longer check those documents in (an administrator can still release the checkouts). In a team workspace, the
+copy of the journal is safe to delete, but a `device-*.json` file is not: it's part of an administrator's login.
+
+## Working as a team, from a shared folder
+
+Several people can work from one network folder, each with their own login. There's no server: everyone's copy of RevisionWorx works directly with the folder, and they check each other's work. Read [Known limitations](KNOWN_LIMITATIONS.md) first: this hasn't been verified between real computers yet.
+
+**Find out whether your share is up to it.** Run this on two or more computers, at the same time:
+
+```
+revisionworx share test "Z:\Engineering" --seconds 60
+revisionworx share report "Z:\Engineering"
+```
+
+It races for files the way RevisionWorx does, and tells you if anything went wrong. Doing that once is the only way to know. Delete the `.revisionworx-share-test` folder afterwards.
+
+**Setting it up (the boss, once):**
+1. Everyone else closes RevisionWorx. Make a backup: this can't be undone, and older versions can't open the workspace afterwards.
+2. Open the workspace on your computer, and choose **Team › Set this workspace up for a team…**. Choose a user name and a long password. From the command line: `revisionworx -w FOLDER team enable --admin NAME`.
+3. **Write down the recovery code.** It's shown once. It's the only way to get an administrator account back if your computer is lost or you forget your password. Keep it away from the shared folder.
+4. **Team › Accounts… › Add…** for each person, with a starting password. Command line: `revisionworx user add NAME`. Tell them the password yourself. It isn't stored anywhere.
+
+Your administrator login works on your computer only. To use another one, use the recovery code there, which stops the old one working, or make a second administrator account.
+
+**Everyone else:** open the workspace from the shared folder, and log in. The first time, you choose your own password. Without logging in you can look, but not change anything. Command line: `revisionworx login NAME`, which stays logged in for 12 hours; `revisionworx logout` ends it. Other programs that publish to RevisionWorx, such as OpenSchematix, use that login too. In the window, tick **Stay logged in** for that.
+
+**Working:** just as on your own. Check a document out, edit its file in the shared folder, and check it in. Everyone sees who has what, and the window updates itself within a few seconds when someone else makes a change. Saves take turns, so one might wait for someone else's to finish. A checkout belongs to you, not to a computer, so you can check in from another desk.
+
+**What an administrator can do that others can't:** manage accounts, release someone else's checkout (it's recorded, with your reason), change the lifecycle, document types, templates and engineering roots, and remove unused stored content.
+
+**Disabling an account** stops that person's changes being accepted, by every computer, from then on. What they did before stands.
+
+| You see | What it means | What to do |
+|---|---|---|
+| "Alice is saving a change…" | It's her turn, and it's taking a while. | Try again in a moment. If her computer has stopped, this clears itself after a minute, and it's recorded. |
+| "Log in to make changes" | You aren't logged in. | **Team › Log in**. |
+| "This login is out of date" | Your password was changed, or reset. | Log out and in again. |
+| "Someone else changed the workspace at the same moment" | Your change wasn't made. Nothing is lost. | Try again. |
+| "This administrator account only works on the computer it was set up on" | You're on another computer. | Use **Use recovery code…** in the login window, or a second administrator account. |
+| "journal entry N is gone from the shared folder" / "isn't the one this computer read" | Files in `.revisionworx` have been lost, altered or restored. Changes are refused. | Lost or altered: on a computer that has read them, `revisionworx team repair`. Restored from a backup on purpose: on each computer, `revisionworx team forget-local`. Then `revisionworx doctor`. |
 
 ## Troubleshooting
 

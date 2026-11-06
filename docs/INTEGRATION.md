@@ -19,6 +19,10 @@ damaged metadata, check-in only through a real checkout, and imports that never 
 changes nothing. Checkouts made through `link` belong to the same user session as the desktop window and command
 line on that computer.
 
+In a workspace set up for a team (`docs/ARCHITECTURE.md`, ADR-024), reading needs nothing, and changing something needs a login kept on the
+computer: `revisionworx login NAME`, or **Stay logged in** in the desktop window. What's published is in that person's name. Without one,
+`publish` answers `"ok": false` with a message telling the user to log in. If someone else's save is taking a while, the `kind` is `busy`.
+
 ## Which workspace
 
 `-w FOLDER` (before `link`) or `REVISIONWORX_WORKSPACE`. Otherwise, for commands about a file, the nearest

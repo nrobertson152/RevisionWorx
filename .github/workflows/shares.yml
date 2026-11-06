@@ -1,0 +1,101 @@
+# Team workspaces on real file servers (ADR-024): real SMB and NFS servers and clients, with separate client caches, on one hosted machine.
+# It exercises the real protocol code paths and the real caches. It isn't evidence between real computers, and nothing here claims it is:
+# docs/KNOWN_LIMITATIONS.md says what is and isn't verified.
+name: Real shares (one machine)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shares-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  windows-smb:
+    name: "Windows client and server: SMB"
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e . pytest
+      - name: Share a folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\rwshare | Out-Null
+          icacls C:\rwshare /grant "Everyone:(OI)(CI)F" | Out-Null
+          New-SmbShare -Name rwshare -Path C:\rwshare -FullAccess Everyone | Format-List Name,Path
+          foreach ($server in "localhost", "127.0.0.1", $env:COMPUTERNAME) {
+            "\\$server\rwshare : $(Test-Path "\\$server\rwshare")"
+          }
+      - name: Team tests on the share, by three server names
+        shell: pwsh
+        run: |
+          $env:REVISIONWORX_TEST_SHARES = "\\localhost\rwshare;\\127.0.0.1\rwshare;\\$env:COMPUTERNAME\rwshare"
+          python -m pytest -q -ra -s tests/test_team_on_a_share.py
+      - name: What the connections were
+        if: always()
+        shell: pwsh
+        run: Get-SmbConnection | Format-Table ServerName,ShareName,Dialect -AutoSize
+
+  linux-samba:
+    name: "Linux kernel client and Samba: SMB"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e . pytest
+      - name: Serve a folder and mount it twice, with separate caches
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq samba cifs-utils "linux-modules-extra-$(uname -r)"
+          sudo modprobe cifs
+          sudo mkdir -p /srv/rwshare /mnt/a /mnt/b
+          sudo chown "$(id -u):$(id -g)" /srv/rwshare
+          printf '[rwshare]\n path = /srv/rwshare\n read only = no\n guest ok = yes\n force user = %s\n' "$(id -un)" | sudo tee -a /etc/samba/smb.conf
+          sudo systemctl restart smbd
+          sudo mount -t cifs //127.0.0.1/rwshare /mnt/a -o "guest,vers=3.1.1,uid=$(id -u),gid=$(id -g),nosharesock,actimeo=5"
+          sudo mount -t cifs //127.0.0.1/rwshare /mnt/b -o "guest,vers=3.1.1,uid=$(id -u),gid=$(id -g),nosharesock,actimeo=6"
+          mount | grep -E 'cifs'
+      - name: Team tests on the share
+        env:
+          REVISIONWORX_TEST_SHARES: "/mnt/a:/mnt/b"
+        run: python -m pytest -q -ra -s tests/test_team_on_a_share.py
+
+  linux-nfs:
+    name: "Linux kernel client and server: NFS"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e . pytest
+      - name: Export a folder and mount it twice, with separate caches
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nfs-kernel-server nfs-common "linux-modules-extra-$(uname -r)"
+          sudo mkdir -p /srv/rwnfs /mnt/n1 /mnt/n2
+          sudo chown "$(id -u):$(id -g)" /srv/rwnfs
+          echo "/srv/rwnfs 127.0.0.1(rw,sync,no_subtree_check,insecure,all_squash,anonuid=$(id -u),anongid=$(id -g))" | sudo tee -a /etc/exports
+          sudo exportfs -ra
+          sudo systemctl restart nfs-kernel-server
+          sudo mount -t nfs -o vers=4.2,nosharecache,actimeo=5 127.0.0.1:/srv/rwnfs /mnt/n1
+          sudo mount -t nfs -o vers=4.2,nosharecache,actimeo=6 127.0.0.1:/srv/rwnfs /mnt/n2
+          mount | grep -E 'nfs4?\b'
+      - name: Team tests on the share
+        env:
+          REVISIONWORX_TEST_SHARES: "/mnt/n1:/mnt/n2"
+        run: python -m pytest -q -ra -s tests/test_team_on_a_share.py

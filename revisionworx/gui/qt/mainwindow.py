@@ -2,6 +2,7 @@
 """Main window (PySide6). Binds view-models to widgets; contains no business logic."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
@@ -22,6 +23,7 @@ from .documents import DocumentsTab
 from .models import EnterTable, ViewModelTable, elastic
 from .palette import PaletteDialog
 from .startpage import StartPage
+from .team import (AccountsDialog, ChangePasswordDialog, LoginDialog, RecoveryCodeDialog, SetUpTeamDialog, show_share_check)
 
 SHORTCUTS_TEXT = """Ctrl+P\tGo to anything: projects, documents and actions
 Ctrl+N\tNew project (start page when no workspace is open)
@@ -38,6 +40,9 @@ Ctrl+Shift+M\tMy checkouts
 Enter / double-click\tOpen project folder or document file
 Right-click a document\tEverything you can do with it
 F1\tThis list"""
+
+
+TEAM_WATCH_TICKS = 50    # of the 100 ms timer: every five seconds, see whether anyone else has changed anything
 
 
 def configure_table(view: QTableView, columns) -> None:
@@ -260,9 +265,16 @@ class MainWindow(QMainWindow):
         self.busy_label.setAccessibleName("Background task status")
         self.checkouts_label = QLabel(self)
         self.checkouts_label.setAccessibleName("Your checkouts")
+        self.team_label = QLabel(self)
+        self.team_label.setAccessibleName("Who is logged in")
+        self.statusBar().addPermanentWidget(self.team_label)
         self.statusBar().addPermanentWidget(self.checkouts_label)
         self.statusBar().addPermanentWidget(self.busy_label)
         self._was_busy = False
+        self._team_head: int | None = None
+        self._team_ticks = 0
+        self._team_probe: threading.Thread | None = None
+        self._team_seen: dict | None = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(100)
@@ -304,6 +316,27 @@ class MainWindow(QMainWindow):
         adopt_act.triggered.connect(lambda *_: self.adopt())
         prj.addAction(adopt_act)
         self._write_actions.append(adopt_act)
+        team = self.menuBar().addMenu("Team")
+        self.login_act = QAction("Log in…", self)
+        self.login_act.triggered.connect(lambda *_: self.ask_login())
+        self.logout_act = QAction("Log out", self)
+        self.logout_act.triggered.connect(lambda *_: self.team_log_out())
+        self.password_act = QAction("Change my password…", self)
+        self.password_act.triggered.connect(lambda *_: self.change_password())
+        self.accounts_act = QAction("Accounts…", self)
+        self.accounts_act.triggered.connect(lambda *_: self.show_accounts())
+        self.set_up_team_act = QAction("Set this workspace up for a team…", self)
+        self.set_up_team_act.triggered.connect(lambda *_: self.set_up_team())
+        self.check_folder_act = QAction("Check this folder…", self)
+        self.check_folder_act.triggered.connect(lambda *_: self.ctl.location is not None and show_share_check(self.ctl, self))
+        for act in (self.login_act, self.logout_act, self.password_act):
+            team.addAction(act)
+        team.addSeparator()
+        team.addAction(self.accounts_act)
+        team.addSeparator()
+        team.addAction(self.set_up_team_act)
+        team.addAction(self.check_folder_act)
+        team.aboutToShow.connect(self.update_team_state)
         view = self.menuBar().addMenu("&View")
         goto = QAction("Go to anything…", self)
         goto.setShortcut(QKeySequence("Ctrl+P"))
@@ -477,7 +510,101 @@ class MainWindow(QMainWindow):
         if self.ctl.preferences_warning:
             self.statusBar().showMessage(self.ctl.preferences_warning, 15000)
         self.update_checkouts_label()
+        self.update_team_state()
+        if self.ctl.team_mode and self.ctl.my_account() is None:
+            QTimer.singleShot(0, self.ask_login)
         return True
+
+    # ------------------------------------------------------------------ a team working from a shared folder (ADR-024)
+    def update_team_state(self) -> None:
+        """Who's logged in, in the status bar, and what the Team menu offers."""
+        try:
+            team = self.ctl.team()
+        except Exception:  # noqa: BLE001 - a status hint must never raise
+            team = {"team": False, "account": None, "role": None, "must_change": False, "head": None}
+        is_team, account = team["team"], team["account"]
+        self._team_head = team.get("head")
+        self.login_act.setEnabled(is_team and account is None)
+        self.logout_act.setEnabled(is_team and account is not None)
+        self.password_act.setEnabled(is_team and account is not None)
+        self.accounts_act.setEnabled(is_team)
+        self.set_up_team_act.setEnabled(self.ctl.location is not None and not is_team)
+        self.check_folder_act.setEnabled(self.ctl.location is not None)
+        if not is_team:
+            self.team_label.setText("")
+        elif account is None:
+            self.team_label.setText("Not logged in: you can look, but not change anything")
+        else:
+            role = "administrator" if team["role"] == "admin" else "user"
+            owed = ": choose a password (Team menu) before you do anything else" if team["must_change"] else ""
+            self.team_label.setText(f"{team['name'] or account} ({role}){owed}")
+
+    def ask_login(self) -> None:
+        if self.ctl.location is None or not self.ctl.team_mode or self.ctl.my_account() is not None:
+            return
+        dialog = LoginDialog(self.ctl, self, str(self.ctl.preference("team_user", "") or ""))
+        if not dialog.exec():
+            self.update_team_state()
+            return
+        if self.ctl.my_account():
+            self.ctl.set_preference("team_user", self.ctl.my_account())
+        if dialog.outcome and dialog.outcome.get("must_change"):
+            ChangePasswordDialog(self.ctl, self, current=dialog.typed_password, first_time=True).exec()
+        self.refresh_all()
+        self.update_checkouts_label()
+        self.update_team_state()
+
+    def team_log_out(self) -> None:
+        self.ctl.log_out()
+        self.update_checkouts_label()
+        self.update_team_state()
+
+    def change_password(self) -> None:
+        if ChangePasswordDialog(self.ctl, self).exec():
+            self.statusBar().showMessage("Your password was changed.", 8000)
+        self.update_team_state()
+
+    def show_accounts(self) -> None:
+        AccountsDialog(self.ctl, self).exec()
+        self.update_team_state()
+
+    def set_up_team(self) -> None:
+        if self.refuse_while_busy():
+            return
+        dialog = SetUpTeamDialog(self.ctl, self)
+        if not dialog.exec() or not dialog.made:
+            return
+        RecoveryCodeDialog(dialog.made["recovery_code"], self).exec()
+        self.open_location(self.ctl.location, select_project=self.selected_project_id())
+
+    def _watch_team(self) -> None:
+        """Others' changes appear without anyone pressing F5. A share can stall for seconds, so the look goes on another thread."""
+        if not self.ctl.team_mode:
+            return
+        seen = self._team_seen
+        if seen is not None and not self.ctl.busy and QApplication.activeModalWidget() is None:
+            self._team_seen = None
+            if seen["head"] != self._team_head:
+                self._team_head = seen["head"]
+                if seen["others"]:                   # one's own changes have already been shown
+                    self.refresh_all()
+                    self.update_checkouts_label()
+                    self.update_team_state()
+                    names = ", ".join(seen["others"][:3])
+                    self.statusBar().showMessage(f"Updated: {names} made a change.", 5000)
+        self._team_ticks += 1
+        if self._team_ticks < TEAM_WATCH_TICKS or (self._team_probe is not None and self._team_probe.is_alive()):
+            return
+        self._team_ticks = 0
+        head = self._team_head
+
+        def look() -> None:
+            try:
+                self._team_seen = self.ctl.changes_since(head)
+            except Exception:  # noqa: BLE001 - it looks again in five seconds, and F5 shows anything wrong
+                pass
+        self._team_probe = threading.Thread(target=look, name="revisionworx-team-watch", daemon=True)
+        self._team_probe.start()
 
     def close_workspace_windows(self) -> None:
         """Dialogs that are not modal belong to the workspace they were opened for. Left open, their
@@ -530,6 +657,7 @@ class MainWindow(QMainWindow):
         self.ws_name.setText("RevisionWorx")
         self.ws_sub.setText("")
         self.checkouts_label.setText("")
+        self.update_team_state()
         self.list_vm.refresh()
         self.detail_vm.load(None)
         self.documents_tab.load_project(None)
@@ -658,6 +786,7 @@ class MainWindow(QMainWindow):
             if isinstance(ev, Progress):
                 for d in self.adopt_dialogs:
                     d.flow.on_progress(ev)
+        self._watch_team()
 
     # ------------------------------------------------------------------ redesign: themes, palette, about, layout
     def set_theme(self, name: str) -> None:

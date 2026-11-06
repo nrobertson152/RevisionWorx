@@ -237,6 +237,86 @@ def test_every_code_in_the_module_is_documented_and_has_a_test():
     assert not {c for c in used if f'"{c}"' not in tests}
 
 
+def _team(tmp_path, monkeypatch):
+    """A team workspace, examined from the computer that made it (ADR-024)."""
+    from revisionworx import clientstate
+    from team_helpers import new_team
+    folder, pc, _code, boss = new_team(tmp_path)
+    monkeypatch.setattr(clientstate, "default_state_dir", lambda: pc)
+    with Workspace.open(folder, writable=True, session=boss, state_dir=pc) as ws:
+        ws.commit("t", [RecordPut("project", "prj_" + "a" * 32, {"v": 1})])
+        head = ws.head_seq()
+    return folder, boss, pc, head
+
+
+def _codes(report) -> set:
+    return {f["code"] for f in report["findings"]}
+
+
+def test_a_healthy_team_workspace(tmp_path, monkeypatch):
+    folder, boss, pc, _head = _team(tmp_path, monkeypatch)
+    report = doctor.examine(folder)
+    assert report["ok"] and "team" in report["checked"] and not _codes(report)
+    assert not (set(report["checked"]) & {"locks"})                # its lock protocol is a different one
+
+
+def test_a_team_entry_lost_from_the_folder(tmp_path, monkeypatch):
+    folder, _boss, _pc, head = _team(tmp_path, monkeypatch)
+    (folder / ".revisionworx" / "journal" / f"{head:020d}.json").unlink()
+    assert {"J010", "T001"} <= _codes(doctor.examine(folder))
+
+
+def test_a_team_entry_altered_in_the_folder(tmp_path, monkeypatch):
+    folder, _boss, _pc, head = _team(tmp_path, monkeypatch)
+    path = folder / ".revisionworx" / "journal" / f"{head:020d}.json"
+    entry = atomicio.read_json_object(path)
+    entry["time"] = "1999"
+    entry["digest"] = entry_digest(entry)
+    atomicio.atomic_write_json(path, entry)
+    assert {"J011", "T001"} <= _codes(doctor.examine(folder))
+
+
+def test_a_next_team_entry_that_doesnt_follow_the_one_before(tmp_path, monkeypatch):
+    folder, _boss, _pc, head = _team(tmp_path, monkeypatch)
+    journal = folder / ".revisionworx" / "journal"
+    entry = {**atomicio.read_json_object(journal / f"{head:020d}.json"), "seq": head + 1, "prev": "not the entry before"}
+    entry["digest"] = entry_digest(entry)
+    atomicio.atomic_write_json(journal / f"{head + 1:020d}.json", entry)
+    assert {"J012", "T001"} <= _codes(doctor.examine(folder))
+
+
+def test_a_damaged_next_team_entry(tmp_path, monkeypatch):
+    folder, _boss, _pc, head = _team(tmp_path, monkeypatch)
+    (folder / ".revisionworx" / "journal" / f"{head + 1:020d}.json").write_text("nonsense", encoding="utf-8")
+    assert {"J002", "T001"} <= _codes(doctor.examine(folder))
+
+
+def test_a_team_workspace_with_no_administrator_is_reported(tmp_path, monkeypatch):
+    """The journal's rules should make this impossible, which is why it's worth saying if it ever happens."""
+    from revisionworx.shared import SharedWorkspace
+    folder, _boss, _pc, _head = _team(tmp_path, monkeypatch)
+    real = SharedWorkspace.list
+    monkeypatch.setattr(SharedWorkspace, "list", lambda self, kind: {} if kind == "account" else real(self, kind))
+    assert "T002" in _codes(doctor.examine(folder))
+
+
+def test_someone_taking_a_turn_is_only_information(tmp_path, monkeypatch):
+    folder, boss, pc, _head = _team(tmp_path, monkeypatch)
+    with Workspace.open(folder, writable=True, session=boss, state_dir=pc):
+        report = doctor.examine(folder)
+    assert "T003" in _codes(report) and report["ok"]
+
+
+def test_a_team_workspace_that_cant_be_opened_is_a_finding(tmp_path, monkeypatch):
+    from revisionworx import shared
+    folder, _boss, _pc, _head = _team(tmp_path, monkeypatch)
+
+    def refuses(*_args, **_kwargs):
+        raise OSError(13, "permission denied")
+    monkeypatch.setattr(shared.SharedWorkspace, "attach", classmethod(refuses))
+    assert "T001" in _codes(doctor.examine(folder))
+
+
 def _stray_high_entry(world) -> Path:
     path = world["meta"] / "journal" / "00000000010000000000.json"
     path.write_text("{}", encoding="utf-8")

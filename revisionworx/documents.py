@@ -24,7 +24,7 @@ from .content import ContentStore, hash_file, is_content_name
 from .filetypes import classify
 from .lifecycle import LifecycleError
 from .workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
-                        Workspace, WorkspaceCorruptError, WorkspaceError, current_actor, new_id, now_iso, register_kind, strip_rev)
+                        Workspace, WorkspaceCorruptError, WorkspaceError, new_id, now_iso, register_kind, strip_rev)
 
 for _kind in ("doctype", "document", "revision", "checkout", "lifecycle"):
     register_kind(_kind)
@@ -267,12 +267,12 @@ def _next_label(ws: Workspace, doc: dict, number: int, label: str | None) -> str
     return chosen
 
 
-def _new_revision(doc: dict, number: int, label: str, stored, description: str, previous: str | None,
+def _new_revision(ws: Workspace, doc: dict, number: int, label: str, stored, description: str, previous: str | None,
                   initial_state: str, restored_from: str | None = None) -> dict:
     rid = new_id("rev")
     return {"id": rid, "document_id": doc["id"], "number": number, "label": label, "state": initial_state,
             "sha256": stored.sha256, "size": stored.size, "source_mtime_ns": stored.source_mtime_ns,
-            "source_rel_path": doc["rel_path"], "description": description, "author": current_actor(),
+            "source_rel_path": doc["rel_path"], "description": description, "author": ws.actor(),
             "created": now_iso(), "previous_rev_id": previous, "restored_from": restored_from,
             "transitions": []}
 
@@ -311,14 +311,14 @@ def register_document(ws: Workspace, project_id: str, file_path: Path | str, *, 
            "number": number.strip(), "title": title.strip() or Path(rel).stem, "description": description,
            "owner": owner.strip(), "revision_scheme": scheme, "latest_rev_id": None, "released_rev_id": None,
            "rev_count": 0, "status": "active", "file_category": classify(Path(rel)).category,
-           "created": now_iso(), "created_by": current_actor()}
+           "created": now_iso(), "created_by": ws.actor()}
     ops: list = []
     rev = None
     if capture:
         lc = get_lifecycle(ws)
         chosen = _next_label(ws, doc, 1, label)
         stored = ContentStore(ws).store_file(target)
-        rev = _new_revision(doc, 1, chosen, stored, revision_description.strip() or "Initial revision",
+        rev = _new_revision(ws, doc, 1, chosen, stored, revision_description.strip() or "Initial revision",
                             None, lc["initial"])
         doc.update(latest_rev_id=rev["id"], rev_count=1)
         ops.append(RecordPut("revision", rev["id"], rev, expect_rev=0))
@@ -363,7 +363,7 @@ def checkout(ws: Workspace, doc_id: str, note: str = "", expected_doc_rev: int |
         raise CheckoutConflict(existing)
     path = working_path(ws, doc)
     base_sha = hash_file(path)[0] if path.is_file() else None
-    co = {"document_id": doc_id, "token": secrets.token_hex(16), "owner": current_actor(),
+    co = {"document_id": doc_id, "token": secrets.token_hex(16), "owner": ws.actor(),
           "acquired": now_iso(), "base_rev_id": doc["latest_rev_id"], "base_sha256": base_sha,
           "note": note, "restored_from": None}
     try:
@@ -378,6 +378,20 @@ def checkout(ws: Workspace, doc_id: str, note: str = "", expected_doc_rev: int |
         exc.result = {**co, "_rev": exc.seq}     # saved: without its token only an administrator could release it
         raise
     return {**co, "_rev": seq}
+
+
+def my_token(ws: Workspace, tokens, doc_id: str) -> str | None:
+    """The token that lets this user act on a checkout: the one this computer kept, or, in a team workspace, the checkout's own if
+    it's in this user's name, whichever computer it was taken on. There, the working file is in the shared folder and an account
+    says who it belongs to."""
+    co = ws.get("checkout", doc_id)
+    if co is not None and ws.owns_checkout(co):
+        return co.get("token")
+    return tokens.get(ws.id, doc_id)
+
+
+def is_mine(ws: Workspace, tokens, checkout: dict) -> bool:
+    return ws.owns_checkout(checkout) or tokens.get(ws.id, checkout["document_id"]) == checkout.get("token")
 
 
 def _require_checkout(ws: Workspace, doc_id: str, token: str) -> dict:
@@ -449,7 +463,7 @@ def _checkin(ws: Workspace, doc_id: str, token: str, description: str, label: st
     if latest and latest["sha256"] == stored.sha256 and not allow_unchanged:
         raise NoChanges("the file is identical to the latest revision; cancel the checkout instead, "
                         "or check in anyway with 'allow unchanged'")
-    rev = _new_revision(doc, number, chosen, stored, description.strip(), doc["latest_rev_id"],
+    rev = _new_revision(ws, doc, number, chosen, stored, description.strip(), doc["latest_rev_id"],
                         get_lifecycle(ws)["initial"], co.get("restored_from"))
     new_doc = {**strip_rev(doc), "latest_rev_id": rev["id"], "rev_count": number, "modified": now_iso()}
     try:
@@ -522,7 +536,7 @@ def admin_release_checkout(ws: Workspace, doc_id: str, expected_token: str, reas
         RecordDelete("checkout", doc_id, expect_rev=co["_rev"]),
         RecordPut("audit", new_id("aud"), {"event": "checkout-admin-release", "document_id": doc_id,
                                           "previous_checkout": strip_rev(co), "reason": reason,
-                                          "time": now_iso(), "by": current_actor()})])
+                                          "time": now_iso(), "by": ws.actor()})])
     return co
 
 
@@ -550,7 +564,7 @@ def transition(ws: Workspace, rev_id: str, to_state: str, comment: str = "",
         allowed = ", ".join(lc_mod.allowed_targets(lc, frm)) or "none"
         raise LifecycleError(f"cannot move from {lc_mod.state_name(lc, frm)} to "
                              f"{lc_mod.state_name(lc, to_state)}; allowed: {allowed}")
-    actor = current_actor()
+    actor = ws.actor()
     if to_state == lc["approved"] and lc["require_distinct_approver"] and \
             actor["user"] == rev["author"].get("user"):
         raise LifecycleError("policy requires a different person to approve this revision")
@@ -772,7 +786,7 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
               "bytes": sum(o["size"] for o in orphans), "removed": False}
     if apply and orphans:
         ws.commit("content.gc", [RecordPut("audit", new_id("aud"), {
-            "event": "content-gc", "removed": orphans, "time": now_iso(), "by": current_actor()})])
+            "event": "content-gc", "removed": orphans, "time": now_iso(), "by": ws.actor()})])
         for o in orphans:  # audit first: a crash leaves a record of intent, never an unlogged deletion
             ws.require_authority()        # a deletion cannot be fenced, but it can stop once authority is gone
             if o["sha256"] not in {r["sha256"] for r in _all(ws, "revision").values()}:

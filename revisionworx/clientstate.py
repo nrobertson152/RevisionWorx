@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 from pathlib import Path
 
 from . import atomicio
@@ -22,11 +23,31 @@ def default_state_dir() -> Path:
     return Path(base) / "revisionworx"
 
 
-def _safe_name(value: str) -> str:
+def safe_name(value: str) -> str:
     """Workspace and document ids are safe already; this keeps any other value inside the state folder."""
     if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", value):
         return value
     return "h_" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+_safe_name = safe_name
+
+
+def write_private(path: Path, obj: dict) -> None:
+    """Write a file only this operating-system user can read: it holds a key that signs in their name. On Windows the profile's
+    own permissions do this; the mode here is for Linux. It's created private, and never exists with looser permissions."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(atomicio.dumps_json(obj))
+            fh.flush()
+            os.fsync(fh.fileno())
+        atomicio.retry_sharing(lambda: os.replace(tmp, path))
+    finally:
+        atomicio.remove_quietly(tmp)
 
 
 class CheckoutTokens:

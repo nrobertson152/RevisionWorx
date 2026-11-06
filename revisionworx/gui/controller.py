@@ -35,6 +35,9 @@ PAGE_SIZE = 200
 SCOPE_NOTICE = ("RevisionWorx 1.0 \u2014 made for one computer's local disk (several windows on that computer "
                 "are safe together). Shared network folders: let only one computer make changes at a time. "
                 "Keep regular backups.")
+TEAM_NOTICE = ("RevisionWorx team workspace \u2014 several people work from this shared folder, taking turns to save changes. Not yet "
+               "verified between real computers on your network: run 'revisionworx share test' on two of them to find out. "
+               "Keep regular backups.")
 ALPHA_NOTICE = SCOPE_NOTICE  # former name, kept for callers written against the 0.1.0 alpha
 DEFAULT_ROOT_NAME = "Projects"
 
@@ -96,10 +99,13 @@ class Controller:
                  state_dir: Path | None = None):
         self.cfg_dir = Path(cfg_dir) if cfg_dir else config_dir()
         self.cache_dir = cache_dir
+        self.state_dir = state_dir
         self.tokens = CheckoutTokens(state_dir)
         self.workspace_id: str | None = None
         self.location: Path | None = None
         self.network_location: bool | None = None  # True: open workspace is on a network share (notice only)
+        self.team_mode = False                     # True: the open workspace is set up for a team (ADR-024)
+        self.session = None                        # who's logged in here, in that case
         self.results: "queue.Queue[JobResult | Progress]" = queue.Queue()
         self._cancel = threading.Event()
         self._busy = threading.Lock()
@@ -161,8 +167,12 @@ class Controller:
 
     def open_workspace(self, location: Path) -> dict:
         location = Path(location)
-        with Workspace.open(location) as ws:  # validates format before we accept it
+        with Workspace.open(location, state_dir=self.state_dir) as ws:  # validates format before we accept it
             info = {"id": ws.id, "name": ws.name}
+            team_mode, session = not ws.materialises, None if ws.materialises else ws.session
+        if not (self.location == location and self.session is not None):   # reopening doesn't log anyone out
+            self.session = session
+        self.team_mode = team_mode
         self.location = location
         self.workspace_id = info["id"]
         self.network_location = paths.is_network_location(location)
@@ -174,6 +184,8 @@ class Controller:
         self.location = None
         self.workspace_id = None
         self.network_location = None
+        self.team_mode = False
+        self.session = None
         self._set_block(None)
 
     def _set_block(self, reason: str | None, found_by_write: bool = False) -> None:
@@ -242,7 +254,7 @@ class Controller:
                 return {**out, "ok": False, "blocked": True, "message": still}
         try:
             with self._read() as ws:
-                report = ws.verify()
+                report = ws.quick_check()
                 pending_keys, pending = self._pending_changes(ws)
         except WorkspaceCorruptError as exc:
             self._set_block(str(exc))
@@ -292,7 +304,7 @@ class Controller:
             return (describe_error(WorkspaceCorruptError(self.blocked_reason)) +
                     "\n\nIt will be re-checked when the current operation finishes (press F5).")
         try:
-            with Workspace.open(self.location, writable=True):
+            with Workspace.open(self.location, writable=True, **self._team_options(writing=True)):
                 pass  # nothing is committed: open, check and close only
         except WorkspaceCorruptError as exc:
             self._set_block(str(exc), found_by_write=True)
@@ -335,7 +347,15 @@ class Controller:
     def _read(self) -> Workspace:
         if self.location is None:
             raise RuntimeError("no workspace is open")
-        return Workspace.open(self.location)
+        return Workspace.open(self.location, **self._team_options())
+
+    def _team_options(self, writing: bool = False) -> dict:
+        if not self.team_mode:
+            return {}
+        options = {"state_dir": self.state_dir, "session": self.session}
+        if writing:                                  # waiting for someone's turn to end mustn't freeze the window for long
+            options["wait"] = 3.0 if threading.current_thread() is threading.main_thread() else 60.0
+        return options
 
     @contextmanager
     def _write(self) -> Iterator[Workspace]:
@@ -349,7 +369,7 @@ class Controller:
         if self.blocked_reason is not None:
             raise RecoveryBlocked(self.blocked_reason)
         try:
-            ws = Workspace.open(self.location, writable=True)
+            ws = Workspace.open(self.location, writable=True, **self._team_options(writing=True))
             try:
                 start = ws.head_seq()
                 yield ws
@@ -464,7 +484,7 @@ class Controller:
         with self._read() as ws:
             out = []
             for co in ws.list("checkout").values():
-                if self.tokens.get(ws.id, co["document_id"]) == co.get("token"):
+                if documents.is_mine(ws, self.tokens, co):
                     doc = ws.get("document", co["document_id"])
                     if doc:
                         out.append({"id": doc["id"], "project_id": doc["project_id"], "number": doc.get("number", ""),
@@ -483,7 +503,8 @@ class Controller:
             return {"document": doc, "history": hist, "lifecycle": lc,
                     "status": documents.document_status(ws, doc_id, verify_hash=verify_hash),
                     "checkout": {k: v for k, v in co.items() if k != "token"} if co else None,
-                    "mine": bool(co and self.tokens.get(ws.id, doc_id) == co["token"]),
+                    "mine": bool(co and documents.is_mine(ws, self.tokens, co)),
+                    "can_release": bool(co and not ws.materialises and ws.is_admin and not documents.is_mine(ws, self.tokens, co)),
                     "latest": latest,
                     "transitions": allowed_targets(lc, latest["state"]) if latest else []}
 
@@ -522,7 +543,7 @@ class Controller:
         from ..workspace import CommittedNotApplied
         with self._write() as ws:
             try:
-                documents.cancel_checkout(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", revert=revert)
+                documents.cancel_checkout(ws, doc_id, documents.my_token(ws, self.tokens, doc_id) or "", revert=revert)
             except CommittedNotApplied as exc:
                 self._forget_token(ws.id, doc_id)
                 raise SavedWithWarning(f"The checkout was released. {exc}") from exc
@@ -716,7 +737,7 @@ class Controller:
         try:
             with self._write() as ws:
                 ws_id = ws.id
-                rev = documents.checkin(ws, doc_id, self.tokens.get(ws.id, doc_id) or "", message,
+                rev = documents.checkin(ws, doc_id, documents.my_token(ws, self.tokens, doc_id) or "", message,
                                         label=label, allow_unchanged=allow_unchanged, txid=txid)
         except CommittedNotApplied as exc:
             self._forget_token(ws_id or self.workspace_id, doc_id)
@@ -750,6 +771,116 @@ class Controller:
                 return ws.transaction_outcome(txid)
         except Exception as exc:  # cannot determine: never report success
             return {"state": "unknown", "error": str(exc)}
+
+    # ------------------------------------------------------------------ a team working from a shared folder (ADR-024)
+    def team(self) -> dict:
+        """Who's working here. ``team`` is False for a workspace that isn't set up for one."""
+        out = {"team": False, "account": None, "name": None, "role": None, "must_change": False, "head": None}
+        if self.location is None:
+            return out
+        with self._read() as ws:
+            if ws.materialises:
+                return out
+            out.update(team=True, head=ws.head_seq())
+            if ws.session is not None:
+                record = ws.get("account", ws.session.account) or {}
+                if record.get("active") is True and (record.get("key") or {}).get("public") == ws.session.public:
+                    out.update(account=ws.session.account, name=ws.session.name, role=record.get("role"),
+                               must_change=bool(record.get("must_change")))
+                else:                                # disabled, or the password was changed elsewhere: not a login any more
+                    self.log_out()
+        return out
+
+    def my_account(self) -> str | None:
+        """The account logged in here, if there is one. Cheap enough to ask for each row of a list: no network, no journal."""
+        return self.session.account if self.team_mode and self.session else None
+
+    def changes_since(self, head: int | None) -> dict:
+        """What's been published since this head, and who by, not counting this user. A window asks every few seconds, and when nothing
+        has happened it costs a few small reads across the network. It also lets a stuck writer lock be noticed before anyone tries
+        to write: the wait for it to clear counts from the first time this computer saw it."""
+        if self.location is None:
+            return {"head": None, "others": []}
+        with self._read() as ws:
+            if ws.materialises:
+                return {"head": None, "others": []}
+            holder = Workspace.read_writer_lock(ws.meta_dir)
+            if holder:
+                from ..shared import lock_silence
+                lock_silence(ws.meta_dir, holder)
+            now = ws.head_seq()
+            me = ws.session.account if ws.session else None
+            others = set()
+            if head is not None and now != head:
+                for entry in ws.entries_after(head):
+                    actor = entry.get("actor") or {}
+                    if actor.get("account") != me:
+                        others.add(str(actor.get("name") or actor.get("user") or "someone"))
+            return {"head": now, "others": sorted(others)}
+
+    def log_in(self, account: str, password: str, remember_hours: float | None = None) -> dict:
+        from .. import accounts
+        made = accounts.login(self.location, account, password, state_dir=self.state_dir, remember_hours=remember_hours)
+        self.session = made["session"]
+        self._set_block(None)
+        return made
+
+    def log_out(self) -> None:
+        from .. import accounts
+        self.session = None
+        if self.workspace_id:
+            accounts.logout(self.workspace_id, self.state_dir)
+
+    def change_password(self, old_password: str, new_password: str) -> None:
+        from .. import accounts
+        self.session = accounts.change_password(self.location, old_password, new_password, session=self.session, state_dir=self.state_dir)
+
+    def enable_team(self, admin: str, name: str, password: str) -> dict:
+        from .. import accounts
+        made = accounts.enable_team_use(self.location, admin, name, password, state_dir=self.state_dir)
+        self.session, self.team_mode = made["session"], True
+        return made
+
+    def recover_admin(self, code: str, account: str, new_password: str) -> None:
+        from .. import accounts
+        self.session = accounts.recover_admin(self.location, code, account, new_password, state_dir=self.state_dir)
+
+    def check_share(self) -> dict:
+        from .. import sharecheck
+        return sharecheck.check_folder(Workspace.meta_dir_for(self.location))
+
+    def accounts(self) -> list[dict]:
+        from .. import accounts
+        with self._read() as ws:
+            return accounts.list_accounts(ws)
+
+    def create_account(self, account: str, password: str, name: str = "", role: str = "user") -> dict:
+        from .. import accounts
+        with self._write() as ws:
+            return accounts.create_account(ws, account, password, name=name, role=role)
+
+    def release_checkout(self, doc_id: str, reason: str) -> None:
+        """An administrator's release of someone else's checkout. It's recorded, and their file is left as it is."""
+        with self._write() as ws:
+            co = ws.get("checkout", doc_id)
+            if co is None:
+                raise documents.NotCheckedOut("this document is not checked out")
+            documents.admin_release_checkout(ws, doc_id, co["token"], reason)
+
+    def set_account_active(self, account: str, active: bool) -> dict:
+        from .. import accounts
+        with self._write() as ws:
+            return accounts.set_active_flag(ws, account, active)
+
+    def set_account_role(self, account: str, role: str) -> dict:
+        from .. import accounts
+        with self._write() as ws:
+            return accounts.set_role(ws, account, role)
+
+    def reset_account_password(self, account: str, password: str) -> dict:
+        from .. import accounts
+        with self._write() as ws:
+            return accounts.reset_password(ws, account, password)
 
     # ------------------------------------------------------------------ background jobs
     @property
@@ -848,6 +979,13 @@ def describe_error(exc: BaseException) -> str:
         return (f"RevisionWorx could not confirm whether this check-in was saved: {exc}\n\nCheck the "
                 "disk, close and reopen the workspace, and look at the revision history before "
                 "trying again.")
+    from ..shared import NotLoggedIn, NotPermitted, SetupIncomplete
+    if isinstance(exc, NotLoggedIn):
+        return f"{exc}.\n\nUse Team \u203a Log in. Nothing was written."
+    if isinstance(exc, NotPermitted):
+        return f"{str(exc)[0].upper()}{str(exc)[1:]}.\n\nNothing was written."
+    if isinstance(exc, SetupIncomplete):
+        return f"{str(exc)[0].upper()}{str(exc)[1:]}."
     busy_release = getattr(workspace_module, "LockReleaseBusyError", None)  # not in every supported core
     if busy_release is not None and isinstance(exc, busy_release):
         return (f"{exc}\n\nNothing was written, and this is not a sign of damage. Another RevisionWorx session, "
@@ -897,6 +1035,11 @@ def describe_error(exc: BaseException) -> str:
         return f"{exc}\n\nThis item changed while you were viewing it. Reload and reapply your change."
     if isinstance(exc, CommittedNotApplied):
         return f"Saved. Your change is recorded, but finishing it was delayed:\n{exc}"
+    if isinstance(exc, WorkspaceLockedError) and (getattr(exc, "holder", None) or {}).get("account"):
+        who = exc.holder
+        return (f"{who.get('name') or who.get('account')} is saving a change on {who.get('host', 'another computer')}, and it's taking "
+                "a while, so yours wasn't made. Try again in a moment.\n\nIf their computer has stopped, this sorts itself out: "
+                "RevisionWorx clears a turn once a computer has shown no sign of life for a minute.")
     if isinstance(exc, WorkspaceLockedError):
         token = (getattr(exc, "holder", None) or {}).get("token", "<token from 'lock show'>")
         folder = getattr(exc, "workspace_location", None) or "<workspace folder>"

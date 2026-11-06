@@ -92,3 +92,14 @@ def _delete_closed_qt_windows(request):
         return
     with qt_window_cleanup():
         yield
+
+
+@pytest.fixture(autouse=True)
+def _team_tests_stretch_passwords_less(monkeypatch, tmp_path):
+    """Real accounts stretch a password for about a third of a second on purpose. Tests that log in hundreds of times don't need
+    to. tests/test_accounts.py checks what real accounts use. And no test's local state ends up in the real user's profile."""
+    from revisionworx import accounts
+    monkeypatch.setattr(accounts, "KDF", {"name": "scrypt", "n": 2 ** 4, "r": 8, "p": 1})
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / ".local-state"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / ".local-state"))
+    yield

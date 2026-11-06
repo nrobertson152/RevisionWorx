@@ -51,6 +51,7 @@ from .atomicio import ExclusiveCreateError
 
 FORMAT_NAME = "RevisionWorx Workspace"
 FORMAT_VERSION = 1
+SHARED_FORMAT_VERSION = 2                            # a workspace set up for a team (ADR-024): older versions must refuse it
 META_DIRNAME = ".revisionworx"
 _SEQ_RE = re.compile(r"^(\d{20})\.json$")
 _ID_RE = re.compile(r"^[a-z]{2,8}_[0-9a-f]{32}$|^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -255,7 +256,7 @@ def _entry_shape_problem(entry: dict) -> str | None:
     WorkspaceCorruptError and never as AttributeError/TypeError deeper in. Optional fields stay optional
     (digestless and pre-ADR-021 legacy entries are still accepted); only their types are enforced.
     Purely structural: nothing is written."""
-    for key in ("txid", "writer_token", "op", "time", "revokes"):
+    for key in ("txid", "writer_token", "op", "time", "revokes", "prev", "signer", "sig", "history"):
         if not _optional(entry, key, (str,)):
             return f"{key} must be a string"
     for key in ("actor", "request"):
@@ -330,6 +331,11 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def is_shared_info(info: dict) -> bool:
+    """Whether a workspace.json describes a workspace set up for a team (ADR-024)."""
+    return info.get("collaboration") == "shared" and info.get("format_version") == SHARED_FORMAT_VERSION
+
+
 def current_actor() -> dict:
     try:
         user = getpass.getuser()
@@ -376,6 +382,8 @@ class RecordDelete:
 class Workspace:
     """Open handle on a workspace. Use :meth:`create` or :meth:`open`; close when done."""
 
+    materialises = True                              # keeps record files and state.json; a team workspace doesn't (ADR-024)
+
     def __init__(self, meta_dir: Path, info: dict, writable: bool, lock_token: str | None):
         self.meta_dir = meta_dir
         self.info = info
@@ -393,6 +401,21 @@ class Workspace:
     @property
     def name(self) -> str:
         return self.info.get("name", "")
+
+    def actor(self) -> dict:
+        """Who is making a change through this handle."""
+        return current_actor()
+
+    def owns_checkout(self, checkout: dict) -> bool:
+        """Whether a checkout is this user's without needing a token held on this computer. Only accounts can say so."""
+        return False
+
+    def quick_check(self) -> dict:
+        """The check a window repeats while it's open, in the shape of :meth:`verify`."""
+        return self.verify()
+
+    def fenced_reason(self, entry: dict) -> str:
+        return "was published after its writer lost the lock, so it never took effect. This is fencing having worked"
 
     @staticmethod
     def meta_dir_for(location: Path) -> Path:
@@ -445,7 +468,8 @@ class Workspace:
         return True
 
     @classmethod
-    def open(cls, location: Path, writable: bool = False) -> "Workspace":
+    def open(cls, location: Path, writable: bool = False, **team_options) -> "Workspace":
+        """``team_options`` (``session``, ``state_dir``, ``wait``) only mean something in a workspace set up for a team."""
         meta = cls.meta_dir_for(location)
         info_path = meta / "workspace.json"
         if not info_path.is_file():
@@ -458,6 +482,9 @@ class Workspace:
             raise WorkspaceFormatError(f"{info_path} cannot be read: {exc}") from exc
         if info.get("format") != FORMAT_NAME:
             raise WorkspaceFormatError(f"{info_path} is not a RevisionWorx workspace")
+        if is_shared_info(info):
+            from .shared import SharedWorkspace
+            return SharedWorkspace.attach(meta, info, writable, **team_options)
         if int(info.get("format_version", 0)) > FORMAT_VERSION:
             raise WorkspaceFormatError(
                 f"workspace format {info.get('format_version')} is newer than this RevisionWorx "
@@ -778,6 +805,13 @@ class Workspace:
             raise ValueError(f"{path.name} has no usable token")
         return holder
 
+    @staticmethod
+    def _is_shared_folder(meta: Path) -> bool:
+        try:
+            return is_shared_info(atomicio.read_json_object(meta / "workspace.json"))
+        except (OSError, ValueError):
+            return False
+
     @classmethod
     def read_writer_lock(cls, location: Path) -> dict | None:
         lock = cls.meta_dir_for(location) / "locks" / "writer.lock"
@@ -821,6 +855,9 @@ class Workspace:
         if not reason.strip():
             raise WorkspaceError("a reason is required")
         meta = cls.meta_dir_for(location)
+        if cls._is_shared_folder(meta):
+            raise WorkspaceError("a workspace set up for a team has no orphaned lock files to clear: a stuck lock clears "
+                                 "itself once its computer has shown no sign of life for a while")
         if not re.match(r"^\.(releasing|fencing)-[0-9a-f]{1,64}$", name):
             raise WorkspaceError(f"{name!r} is not an orphaned release file")
         auth, adopted = cls._authorise_orphan_clear(meta, name, reason)
@@ -1062,7 +1099,7 @@ class Workspace:
         raise WorkspaceError("could not publish the lock revocation (journal contention)")
 
     @classmethod
-    def break_writer_lock(cls, location: Path, expected_token: str, reason: str) -> dict:
+    def break_writer_lock(cls, location: Path, expected_token: str, reason: str, **team_options) -> dict:
         """Administrative recovery of an abandoned writer lock.
 
         The caller must pass the exact token currently in the lock (as displayed to the
@@ -1072,6 +1109,9 @@ class Workspace:
         if not reason.strip():
             raise WorkspaceError("a reason is required to break a writer lock")
         meta = cls.meta_dir_for(location)
+        if cls._is_shared_folder(meta):
+            from .shared import SharedWorkspace
+            return SharedWorkspace.break_lock(meta, expected_token, reason, **team_options)
         holder = cls.read_writer_lock(meta)
         if holder is None:
             raise WorkspaceError("there is no writer lock to break")
@@ -1179,6 +1219,10 @@ class Workspace:
                 if s <= view["seen"]:
                     continue
                 entry = self.read_entry(s)
+                if entry.get("op") == "shared.enable":
+                    # Without this, changing workspace.json by hand would switch off every signature check (ADR-024).
+                    raise WorkspaceCorruptError(f"journal entry {s} set this workspace up for a team, but workspace.json "
+                                                "no longer says so. It has been changed; restore it from a backup")
                 tok = entry.get("writer_token")
                 fenced = bool(tok) and tok in view["revoked"]
                 if not fenced:
@@ -1288,13 +1332,8 @@ class Workspace:
         data = self.get(kind, rid)
         return int(data.get(REV_FIELD, 0)) if data is not None else 0
 
-    def commit(self, op: str, ops: list, blob_refs: list[str] | None = None, txid: str | None = None) -> int:
-        """Durably apply record puts/deletes as one journal entry. Returns its sequence number.
-
-        Raises ConflictError (nothing written) if an ``expect_rev`` does not hold, LockLostError if
-        the writer lock was lost, and CommittedNotApplied if the entry was committed but could not be
-        materialised."""
-        self._require_writable()
+    @staticmethod
+    def _check_request(ops: list, txid: str | None) -> None:
         for item in ops:
             if item.kind not in KINDS:
                 raise ValueError(f"unknown record kind {item.kind!r}")
@@ -1304,6 +1343,15 @@ class Workspace:
                 raise ValueError(f"{item.kind} {item.id} is nested more than {MAX_RECORD_NESTING} levels deep")
         if txid is not None and not re.match(r"^[0-9a-f]{32}$", txid):
             raise ValueError("txid must be 32 lowercase hex characters")
+
+    def commit(self, op: str, ops: list, blob_refs: list[str] | None = None, txid: str | None = None) -> int:
+        """Durably apply record puts/deletes as one journal entry. Returns its sequence number.
+
+        Raises ConflictError (nothing written) if an ``expect_rev`` does not hold, LockLostError if
+        the writer lock was lost, and CommittedNotApplied if the entry was committed but could not be
+        materialised."""
+        self._require_writable()
+        self._check_request(ops, txid)
         self._check_lock_still_held()  # before recover: a writer that lost its lock writes nothing
         if self.applied_seq() != self.head_seq():
             self.recover()

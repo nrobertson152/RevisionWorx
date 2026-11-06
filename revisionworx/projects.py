@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import paths, scan
-from .workspace import RecordPut, Workspace, WorkspaceCorruptError, WorkspaceError, current_actor, new_id, now_iso, strip_rev
+from .workspace import RecordPut, Workspace, WorkspaceCorruptError, WorkspaceError, new_id, now_iso, strip_rev
 
 MODES = ("indexed", "managed")
 PLATFORM_KEY = "windows" if os.name == "nt" else "posix"
@@ -31,7 +31,7 @@ def add_root(ws: Workspace, name: str, path: Path, other_platform_path: str | No
         raise ProjectError(f"root folder does not exist: {path}")
     real = os.path.realpath(path)
     for rid, root in ws.list("root").items():
-        existing = root["paths"].get(PLATFORM_KEY)
+        existing = _inside_workspace(ws, root) or root["paths"].get(PLATFORM_KEY)
         if existing and os.path.normcase(os.path.realpath(existing)) == os.path.normcase(real):
             raise ProjectError(f"that folder is already configured as root {root['name']!r}")
         if root["name"].casefold() == name.casefold():
@@ -40,9 +40,36 @@ def add_root(ws: Workspace, name: str, path: Path, other_platform_path: str | No
     if other_platform_path:
         paths_map["posix" if PLATFORM_KEY == "windows" else "windows"] = other_platform_path
     rid = new_id("root")
-    ws.commit("root.add", [RecordPut("root", rid, {"id": rid, "name": name, "paths": paths_map,
-                                                   "created": now_iso()}, expect_rev=0)])
+    record = {"id": rid, "name": name, "paths": paths_map, "created": now_iso()}
+    if not ws.materialises:                              # a team: other computers may reach this folder by another path
+        relative = _relative_to_workspace(ws, path)
+        if relative is not None:
+            record["relative"] = relative
+    ws.commit("root.add", [RecordPut("root", rid, record, expect_rev=0)])
     return rid
+
+
+def _relative_to_workspace(ws: Workspace, folder: Path) -> str | None:
+    """Where a folder is inside the workspace's own folder, or None if it's elsewhere."""
+    top = os.path.normcase(os.path.realpath(ws.meta_dir.parent))
+    real = os.path.normcase(os.path.realpath(folder))
+    if real == top:
+        return "."
+    if real.startswith(top.rstrip(os.sep) + os.sep):
+        return Path(os.path.relpath(os.path.realpath(folder), os.path.realpath(ws.meta_dir.parent))).as_posix()
+    return None
+
+
+def roots_inside_workspace(ws: Workspace) -> list[RecordPut]:
+    """When a workspace is set up for a team, each computer may reach the shared folder by its own path (Z:\\ on one, a UNC path
+    on another). Roots inside it are kept relative to it from then on, so that they work from all of them."""
+    ops = []
+    for rid, root in ws.list("root").items():
+        folder = root.get("paths", {}).get(PLATFORM_KEY) if isinstance(root.get("paths"), dict) else None
+        relative = _relative_to_workspace(ws, Path(folder)) if folder else None
+        if relative is not None:
+            ops.append(RecordPut("root", rid, {**strip_rev(root), "relative": relative}, expect_rev=root["_rev"]))
+    return ops
 
 
 def root_path(ws: Workspace, root_id: str) -> Path:
@@ -51,6 +78,9 @@ def root_path(ws: Workspace, root_id: str) -> Path:
         raise ProjectError(f"unknown root {root_id}")
     if not isinstance(root.get("paths"), dict) or not isinstance(root["paths"].get(PLATFORM_KEY, ""), str):
         raise WorkspaceCorruptError(f"root {root_id} is malformed: paths has the wrong shape; run 'revisionworx doctor'")
+    inside = _inside_workspace(ws, root)
+    if inside is not None:
+        return inside
     p = root["paths"].get(PLATFORM_KEY)
     if not p:
         raise ProjectError(f"root {root.get('name')!r} has no path configured for this operating system "
@@ -58,12 +88,19 @@ def root_path(ws: Workspace, root_id: str) -> Path:
     return Path(p)
 
 
+def _inside_workspace(ws: Workspace, root: dict) -> Path | None:
+    relative = root.get("relative")
+    if not isinstance(relative, str) or ws.materialises:
+        return None
+    return paths.resolve_under_root(ws.meta_dir.parent, relative) if relative != "." else ws.meta_dir.parent
+
+
 def find_root_for(ws: Workspace, folder: Path) -> tuple[str, str]:
     """Return ``(root_id, relative_path)`` for a folder inside a configured root."""
     real = os.path.normcase(os.path.realpath(folder))
     best = None
     for rid, root in ws.list("root").items():
-        p = root["paths"].get(PLATFORM_KEY)
+        p = _inside_workspace(ws, root) or root["paths"].get(PLATFORM_KEY)
         if not p:
             continue
         rreal = os.path.normcase(os.path.realpath(p))
@@ -206,7 +243,7 @@ def create_project(ws: Workspace, np: NewProject, allow_duplicate_number: bool =
     record = {"id": pid, "name": np.name.strip(), "number": np.number.strip(),
               "customer": np.customer.strip(), "description": np.description, "mode": mode,
               "root_id": root_id, "rel_path": rel, "status": "active", "origin": "created",
-              "template_id": template["id"], "created": now_iso(), "created_by": current_actor(),
+              "template_id": template["id"], "created": now_iso(), "created_by": ws.actor(),
               "baseline": None}
     seq = ws.commit("project.create", [RecordPut("project", pid, record, expect_rev=0)])
     record["_rev"] = seq
@@ -256,7 +293,7 @@ def adopt_project(ws: Workspace, folder: Path, name: str, mode: str = "indexed",
         raise ProjectError("the folder exceeds the adoption file limit; raise the limit or adopt a "
                            "smaller scope. Nothing was registered.")
     baseline = {"format": "RevisionWorx Baseline", "version": 1, "taken": now_iso(),
-                "taken_by": current_actor(), "scope_rel_path": rel, "root_id": root_id,
+                "taken_by": ws.actor(), "scope_rel_path": rel, "root_id": root_id,
                 "summary": report.summary(), "files": [f.as_json() for f in report.files],
                 "note": "Initial baseline of existing files. No historical revisions are asserted."}
     blob_ref = ws.write_blob("baseline", baseline)
@@ -264,7 +301,7 @@ def adopt_project(ws: Workspace, folder: Path, name: str, mode: str = "indexed",
     record = {"id": pid, "name": name.strip(), "number": number.strip(), "customer": customer.strip(),
               "description": description, "mode": mode, "root_id": root_id, "rel_path": rel,
               "status": "active", "origin": "adopted", "template_id": None, "created": now_iso(),
-              "created_by": current_actor(),
+              "created_by": ws.actor(),
               "baseline": {"blob": blob_ref, "files": len(report.files), "hashed": report.hashed,
                            "complete": report.complete, "warnings": report.warnings()}}
     seq = ws.commit("project.adopt", [RecordPut("project", pid, record, expect_rev=0)], blob_refs=[blob_ref])
