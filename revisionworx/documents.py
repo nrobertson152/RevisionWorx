@@ -21,7 +21,7 @@ from pathlib import Path
 from . import atomicio, paths, projects, revlabels
 from . import lifecycle as lc_mod
 from .content import ContentStore, hash_file, is_content_name
-from .filetypes import classify
+from .filetypes import classify, extension
 from .lifecycle import LifecycleError
 from .workspace import (CommittedNotApplied, ConflictError, LockLostError, RecordCheck, RecordDelete, RecordPut, TxidReuseError,
                         Workspace, WorkspaceCorruptError, WorkspaceError, new_id, now_iso, register_kind, strip_rev)
@@ -34,14 +34,19 @@ IMMUTABLE_REVISION_FIELDS = ("id", "document_id", "number", "label", "sha256", "
                              "restored_from")
 
 DEFAULT_DOCTYPES = {
-    "drawing": {"name": "Engineering drawing", "extensions": [".idw", ".slddrw", ".dwg", ".dxf", ".draftworx"],
+    "drawing": {"name": "Engineering drawing", "extensions": [".idw", ".slddrw", ".dwg", ".dxf", ".draftworx",
+                                                              ".dft", ".catdrawing", ".drw"],
                 "revision_scheme": "alpha", "category": "drawing"},
-    "cad-part": {"name": "CAD part", "extensions": [".ipt", ".sldprt", ".step", ".stp", ".iges", ".igs"],
+    "cad-part": {"name": "CAD part", "extensions": [".ipt", ".sldprt", ".step", ".stp", ".iges", ".igs", ".fcstd", ".par",
+                                                    ".psm", ".catpart", ".prt", ".f3d", ".3dm", ".skp", ".x_t", ".x_b",
+                                                    ".jt", ".stl", ".3mf"],
                  "revision_scheme": "alpha", "category": "cad"},
-    "cad-assembly": {"name": "CAD assembly", "extensions": [".iam", ".sldasm", ".ipn"],
+    "cad-assembly": {"name": "CAD assembly", "extensions": [".iam", ".sldasm", ".ipn", ".asm", ".catproduct", ".f3z"],
                      "revision_scheme": "alpha", "category": "cad"},
-    "schematic": {"name": "Schematic", "extensions": [".schematix", ".osch"],
+    "schematic": {"name": "Schematic", "extensions": [".schematix", ".osch", ".kicad_sch", ".schdoc", ".sch", ".qet"],
                   "revision_scheme": "alpha", "category": "schematic"},
+    "pcb": {"name": "PCB layout", "extensions": [".kicad_pcb", ".pcbdoc", ".brd"],
+            "revision_scheme": "alpha", "category": "pcb"},
     "simulation": {"name": "Simulation study", "extensions": [".fluidworx"],
                    "revision_scheme": "alpha", "category": "simulation"},
     "pdf": {"name": "PDF document", "extensions": [".pdf"], "revision_scheme": "alpha", "category": "document"},
@@ -159,7 +164,7 @@ def save_doctype(ws: Workspace, dt: dict) -> str:
 
 
 def suggest_type(ws: Workspace, filename: str) -> str:
-    ext = Path(filename).suffix.lower()
+    ext = extension(filename)
     for tid, dt in list_doctypes(ws).items():
         if ext in dt["extensions"]:
             return tid

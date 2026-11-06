@@ -73,6 +73,14 @@ def test_custom_doctype_and_suggestion(ws):
     assert D.suggest_type(ws, "a.slddrw") == "drawing"
     assert D.suggest_type(ws, "Bracket.DraftWorx") == "drawing"     # an engineering drawing, with lettered revisions
     assert D.suggest_type(ws, "notes.txt") == "general"
+    # other programs' files get the type of thing they are: lettered revisions, in the right register
+    assert D.suggest_type(ws, "Panel.SchDoc") == "schematic"
+    assert D.suggest_type(ws, "main.kicad_sch") == "schematic"
+    assert D.suggest_type(ws, "main.kicad_pcb") == "pcb"
+    assert D.suggest_type(ws, "Frame.CATDrawing") == "drawing"
+    assert D.suggest_type(ws, "Bracket.prt.3") == "cad-part"           # Creo numbers its saves
+    assert D.suggest_type(ws, "Bracket.FCStd") == "cad-part"
+    assert D.list_doctypes(ws)["pcb"]["revision_scheme"] == "alpha"
     with pytest.raises(D.DocumentError):
         D.save_doctype(ws, {"id": "Bad Id"})
 

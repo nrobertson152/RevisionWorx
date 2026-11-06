@@ -21,6 +21,13 @@ The first release. Everything below is new.
 - `.draftworx` drawings are recognised by content and registered as engineering drawings, with lettered revisions, so they're in a
   project's drawing register. DraftWorx shows a drawing's revision status and checks it in through `revisionworx link`.
 
+### Other programs' files
+- Files from KiCad, Altium, Eagle, QElectroTech, LibrePCB, EPLAN, AutoCAD Electrical, FreeCAD, Solid Edge, CATIA, Creo, NX,
+  Fusion, Rhino and SketchUp, and Gerber and drill files, are recognised and named for what they are. KiCad's files are checked
+  by content. New documents get the matching type: schematics are *Schematic*, drawings *Engineering drawing*, models *CAD part*
+  or *CAD assembly*, and boards a new built-in *PCB layout* type, all with lettered revisions. A Creo save number
+  (`bracket.prt.3`) isn't taken for the type. Existing documents keep their types.
+
 ### Supported use
 - One computer's local disk, Windows or Linux. Several RevisionWorx windows or command-line sessions on that
   computer are safe together. Shared network folders: one computer making changes at a time (a warning is
