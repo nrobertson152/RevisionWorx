@@ -1,0 +1,61 @@
+name: RevisionWorx offline backup restore rehearsal
+on:
+  push:
+    branches: [integration/openschematix]
+    paths:
+      - '.github/workflows/revisionworx-backup-rehearsal.yml'
+      - 'tools/packaging/offline_backup_rehearsal.py'
+      - 'tests/test_offline_backup_rehearsal.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup-rehearsal:
+    name: backup-rehearsal-${{ matrix.os }}-py311
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Record source and runtime identity
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          python --version
+          python -c "import platform; print(platform.platform())"
+      - name: Compile backup source and test module
+        shell: bash
+        run: python -m py_compile tools/packaging/offline_backup_rehearsal.py tests/test_offline_backup_rehearsal.py
+      - name: Execute isolated backup/restore regression suite
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            echo "SOURCE_SHA=$(git rev-parse HEAD)"
+            echo "RUN_ID=${GITHUB_RUN_ID}"
+            echo "RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}"
+            echo "RUNNER_OS=${RUNNER_OS}"
+            python --version
+            python -c "import unittest; suite=unittest.defaultTestLoader.discover('tests', pattern='test_offline_backup_rehearsal.py'); count=suite.countTestCases(); print('DISCOVERED_TESTS=' + str(count)); assert count == 19, 'Expected exactly 19 isolated backup regression tests'"
+            python -m unittest discover -s tests -p test_offline_backup_rehearsal.py -v
+          } 2>&1 | tee backup-rehearsal-test-results.txt
+      - name: Preserve exact native regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-rehearsal-${{ matrix.os }}-py311
+          path: backup-rehearsal-test-results.txt
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Check command-line entrypoint without mutating a workspace
+        shell: bash
+        run: python tools/packaging/offline_backup_rehearsal.py --help

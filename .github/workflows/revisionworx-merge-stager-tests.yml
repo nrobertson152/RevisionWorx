@@ -1,0 +1,35 @@
+name: RevisionWorx TEST-ONLY real Git merge-stager safety tests
+
+on:
+  push:
+    branches:
+      - integration/openschematix
+    paths:
+      - 'tools/packaging/stage_exact_git_merge.py'
+      - 'tools/packaging/test_stage_exact_git_merge.py'
+      - '.github/workflows/revisionworx-merge-stager-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Integration harness only
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run nine real Git fixture tests with no remote network
+        run: python tools/packaging/test_stage_exact_git_merge.py
+      - name: Run nine overlay stage safeguard controls
+        run: python tools/packaging/test_stage_corrected_core_gui.py

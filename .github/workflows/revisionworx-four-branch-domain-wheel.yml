@@ -1,0 +1,118 @@
+name: RevisionWorx TEST-ONLY four-source domain and wheel audit
+
+on:
+  push:
+    branches:
+      - integration/openschematix
+    paths:
+      - 'tools/packaging/stage_product_stack.py'
+      - 'tools/packaging/test_product_stack_contract.py'
+      - 'tools/packaging/check_product_wheel.py'
+      - '.github/workflows/revisionworx-four-branch-domain-wheel.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revisionworx-four-source-domain-wheel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  domain-wheel-test-only:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - name: Checkout test-only Integration harness
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout exact Phase 2 core
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: f01b37d345c5208ab0fa520588a2abe8c66c894a
+          path: inputs/core
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout exact GUI
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: 0773bde599f39aee88a8a536c28673bc4a1e13f5
+          path: inputs/gui
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout exact BOM and parts catalog
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: 8f67bfedcca2ea619035556fdeed52bf0c4ca30a
+          path: inputs/bom
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout exact ECR/ECO
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: 724993c74bd7aa6f2c00ed38f8b44c39a42bdd08
+          path: inputs/changes
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python 3.11 on builder
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compose a disposable real Git merge
+        run: >-
+          python tools/packaging/stage_product_stack.py
+          --core inputs/core
+          --core-sha f01b37d345c5208ab0fa520588a2abe8c66c894a
+          --gui inputs/gui
+          --gui-sha 0773bde599f39aee88a8a536c28673bc4a1e13f5
+          --bom inputs/bom
+          --bom-sha 8f67bfedcca2ea619035556fdeed52bf0c4ca30a
+          --changes inputs/changes
+          --changes-sha 724993c74bd7aa6f2c00ed38f8b44c39a42bdd08
+          --receipt four-source-domain-receipt.json
+      - name: Install combined source for testing
+        working-directory: inputs/core
+        run: python -m pip install --no-input -e ".[dev]"
+      - name: Real document BOM where-used ECR read-only/restart contract
+        working-directory: inputs/core
+        run: python -m pytest -q -ra ../../tools/packaging/test_product_stack_contract.py
+      - name: Install pinned wheel-builder tool on CI host only
+        run: python -m pip install --no-input wheel==0.45.1
+      - name: Prepare separate wheelhouse outside source checkout
+        run: python -c "from pathlib import Path; Path('wheelhouse').mkdir(exist_ok=True)"
+      - name: Build a test-only source wheel (not an installer)
+        working-directory: inputs/core
+        run: python -m pip wheel --no-input --no-deps --no-build-isolation --wheel-dir ../../wheelhouse .
+      - name: Audit built wheel components, metadata and checksum
+        run: >-
+          python tools/packaging/check_product_wheel.py
+          --wheels wheelhouse
+          --receipt product-wheel-audit.json
+      - name: Print tested-source and wheel receipts
+        if: always()
+        shell: bash
+        run: |
+          python -c "from pathlib import Path; p=Path('four-source-domain-receipt.json'); print(p.read_text() if p.exists() else 'staging receipt absent')"
+          python -c "from pathlib import Path; p=Path('product-wheel-audit.json'); print(p.read_text() if p.exists() else 'wheel audit did not complete')"
+      - name: Preserve evidence receipts without publishing package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-source-domain-wheel-${{ matrix.os }}
+          path: |
+            four-source-domain-receipt.json
+            product-wheel-audit.json
+          if-no-files-found: ignore
+          retention-days: 14

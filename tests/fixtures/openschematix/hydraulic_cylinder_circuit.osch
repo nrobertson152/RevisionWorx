@@ -1,0 +1,346 @@
+{
+ "format": "OpenSchematix",
+ "schema": 1,
+ "app_version": "1.1.0",
+ "sheet": {
+  "size": "A4",
+  "orientation": "landscape",
+  "title": "Double-acting cylinder, 4/3 tandem-centre control",
+  "drawing_number": "EX-001",
+  "revision": "A",
+  "author": "OpenSchematix example",
+  "date": "",
+  "organisation": "",
+  "sheet": "1 / 1",
+  "show_title_block": true
+ },
+ "components": [
+  {
+   "id": 1,
+   "symbol": "fl.hyd.cyl.double",
+   "x": 510.0,
+   "y": 180.0,
+   "rotation": 180,
+   "mirror": true,
+   "designator": "A1",
+   "label": "Lift cylinder"
+  },
+  {
+   "id": 2,
+   "symbol": "fl.hyd.dcv",
+   "x": 500.0,
+   "y": 340.0,
+   "rotation": 0,
+   "mirror": false,
+   "designator": "V1",
+   "label": "",
+   "params": {
+    "medium": "hyd",
+    "type": "4/3",
+    "positions": [
+     "parallel",
+     "tandem",
+     "crossed"
+    ],
+    "left": [
+     "spring",
+     "solenoid"
+    ],
+    "right": [
+     "spring",
+     "solenoid"
+    ]
+   }
+  },
+  {
+   "id": 3,
+   "symbol": "fl.hyd.pump",
+   "x": 300.0,
+   "y": 520.0,
+   "rotation": 0,
+   "mirror": false,
+   "designator": "P1",
+   "label": "10 L/min"
+  },
+  {
+   "id": 4,
+   "symbol": "fl.hyd.tank",
+   "x": 300.0,
+   "y": 600.0,
+   "rotation": 0,
+   "mirror": false,
+   "designator": "Z1",
+   "label": ""
+  },
+  {
+   "id": 5,
+   "symbol": "fl.hyd.relief",
+   "x": 400.0,
+   "y": 470.0,
+   "rotation": 180,
+   "mirror": false,
+   "designator": "V2",
+   "label": "160 bar"
+  },
+  {
+   "id": 6,
+   "symbol": "fl.hyd.tank",
+   "x": 400.0,
+   "y": 550.0,
+   "rotation": 0,
+   "mirror": false,
+   "designator": "Z2",
+   "label": ""
+  },
+  {
+   "id": 7,
+   "symbol": "fl.hyd.gauge",
+   "x": 360.0,
+   "y": 380.0,
+   "rotation": 0,
+   "mirror": false,
+   "designator": "S1",
+   "label": ""
+  },
+  {
+   "id": 8,
+   "symbol": "fl.hyd.filter",
+   "x": 600.0,
+   "y": 450.0,
+   "rotation": 90,
+   "mirror": false,
+   "designator": "Z3",
+   "label": ""
+  },
+  {
+   "id": 9,
+   "symbol": "fl.hyd.tank",
+   "x": 600.0,
+   "y": 530.0,
+   "rotation": 0,
+   "mirror": false,
+   "designator": "Z4",
+   "label": ""
+  }
+ ],
+ "wires": [
+  {
+   "id": 10,
+   "points": [
+    [
+     300.0,
+     540.0
+    ],
+    [
+     300.0,
+     580.0
+    ]
+   ],
+   "start": [
+    3,
+    "S"
+   ],
+   "end": [
+    4,
+    "T"
+   ],
+   "style": "solid"
+  },
+  {
+   "id": 11,
+   "points": [
+    [
+     300.0,
+     500.0
+    ],
+    [
+     300.0,
+     420.0
+    ],
+    [
+     490.0,
+     420.0
+    ],
+    [
+     490.0,
+     370.0
+    ]
+   ],
+   "start": [
+    3,
+    "P"
+   ],
+   "end": [
+    2,
+    "P"
+   ],
+   "style": "solid"
+  },
+  {
+   "id": 12,
+   "points": [
+    [
+     400.0,
+     450.0
+    ],
+    [
+     400.0,
+     420.0
+    ]
+   ],
+   "start": [
+    5,
+    "P"
+   ],
+   "end": null,
+   "style": "solid"
+  },
+  {
+   "id": 13,
+   "points": [
+    [
+     400.0,
+     490.0
+    ],
+    [
+     400.0,
+     530.0
+    ]
+   ],
+   "start": [
+    5,
+    "T"
+   ],
+   "end": [
+    6,
+    "T"
+   ],
+   "style": "solid"
+  },
+  {
+   "id": 14,
+   "points": [
+    [
+     360.0,
+     400.0
+    ],
+    [
+     360.0,
+     420.0
+    ]
+   ],
+   "start": [
+    7,
+    "P"
+   ],
+   "end": null,
+   "style": "solid"
+  },
+  {
+   "id": 15,
+   "points": [
+    [
+     510.0,
+     370.0
+    ],
+    [
+     510.0,
+     400.0
+    ],
+    [
+     600.0,
+     400.0
+    ],
+    [
+     600.0,
+     430.0
+    ]
+   ],
+   "start": [
+    2,
+    "T"
+   ],
+   "end": [
+    8,
+    "1"
+   ],
+   "style": "solid"
+  },
+  {
+   "id": 16,
+   "points": [
+    [
+     600.0,
+     470.0
+    ],
+    [
+     600.0,
+     510.0
+    ]
+   ],
+   "start": [
+    8,
+    "2"
+   ],
+   "end": [
+    9,
+    "T"
+   ],
+   "style": "solid"
+  },
+  {
+   "id": 17,
+   "points": [
+    [
+     490.0,
+     310.0
+    ],
+    [
+     490.0,
+     200.0
+    ]
+   ],
+   "start": [
+    2,
+    "A"
+   ],
+   "end": [
+    1,
+    "A"
+   ],
+   "style": "solid",
+   "auto": true
+  },
+  {
+   "id": 18,
+   "points": [
+    [
+     510.0,
+     310.0
+    ],
+    [
+     510.0,
+     290.0
+    ],
+    [
+     520.0,
+     290.0
+    ],
+    [
+     520.0,
+     200.0
+    ]
+   ],
+   "start": [
+    2,
+    "B"
+   ],
+   "end": [
+    1,
+    "B"
+   ],
+   "style": "solid",
+   "auto": true
+  }
+ ]
+}
