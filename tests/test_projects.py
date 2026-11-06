@@ -221,6 +221,52 @@ def test_draftworx_file_type():
     assert not filetypes.sniff_draftworx(FIXTURES / "draftworx" / "missing.draftworx")
 
 
+def test_other_programs_files_are_recognised():
+    """Files from the programs people use beside RevisionWorx are named for what they are, not "Other file"."""
+    expected = {
+        "Main.kicad_sch": ("schematic", "KiCad schematic"), "Main.KICAD_PCB": ("pcb", "KiCad PCB"),
+        "Main.kicad_pro": ("ecad-project", "KiCad project"), "Panel.SchDoc": ("schematic", "Altium schematic"),
+        "Panel.PcbDoc": ("pcb", "Altium PCB"), "old.sch": ("schematic", "Schematic (KiCad 5, Eagle or gEDA)"),
+        "Cabinet.qet": ("schematic", "QElectroTech project"), "Line 1.elk": ("ecad-project", "EPLAN project"),
+        "board-F_Cu.gtl": ("manufacturing", "Gerber file"), "board.drl": ("manufacturing", "Drill file"),
+        "Bracket.FCStd": ("cad-part", "FreeCAD model"), "Frame.CATDrawing": ("cad-drawing", "CATIA drawing"),
+        "Frame.CATProduct": ("cad-assembly", "CATIA product"), "Plate.par": ("cad-part", "Solid Edge part"),
+        "Plate.dft": ("cad-drawing", "Solid Edge draft"), "Arm.3dm": ("cad-part", "Rhino model"),
+        "Arm.x_t": ("cad-exchange", "Parasolid model"), "symbols.osymlib": ("library", "OpenSchematix symbol library"),
+    }
+    for name, (category, label) in expected.items():
+        ft = filetypes.classify(name)
+        assert (ft.category, ft.label) == (category, label), name
+        assert ft.capability == "recognized-only"
+
+
+def test_a_creo_save_number_is_not_the_type():
+    assert filetypes.extension("bracket.prt.12") == ".prt"
+    assert filetypes.classify("Bracket.PRT.3").category == "cad-part"
+    assert filetypes.classify("frame.asm.1").label == "Assembly (Solid Edge or Creo)"
+    assert filetypes.classify("drawing.drw.7").category == "cad-drawing"
+    assert filetypes.classify("notes.txt.2").category == "other"         # only Creo's own types are numbered
+
+
+def test_kicad_content_verification_uses_real_files(ws, share):
+    d = share / "Engineering" / "board"
+    d.mkdir(parents=True)
+    shutil.copy(FIXTURES / "kicad" / "R_0603.kicad_mod", d / "R_0603.kicad_mod")      # written by KiCad itself
+    shutil.copy(FIXTURES / "kicad" / "latch.kicad_sym", d / "latch.kicad_sym")        # written by KiCad itself
+    (d / "main.kicad_sch").write_text('(kicad_sch (version 20230121) (generator eeschema)\n  (paper "A4")\n)\n')
+    (d / "board.kicad_pcb").write_bytes(b'\xef\xbb\xbf(kicad_pcb (version 20221018) (generator pcbnew))\n')
+    (d / "fake.kicad_sch").write_text("not a schematic", encoding="utf-8")
+    (d / "swapped.kicad_pcb").write_text('(kicad_sch (version 20230121) (generator eeschema))\n')   # a schematic, misnamed
+    (d / "legacy.sch").write_text("EESchema Schematic File Version 4\n")
+    rec = projects.adopt_project(ws, d, name="board")
+    files = {f["path"].rsplit("/", 1)[-1]: f for f in ws.read_blob(rec["baseline"]["blob"])["files"]}
+    for name in ("R_0603.kicad_mod", "latch.kicad_sym", "main.kicad_sch", "board.kicad_pcb"):
+        assert files[name].get("verified_format") == "kicad", name
+    for name in ("fake.kicad_sch", "swapped.kicad_pcb", "legacy.sch"):
+        assert "verified_format" not in files[name], name           # the extension alone is not proof
+    assert files["board.kicad_pcb"]["category"] == "pcb"
+
+
 def test_filetype_classification_is_case_insensitive_and_honest():
     assert filetypes.classify("A.SLDPRT").category == "cad-part"
     assert filetypes.classify("a.ipt").capability == "recognized-only"

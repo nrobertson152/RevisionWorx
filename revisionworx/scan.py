@@ -173,6 +173,8 @@ def scan_scope(scope: Path, exclusions: list[str], max_files: int, hash_files: b
                 sf.verified_format = "fluidworx"
             elif ft.category == "cad-drawing" and filetypes.sniff_draftworx(Path(entry.path)):
                 sf.verified_format = "draftworx"
+            elif filetypes.sniff_kicad(Path(entry.path)):
+                sf.verified_format = "kicad"
             if hash_files:
                 try:
                     sf.sha256 = sha256_file(Path(entry.path))
