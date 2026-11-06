@@ -204,6 +204,12 @@ def enable_team_use(location: Path, admin: str, name: str, password: str, state_
 
 
 # ---------------------------------------------------------------------------- logging in
+def _password_fits(record: dict, password: str, workspace_id: str, account: str, state_dir) -> bool:
+    key = record.get("key") or {}
+    device = device_secret(workspace_id, account, state_dir) if key.get("device") else None
+    return ed25519.public_key(_seed_for(password, key, workspace_id, account, device)).hex() == key.get("public")
+
+
 def login(location: Path, account: str, password: str, state_dir=None, remember_hours: float | None = None) -> dict:
     """Check a password. Returns the session to act with, whether the password has to be changed first, and the role. With
     ``remember_hours`` the login is also kept on this computer for that long, which lets the command line and other programs
@@ -213,12 +219,14 @@ def login(location: Path, account: str, password: str, state_dir=None, remember_
         if not isinstance(ws, SharedWorkspace):
             raise AccountError("this workspace isn't set up for a team, so there's nothing to log in to")
         record = ws.get("account", account)
-        if record is None:
-            raise LoginFailed(_WRONG)
+        if record is None or not _password_fits(record, password, ws.id, account, state_dir):
+            # The account may have just been made or changed, and a network client can take seconds to hear of it. Look properly once.
+            ws.sync(fresh=True, patient=True)
+            record = ws.get("account", account)
+            if record is None or not _password_fits(record, password, ws.id, account, state_dir):
+                raise LoginFailed(_WRONG)
         key = record.get("key") or {}
         seed = _seed_for(password, key, ws.id, account, device_secret(ws.id, account, state_dir) if key.get("device") else None)
-        if ed25519.public_key(seed).hex() != key.get("public"):
-            raise LoginFailed(_WRONG)
         if record.get("active") is not True:
             raise LoginFailed(f"account {account} has been disabled. Ask an administrator")
         session = Session(ws.id, account, str(record.get("name") or account), key["public"], seed)

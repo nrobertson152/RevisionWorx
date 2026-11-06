@@ -20,6 +20,7 @@ stop, but it isn't prevented. The document also says what hasn't been verified o
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -57,13 +58,37 @@ LOCK_WAIT_SECONDS = 10.0                     # how long opening for writing wait
 BEAT_SECONDS = 5.0                           # how often a lock's holder shows it's alive
 LEASE_SECONDS = 60.0                         # silence, by this computer's own clock, after which a lock is cleared
 COLLISION_PATIENCE = 20.0                    # longer than any client-side cache of "not found" lasts
-HINT_PATIENCE = 6.0                          # how long to wait for an entry that's known to exist to become readable
+HINT_PATIENCE = 10.0                         # how long to wait for an entry that's known to exist to become readable
+TRANSIENT_PATIENCE = 10.0                    # how long a network filesystem may keep saying "try again"
 GAP_PATIENCE = 15.0                          # before believing an entry is missing while the folder lists ones after it
 MAX_ENTRY_BYTES = 64 * 1024 * 1024           # far past any real entry: a bigger file is damage or malice, not worth reading
 INGEST_BATCH = 200
 _SIGN_DOMAIN = b"revisionworx/journal-entry/v1\x00"
 _HEX_TOKEN = re.compile(r"^[0-9a-f]{1,64}$")
 _HEX_KEY = re.compile(r"^[0-9a-f]{64}$")
+
+
+# What a network filesystem can say for a moment about a file that's fine: it's busy (the Linux SMB client's word for a sharing
+# violation), its handle went stale, or the request didn't make it. Windows says PermissionError for a sharing violation.
+_TRANSIENT = {errno.EBUSY, errno.EAGAIN, errno.ESTALE, errno.EIO, errno.ETIMEDOUT, errno.ECONNRESET, errno.ECONNABORTED, errno.EINTR}
+
+
+def is_transient(exc: OSError) -> bool:
+    if isinstance(exc, (FileNotFoundError, FileExistsError)):
+        return False                                 # answers, not failures
+    return exc.errno in _TRANSIENT or (atomicio.RETRY_SHARING and isinstance(exc, PermissionError))
+
+
+def patiently(op):
+    """Run a file operation, giving a network filesystem time to stop saying "try again". Anything else, or the last failure, is raised."""
+    give_up = time.monotonic() + TRANSIENT_PATIENCE
+    while True:
+        try:
+            return op()
+        except OSError as exc:
+            if not is_transient(exc) or time.monotonic() >= give_up:
+                raise
+            time.sleep(0.05 + random.random() * 0.1)
 
 
 class NotLoggedIn(WorkspaceError):
@@ -746,9 +771,12 @@ class SharedWorkspace(Workspace):
     def _read_from_folder(self, seq: int) -> dict:
         """What the shared folder says this entry is. Anyone can write there, so size is checked before reading it all."""
         path = self._journal_dir() / f"{seq:020d}.json"
-        if os.stat(path).st_size > MAX_ENTRY_BYTES:
-            raise WorkspaceCorruptError(f"journal entry {seq} is far too big to be real; writes refused")
-        return Workspace.read_entry(self, seq)
+
+        def read() -> dict:
+            if os.stat(path).st_size > MAX_ENTRY_BYTES:
+                raise WorkspaceCorruptError(f"journal entry {seq} is far too big to be real; writes refused")
+            return Workspace.read_entry(self, seq)
+        return patiently(read)
 
     def _ingest(self, batch: list[dict]) -> None:
         r = self._replica
@@ -1037,10 +1065,12 @@ class SharedWorkspace(Workspace):
                     raise StaleViewError(seq) from None
                 time.sleep(0.05 + random.random() * 0.2)
             except OSError as exc:
-                if not self._holds_entry(seq, the_txid):
+                if self._holds_entry(seq, the_txid):
+                    unsynced = exc                   # visible to everyone: this change happened, so never say it failed
+                    break
+                if not is_transient(exc) or time.monotonic() >= give_up:
                     raise                            # nothing was published: an ordinary failure, nothing happened
-                unsynced = exc                       # visible to everyone: this change happened, so never say it failed
-                break
+                time.sleep(0.05 + random.random() * 0.2)
         try:
             self.sync()
             self._base = max(self._base, seq)
@@ -1081,7 +1111,10 @@ class SharedWorkspace(Workspace):
             except ExclusiveCreateError:
                 if time.monotonic() >= give_up:
                     raise WorkspaceError("could not record this in the journal (too many changes at once)") from None
-                time.sleep(0.05 + random.random() * 0.2)
+            except OSError as exc:
+                if not is_transient(exc) or time.monotonic() >= give_up:
+                    raise
+            time.sleep(0.05 + random.random() * 0.2)
 
     # ------------------------------------------------------------------ the writer lock
     def _lock_path(self) -> Path:
@@ -1106,14 +1139,15 @@ class SharedWorkspace(Workspace):
                     self._lock_token = token
                     return
                 except ExclusiveCreateError:
-                    if (Workspace.read_writer_lock(self.meta_dir) or {}).get("token") == token:
+                    if self._lock_says(token):
                         self._lock_token = token     # ours: the reply was lost on the way back
                         return
-                except OSError:
-                    if (Workspace.read_writer_lock(self.meta_dir) or {}).get("token") == token:
+                except OSError as exc:
+                    if self._lock_says(token):
                         self._lock_token = token     # the name is taken and only a later step failed: it's still a turn
                         return
-                    raise
+                    if not is_transient(exc):
+                        raise
             elif not holder.get("unknown") and lock_silence(self.meta_dir, holder) >= LEASE_SECONDS:
                 self._clear_lock(holder, f"its computer showed no sign of life for {LEASE_SECONDS:.0f} seconds", automatic=True)
                 continue
@@ -1122,12 +1156,28 @@ class SharedWorkspace(Workspace):
             time.sleep(delay * (0.5 + random.random()))
             delay = min(delay * 1.6, 0.5)
 
+    def _lock_says(self, token: str) -> bool:
+        try:
+            return (Workspace.read_writer_lock(self.meta_dir) or {}).get("token") == token
+        except OSError:
+            return False
+
+    def _check_lock_still_held(self) -> None:
+        """Only an answer counts here. A network filesystem saying "try again" doesn't mean the lock has gone."""
+        try:
+            patiently(lambda: Workspace._read_holder(self._lock_path()))
+        except (FileNotFoundError, ValueError):
+            pass
+        except OSError as exc:
+            raise WorkspaceError(f"the writer lock can't be checked just now: {exc.strerror or exc}. Nothing was written; try again") from exc
+        super()._check_lock_still_held()
+
     def _clear_lock(self, holder: dict, reason: str, automatic: bool) -> None:
         """Move the lock aside and look at what was moved: it's that file's token that counts, not the one read earlier. If it
         isn't the same lock, that's someone else's turn, so it goes back."""
         custody = self.meta_dir / "locks" / f".clearing-{uuid.uuid4().hex}"
         try:
-            atomicio.retry_sharing(lambda: os.replace(self._lock_path(), custody))
+            patiently(lambda: os.replace(self._lock_path(), custody))
         except FileNotFoundError:
             return
         try:
@@ -1150,7 +1200,7 @@ class SharedWorkspace(Workspace):
     def _release_lock(self) -> None:
         lock, private = self._lock_path(), self.meta_dir / "locks" / f".releasing-{uuid.uuid4().hex}"
         try:
-            atomicio.retry_sharing(lambda: os.replace(lock, private))
+            patiently(lambda: os.replace(lock, private))
         except FileNotFoundError:
             return                                   # someone cleared it while this handle was stopped
         try:
