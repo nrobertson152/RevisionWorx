@@ -3,7 +3,7 @@
 **Status (1.0.0):** core (workspace, journal, fencing, recovery), documents and revisions, lifecycle,
 check-out/check-in, doctor, BOM (files) and change control are **implemented and tested** on Linux and Windows
 local disks, with the PySide6 desktop window run offscreen and on a real X display in CI. Multi-computer use of a
-shared network folder remains **unverified** (ADR-014, issue #5). Sections are marked **IMPLEMENTED** (code +
+shared network folder by a team is implemented, and **unverified between real computers** (ADR-024). Sections are marked **IMPLEMENTED** (code +
 automated tests exist), **PROPOSED** (designed, not built) or **OPEN** (decision pending). Keep this file in step
 with the code.
 
@@ -825,7 +825,7 @@ cursor with different entries, and the cache kept serving records that exist in 
 
 **Not done.** Permissions per project or document: an account is an administrator or it isn't. Going back to single-computer use. Replicating content objects.
 
-**Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed at every file change, simulated client caches. Hosted CI additionally runs the multiprocess race against a real SMB share on one Windows runner (`\\\\localhost\\...`, the real redirector and server, one machine). **None of that is evidence across computers:** same-machine clients share a redirector, so its caches can't go stale between them. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
+**Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed before every file change, simulated client caches. `.github/workflows/shares.yml` runs the same races against real file servers on one hosted machine: Windows SMB 3.1.1 (client and server, by three server names, which makes three connections), the Linux kernel's SMB client against Samba (two mounts), and NFS 4.2 and 3 (two kernel clients). That found behaviour no simulation had, which the design now handles: a Linux SMB client answering EBUSY or EIO for a moment about a file that's fine, a client told a folder exists and then that it doesn't, and NFS taking seconds to show a change. Two NFS 4 mounts, being one client to the server, never heard about each other's changes at all, which is why that job mixes versions. **None of that is evidence across computers:** it's one machine and one network path, with no cable pulled and no server rebooted. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

@@ -15,8 +15,8 @@ gap behind it.
 1. **A team working from one shared network folder (SMB/CIFS, NFS), across real computers.** A workspace can be set up for a team
    (ADR-024): each person logs in, and they take turns saving changes through the folder, with no server. Its design doesn't rely on
    fresh directory listings, clocks or locks, but it does rely on the file server deciding who gets a name, and it has **not been tested
-   between real computers and servers**. Tested so far: real processes on one disk, simulated client caches, and a real SMB share on
-   one Windows machine, where every client shares one set of caches. To find out about your share, run `revisionworx share test FOLDER`
+   between real computers and servers**. Tested so far: real processes on one disk, simulated client caches, and real SMB and NFS
+   servers and clients together on one machine, with no cable pulled and no server rebooted. To find out about your share, run `revisionworx share test FOLDER`
    at the same time on two or more computers, then `revisionworx share report FOLDER`. Please report what you find, either way.
 
    Without team setup, the rule stays: you may keep a workspace in a network folder and open it from several computers to *read*, but let
@@ -27,6 +27,9 @@ gap behind it.
 3. **The desktop window has not yet been accepted by a person** following `docs/GUI_ACCEPTANCE.md`. It is
    exercised automatically (offscreen widget tests on Windows and Linux, a keystroke-driven walkthrough on a real
    X display, and a packaged self-test), which does not replace a person judging that it is usable.
+
+NFS works, more slowly: a client can take as long as its attribute cache lasts to see someone else's change (by default up to a minute;
+`lookupcache=none` as a mount option removes most of the wait), and a save waits for that. Nothing is lost, but it isn't quick.
 
 ## By design, in a team workspace
 

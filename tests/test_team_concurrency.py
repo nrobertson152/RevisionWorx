@@ -6,6 +6,8 @@ network: it says nothing about how an SMB or NFS server behaves. The stale-cache
 """
 from __future__ import annotations
 
+import errno
+import os
 import subprocess
 import sys
 import time
@@ -16,7 +18,7 @@ import pytest
 from revisionworx import accounts, atomicio, documents as D, projects, shared
 from revisionworx.projects import NewProject
 from revisionworx.shared import SharedWorkspace, StaleViewError
-from revisionworx.workspace import CommittedNotApplied, ConflictError, LockLostError, RecordPut, Workspace, WorkspaceLockedError
+from revisionworx.workspace import CommittedNotApplied, ConflictError, LockLostError, RecordPut, Workspace, WorkspaceError, WorkspaceLockedError
 from team_helpers import Crew, computer, process_env
 
 A = "prj_" + "a" * 32
@@ -309,6 +311,132 @@ def test_an_io_error_after_publishing_is_reported_as_saved(crew, monkeypatch):
         with pytest.raises(CommittedNotApplied):
             ws.commit("t", [RecordPut("project", A, {"n": 1})], txid="ab" * 16)
         assert ws.transaction_outcome("ab" * 16)["state"] == "committed"
+
+
+# ------------------------------------------------------------------ what real shares did, in .github/workflows/shares.yml
+def _says_busy_at_first(real, errno_code, times, only=lambda *_args: True):
+    """A file operation that a network filesystem refuses for a moment. The Linux SMB client against Samba answered EBUSY and EIO like this."""
+    left = [times]
+
+    def op(*args, **kwargs):
+        if left[0] and only(*args):
+            left[0] -= 1
+            raise OSError(errno_code, os.strerror(errno_code))
+        return real(*args, **kwargs)
+    return op, left
+
+
+@pytest.mark.parametrize("code", [errno.EBUSY, errno.EIO, errno.ESTALE])
+def test_releasing_the_lock_rides_out_a_share_saying_try_again(crew, monkeypatch, code):
+    ws = crew.open("u1", writable=True)
+    busy, left = _says_busy_at_first(os.replace, code, 3, lambda src, _dst: Path(src).name == "writer.lock")
+    monkeypatch.setattr(os, "replace", busy)
+    ws.close()
+    assert left[0] == 0 and Workspace.read_writer_lock(crew.folder) is None    # or everyone would wait a minute for it to clear
+
+
+@pytest.mark.parametrize("code", [errno.EBUSY, errno.EIO])
+def test_clearing_a_lock_rides_out_a_share_saying_try_again(crew, monkeypatch, code):
+    monkeypatch.setattr(shared, "LEASE_SECONDS", 0.1)
+    monkeypatch.setattr(shared, "BEAT_SECONDS", 3600.0)
+    crew.open("u1", writable=True)                                 # and it never comes back
+    busy, left = _says_busy_at_first(os.replace, code, 2, lambda src, _dst: Path(src).name == "writer.lock")
+    monkeypatch.setattr(os, "replace", busy)
+    with crew.open("u2", writable=True, wait=10.0) as ws:
+        ws.commit("t", [RecordPut("project", A, {"n": 1})])
+    assert left[0] == 0
+
+
+@pytest.mark.parametrize("code", [errno.EBUSY, errno.EIO])
+def test_publishing_rides_out_a_share_saying_try_again(crew, monkeypatch, code):
+    busy, left = _says_busy_at_first(atomicio.publish_exclusive, code, 2, lambda path, _data: Path(path).parent.name == "journal")
+    monkeypatch.setattr(atomicio, "publish_exclusive", busy)
+    with crew.open("u1", writable=True) as ws:
+        seq = ws.commit("t", [RecordPut("project", A, {"n": 1})])
+        assert ws.get("project", A) == {"n": 1, "_rev": seq}
+    assert left[0] == 0
+
+
+def test_taking_the_lock_rides_out_a_share_saying_try_again(crew, monkeypatch):
+    busy, left = _says_busy_at_first(atomicio.publish_exclusive, errno.EBUSY, 2, lambda path, _data: Path(path).name == "writer.lock")
+    monkeypatch.setattr(atomicio, "publish_exclusive", busy)
+    with crew.open("u1", writable=True, wait=10.0) as ws:
+        ws.commit("t", [RecordPut("project", A, {"n": 1})])
+    assert left[0] == 0
+
+
+def test_a_share_that_keeps_saying_try_again_is_a_clean_failure_in_the_end(crew, monkeypatch):
+    monkeypatch.setattr(shared, "TRANSIENT_PATIENCE", 0.1)
+    monkeypatch.setattr(shared, "COLLISION_PATIENCE", 0.2)
+    with crew.open("u1", writable=True) as ws:
+        busy, _left = _says_busy_at_first(atomicio.publish_exclusive, errno.EBUSY, 10 ** 9, lambda path, _data: Path(path).parent.name == "journal")
+        monkeypatch.setattr(atomicio, "publish_exclusive", busy)
+        with pytest.raises(OSError):
+            ws.commit("t", [RecordPut("project", A, {"n": 1})])
+        assert ws.get("project", A) is None
+
+
+def test_reading_an_entry_rides_out_a_share_saying_try_again(crew, monkeypatch):
+    with crew.open("u1") as ws:
+        before = ws._replica.head()
+    with crew.open("u2", writable=True) as ws:
+        ws.commit("t", [RecordPut("project", A, {"n": 1})])
+    calls = []
+    real = os.stat
+
+    def stat_busy_once(path, *args, **kwargs):
+        if str(path).endswith(f"{before + 1:020d}.json") and not calls:
+            calls.append(path)
+            raise OSError(errno.EBUSY, "busy")
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, "stat", stat_busy_once)
+    with crew.open("u1") as ws:
+        assert calls and ws.get("project", A)["n"] == 1
+
+
+def test_a_share_saying_try_again_doesnt_mean_the_lock_is_lost(crew, monkeypatch):
+    """Only an answer counts. Being told "lost" would throw away a good turn, and being wrong about it isn't safe either way."""
+    monkeypatch.setattr(shared, "TRANSIENT_PATIENCE", 0.1)
+    ws = crew.open("u1", writable=True)
+    real = Workspace._read_holder
+
+    def busy(_path):
+        raise OSError(errno.EIO, "input/output error")
+    monkeypatch.setattr(Workspace, "_read_holder", staticmethod(busy))
+    with pytest.raises(WorkspaceError, match="can't be checked") as caught:
+        ws.commit("t", [RecordPut("project", A, {"n": 1})])
+    assert not isinstance(caught.value, LockLostError)
+    monkeypatch.setattr(Workspace, "_read_holder", staticmethod(real))
+    ws.commit("t", [RecordPut("project", A, {"n": 2})])
+    ws.close()
+
+
+def test_logging_in_just_after_the_account_was_made_gets_past_a_stale_not_found(crew, monkeypatch):
+    """The account was made a moment ago on another computer, and this one's cache still says the entry isn't there. The hint says it is."""
+    with crew.open("boss", writable=True) as ws:
+        accounts.create_account(ws, "newcomer", "a starting password")
+    with crew.open("boss") as ws:
+        newest = ws._replica.head()
+    calls = []
+    real = SharedWorkspace._read_from_folder
+    place = computer(crew.tmp_path, "newcomer")
+
+    def stale_at_first(handle, seq):
+        if seq == newest and len(calls) < 3 and handle._replica.path.is_relative_to(place):
+            calls.append(seq)
+            raise FileNotFoundError(seq)
+        return real(handle, seq)
+    monkeypatch.setattr(SharedWorkspace, "_read_from_folder", stale_at_first)
+    made = accounts.login(crew.folder, "newcomer", "a starting password", state_dir=place)
+    assert calls and made["session"].account == "newcomer"
+
+
+def test_a_wrong_password_doesnt_wait_when_nothing_is_promised(crew, monkeypatch):
+    monkeypatch.setattr(shared, "HINT_PATIENCE", 30.0)
+    started = time.monotonic()
+    with pytest.raises(accounts.LoginFailed):
+        accounts.login(crew.folder, "u1", "not the password", state_dir=computer(crew.tmp_path, "u1"))
+    assert time.monotonic() - started < 5.0
 
 
 def test_an_io_error_before_publishing_is_an_ordinary_failure(crew, monkeypatch):

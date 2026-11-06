@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Finding out whether a folder is fit for team use (ADR-024). On a local disk here, which says nothing about any network share."""
+import errno
 import json
 import os
 import subprocess
@@ -68,6 +69,34 @@ def _env():
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(Path(revisionworx.__file__).parent.parent), env.get("PYTHONPATH", "")])
     return env
+
+
+def test_a_share_saying_try_again_during_the_race_is_counted_and_survived(tmp_path, monkeypatch):
+    real = atomicio.publish_exclusive
+    calls = []
+
+    def sometimes_busy(path, data):
+        calls.append(path)
+        if len(calls) % 5 == 0:
+            raise OSError(errno.EBUSY, "busy")
+        return real(path, data)
+    monkeypatch.setattr(atomicio, "publish_exclusive", sometimes_busy)
+    report = sharecheck.run_test(tmp_path, seconds=0.2, runner="only-one")
+    assert report["busy_answers"] > 0 and not report["problems"]
+
+
+def test_a_folder_another_computer_just_made_can_look_missing_for_a_moment(tmp_path, monkeypatch):
+    """Having been told the folder exists, an NFS client told this one it didn't, for a few seconds."""
+    real, calls = os.listdir, []
+
+    def missing_at_first(path):
+        calls.append(path)
+        if len(calls) < 3:
+            raise FileNotFoundError(path)
+        return real(path)
+    monkeypatch.setattr(os, "listdir", missing_at_first)
+    sharecheck._make_shared_folder(tmp_path / "a" / "slots")
+    assert len(calls) >= 3
 
 
 def test_two_processes_really_race_and_each_name_has_one_winner(tmp_path):

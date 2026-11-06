@@ -403,7 +403,8 @@ def _share_report_text(report: dict) -> str:
     lines = [f"Result: {report['verdict']}.", f"Computers: {', '.join(report['hosts']) or 'none'} ({report['runners']} run(s)).",
              f"Names won: {report['slots_won']}, races lost to another: {report['races_lost']}.",
              f"Slowest read of a name just lost: {report['slowest_read_seconds']:.2f} s. Out-of-date folder listings seen: "
-             f"{report['stale_listings']} (oldest {report['oldest_stale_listing_seconds']:.1f} s; RevisionWorx doesn't rely on listings)."]
+             f"{report['stale_listings']} (oldest {report['oldest_stale_listing_seconds']:.1f} s; RevisionWorx doesn't rely on listings). "
+             f"Times the share said \"try again\": {report['busy_answers']}."]
     lines += [f"  PROBLEM: {p}" for p in report["problems"][:50]]
     return "\n".join(lines)
 

@@ -8,12 +8,12 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
-                               QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
+                               QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressDialog,
                                QPushButton, QSplitter, QStackedWidget, QTableView, QTabWidget,
                                QVBoxLayout, QWidget)
 
 from ... import __version__
-from ...workspace import CommittedNotApplied
+from ...workspace import CommittedNotApplied, Workspace
 from ..controller import Controller, Progress, SavedWithWarning, describe_error
 from ..viewmodels import AppStatus, CommandPalette, ProjectDetailsModel, ProjectListModel
 from . import branding, theme
@@ -480,6 +480,7 @@ class MainWindow(QMainWindow):
         if self.refuse_while_busy(quiet):
             return False
         previous = self.ctl.location
+        self._read_team_history(location)
         try:
             info = self.ctl.open_workspace(location)
         except Exception as exc:
@@ -516,6 +517,34 @@ class MainWindow(QMainWindow):
         return True
 
     # ------------------------------------------------------------------ a team working from a shared folder (ADR-024)
+    def _read_team_history(self, location: Path) -> None:
+        """A computer reads and checks a team workspace's whole journal the first time it opens it. After a year of use, on a network, that
+        takes a while, so it happens on another thread with the window alive. Whatever goes wrong, the real open says so straight after."""
+        if not Workspace._is_shared_folder(Workspace.meta_dir_for(location)):
+            return
+        done = threading.Event()
+
+        def read() -> None:
+            try:
+                with Workspace.open(location, state_dir=self.ctl.state_dir):
+                    pass
+            except Exception:  # noqa: BLE001 - see above
+                pass
+            finally:
+                done.set()
+        threading.Thread(target=read, name="revisionworx-team-history", daemon=True).start()
+        if done.wait(0.3):
+            return
+        progress = QProgressDialog("Reading this workspace's history. It's only slow the first time on each computer.", "", 0, 0, self)
+        progress.setWindowTitle("Opening workspace")
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+        while not done.wait(0.03):
+            QApplication.processEvents()
+        progress.close()
+
     def update_team_state(self) -> None:
         """Who's logged in, in the status bar, and what the Team menu offers."""
         try:

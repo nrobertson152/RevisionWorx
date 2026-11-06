@@ -59,7 +59,7 @@ jobs:
       - name: Serve a folder and mount it twice, with separate caches
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq samba cifs-utils "linux-modules-extra-$(uname -r)"
+          sudo apt-get install -y -qq samba cifs-utils
           sudo modprobe cifs
           sudo mkdir -p /srv/rwshare /mnt/a /mnt/b
           sudo chown "$(id -u):$(id -g)" /srv/rwshare
@@ -83,17 +83,19 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install -e . pytest
-      - name: Export a folder and mount it twice, with separate caches
+      # NFS versions 3 and 4 make the kernel two separate clients. Two version 4 mounts would be one client to the server, which then has no
+      # reason to tell one about the other's changes, and on one machine that shows up as a change never arriving at all.
+      - name: Export a folder and mount it twice, as two clients
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq nfs-kernel-server nfs-common "linux-modules-extra-$(uname -r)"
+          sudo apt-get install -y -qq nfs-kernel-server nfs-common
           sudo mkdir -p /srv/rwnfs /mnt/n1 /mnt/n2
           sudo chown "$(id -u):$(id -g)" /srv/rwnfs
           echo "/srv/rwnfs 127.0.0.1(rw,sync,no_subtree_check,insecure,all_squash,anonuid=$(id -u),anongid=$(id -g))" | sudo tee -a /etc/exports
           sudo exportfs -ra
           sudo systemctl restart nfs-kernel-server
           sudo mount -t nfs -o vers=4.2,nosharecache,actimeo=5 127.0.0.1:/srv/rwnfs /mnt/n1
-          sudo mount -t nfs -o vers=4.2,nosharecache,actimeo=6 127.0.0.1:/srv/rwnfs /mnt/n2
+          sudo mount -t nfs -o vers=3,nosharecache,actimeo=6 127.0.0.1:/srv/rwnfs /mnt/n2
           mount | grep -E 'nfs4?\b'
       - name: Team tests on the share
         env:

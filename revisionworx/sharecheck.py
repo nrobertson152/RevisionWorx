@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import atomicio, paths
 from .atomicio import ExclusiveCreateError
+from .shared import is_transient
 
 TEST_FOLDER = ".revisionworx-share-test"
 _RACE_THREADS = 4
@@ -164,19 +165,34 @@ def check_folder(folder: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------- evidence from several computers
+def _make_shared_folder(folder: Path) -> None:
+    """Make a folder that another computer may be making too. Having been told it exists, this client can still be told it doesn't for
+    a few seconds, so this waits until the two agree."""
+    give_up = time.monotonic() + 60
+    while True:
+        try:
+            atomicio.make_dirs(folder)
+            os.listdir(folder)
+            return
+        except OSError as exc:
+            if not (isinstance(exc, FileNotFoundError) or is_transient(exc)) or time.monotonic() >= give_up:
+                raise
+            time.sleep(0.2)
+
+
 def run_test(folder: Path, seconds: float = 60.0, runner: str | None = None, say=None) -> dict:
     """Race for numbered names against every other computer running this at the same time, the way journal entries are
     published, and write down what happened. Touches only its own folder inside ``folder``."""
     base = Path(folder) / TEST_FOLDER
     slots, runners = base / "slots", base / "runners"
-    atomicio.make_dirs(slots)
-    atomicio.make_dirs(runners)
+    _make_shared_folder(slots)
+    _make_shared_folder(runners)
     me = runner or f"{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(3)}"
     won: list[int] = []
     seen: dict[str, str] = {}
     problems: list[str] = []
-    slowest_read, stale_listings, oldest_stale = 0.0, 0, 0.0
-    n = len(os.listdir(slots)) + 1
+    slowest_read, stale_listings, oldest_stale, busy_answers = 0.0, 0, 0.0, 0
+    n = 1 + sum(1 for name in os.listdir(slots) if name.endswith(".json") and not name.startswith("."))
     started, last_said, checks = time.time(), 0.0, 0
     published_at: dict[int, float] = {}
     end = time.monotonic() + seconds
@@ -188,13 +204,22 @@ def run_test(folder: Path, seconds: float = 60.0, runner: str | None = None, say
             atomicio.publish_exclusive(path, json.dumps({"runner": me, "slot": n, "pad": pad}).encode())
             won.append(n)
             published_at[n] = time.monotonic()
-        except ExclusiveCreateError:
+        except OSError as exc:
+            if not isinstance(exc, ExclusiveCreateError):
+                if not is_transient(exc):
+                    raise
+                busy_answers += 1                    # the share said "try again": nothing was won, and the same name is tried again
+                time.sleep(0.05)
+                continue
             began = time.monotonic()
             while True:                              # the name is taken, so the file has to be readable, and whole
                 try:
                     claim = atomicio.read_json_object(path)
                     break
-                except FileNotFoundError:
+                except OSError as read_error:
+                    if not isinstance(read_error, FileNotFoundError) and not is_transient(read_error):
+                        raise
+                    busy_answers += 0 if isinstance(read_error, FileNotFoundError) else 1
                     if time.monotonic() - began > 60:
                         problems.append(f"slot {n}: taken, but still not readable after 60 seconds")
                         claim = None
@@ -224,7 +249,7 @@ def run_test(folder: Path, seconds: float = 60.0, runner: str | None = None, say
             last_said = time.monotonic()
     result = {"runner": me, "host": socket.gethostname(), "platform": platform.platform(), "python": platform.python_version(),
               "started": started, "seconds": seconds, "won": won, "seen": seen, "problems": problems, "slowest_read": slowest_read,
-              "stale_listings": stale_listings, "oldest_stale_listing": oldest_stale}
+              "stale_listings": stale_listings, "oldest_stale_listing": oldest_stale, "busy_answers": busy_answers}
     atomicio.atomic_write_json(runners / f"{secrets.token_hex(8)}.json", result)
     return read_report(folder)
 
@@ -269,4 +294,5 @@ def read_report(folder: Path) -> dict:
             "slowest_read_seconds": max([float(r.get("slowest_read", 0.0)) for r in results], default=0.0),
             "stale_listings": sum(int(r.get("stale_listings", 0)) for r in results),
             "oldest_stale_listing_seconds": max([float(r.get("oldest_stale_listing", 0.0)) for r in results], default=0.0),
+            "busy_answers": sum(int(r.get("busy_answers", 0)) for r in results),
             "problems": problems}

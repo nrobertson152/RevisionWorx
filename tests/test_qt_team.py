@@ -234,6 +234,38 @@ def test_a_plain_workspace_doesnt_offer_it(qapp, tmp_path):
     window.close()
 
 
+def test_a_slow_first_read_of_the_history_keeps_the_window_alive(qapp, team, monkeypatch):
+    from revisionworx.shared import SharedWorkspace
+    folder, *_rest, tmp = team
+    ctl = controller(tmp, "alice")
+    window = MainWindow(ctl)
+    monkeypatch.setattr(T.LoginDialog, "exec", lambda self: 0)
+    shown = []
+    real_progress = mw.QProgressDialog
+
+    def recording(*args):
+        shown.append(args[0])
+        return real_progress(*args)
+    monkeypatch.setattr(mw, "QProgressDialog", recording)
+    assert window.open_location(folder)                            # quick: nothing to show
+    assert shown == []
+    real_sync = SharedWorkspace.sync
+    ticks = []
+
+    def slow_sync(self, *args, **kwargs):
+        time.sleep(0.7)
+        return real_sync(self, *args, **kwargs)
+    monkeypatch.setattr(SharedWorkspace, "sync", slow_sync)
+    timer = mw.QTimer()
+    timer.timeout.connect(lambda: ticks.append(True))
+    timer.start(20)
+    assert window.open_location(folder)
+    timer.stop()
+    assert shown and "first time" in shown[0]
+    assert ticks                                                   # the window kept running while it read
+    window.close()
+
+
 def test_your_own_changes_arent_announced_as_someone_elses(qapp, team, monkeypatch):
     folder, pc, _code, boss, project, doc, path, tmp = team
     monkeypatch.setattr(mw, "TEAM_WATCH_TICKS", 1)
