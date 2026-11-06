@@ -34,7 +34,7 @@ IMMUTABLE_REVISION_FIELDS = ("id", "document_id", "number", "label", "sha256", "
                              "restored_from")
 
 DEFAULT_DOCTYPES = {
-    "drawing": {"name": "Engineering drawing", "extensions": [".idw", ".slddrw", ".dwg", ".dxf"],
+    "drawing": {"name": "Engineering drawing", "extensions": [".idw", ".slddrw", ".dwg", ".dxf", ".draftworx"],
                 "revision_scheme": "alpha", "category": "drawing"},
     "cad-part": {"name": "CAD part", "extensions": [".ipt", ".sldprt", ".step", ".stp", ".iges", ".igs"],
                  "revision_scheme": "alpha", "category": "cad"},

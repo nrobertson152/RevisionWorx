@@ -17,6 +17,10 @@ The first release. Everything below is new.
 - `.fluidworx` simulation studies are recognised by content and registered under a new built-in "Simulation study"
   document type with alpha revisions. They are versioned byte for byte, like any other file.
 
+### DraftWorx
+- `.draftworx` drawings are recognised by content and registered as engineering drawings, with lettered revisions, so they're in a
+  project's drawing register. DraftWorx shows a drawing's revision status and checks it in through `revisionworx link`.
+
 ### Supported use
 - One computer's local disk, Windows or Linux. Several RevisionWorx windows or command-line sessions on that
   computer are safe together. Shared network folders: one computer making changes at a time (a warning is

@@ -13,16 +13,23 @@ OpenSchematix detection is verified against the format documented in the OpenSch
 FluidWorx detection is verified against the format documented in the FluidWorx repository
 (docs/FILE_FORMAT.md, version 1): ``.fluidworx`` is a ZIP whose first member, ``mimetype``, is
 ``application/x-fluidworx-study``.
+
+DraftWorx detection is verified against the format documented in the DraftWorx repository
+(docs/FILE_FORMAT.md): ``.draftworx`` is UTF-8 JSON, one object, whose first member is
+``"format": "DraftWorx drawing"``. Only the start of the file is read, so a large drawing costs nothing extra.
 """
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 OPENSCHEMATIX_MIMETYPE = "application/x-openschematix-project"
 FLUIDWORX_MIMETYPE = "application/x-fluidworx-study"
+DRAFTWORX_FORMAT = "DraftWorx drawing"
+_DRAFTWORX_HEAD = re.compile(rb'\A(?:\xef\xbb\xbf)?\s*\{\s*"format"\s*:\s*"DraftWorx drawing"\s*[,}]')
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,7 @@ _reg(".pdf", "document", "PDF document")
 _reg(".schematix", "schematic", "OpenSchematix project")
 _reg(".osch", "schematic", "OpenSchematix legacy sheet")
 _reg(".fluidworx", "simulation", "FluidWorx simulation study")
+_reg(".draftworx", "cad-drawing", "DraftWorx drawing")
 
 GENERIC = FileType("other", "Other file", "generic")
 
@@ -99,4 +107,16 @@ def sniff_fluidworx(path: Path) -> bool:
                 return False
             return zf.read("mimetype").decode("ascii", "replace").strip() == FLUIDWORX_MIMETYPE
     except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError):
+        return False
+
+
+def sniff_draftworx(path: Path) -> bool:
+    """Return True only if the file's *content* starts as the documented DraftWorx drawing format does."""
+    path = Path(path)
+    try:
+        if path.suffix.lower() != ".draftworx":
+            return False
+        with open(path, "rb") as fh:
+            return _DRAFTWORX_HEAD.match(fh.read(4096)) is not None
+    except OSError:
         return False

@@ -199,6 +199,28 @@ def test_fluidworx_file_type():
     assert not filetypes.sniff_fluidworx(FIXTURES / "openschematix" / "demo_project.schematix")
 
 
+def test_draftworx_content_verification_uses_a_real_file(ws, share):
+    d = share / "Engineering" / "drawings"
+    d.mkdir(parents=True)
+    shutil.copy(FIXTURES / "draftworx" / "bracket.draftworx", d / "real.draftworx")     # written by DraftWorx itself
+    (d / "fake.draftworx").write_text("not a drawing", encoding="utf-8")
+    (d / "other.draftworx").write_text('{"format": "Somebody else\'s drawing"}', encoding="utf-8")
+    (d / "bom.draftworx").write_bytes(b'\xef\xbb\xbf  {\n "format" : "DraftWorx drawing" }')     # a byte order mark and spacing don't matter
+    rec = projects.adopt_project(ws, d, name="drawings")
+    files = {f["path"].rsplit("/", 1)[-1]: f for f in ws.read_blob(rec["baseline"]["blob"])["files"]}
+    assert files["real.draftworx"].get("verified_format") == "draftworx"
+    assert files["bom.draftworx"].get("verified_format") == "draftworx"
+    assert "verified_format" not in files["fake.draftworx"]      # extension alone is not proof
+    assert "verified_format" not in files["other.draftworx"]
+
+
+def test_draftworx_file_type():
+    assert filetypes.classify("A.DRAFTWORX").category == "cad-drawing"
+    assert filetypes.classify("a.draftworx").label == "DraftWorx drawing"
+    assert not filetypes.sniff_draftworx(FIXTURES / "fluidworx" / "sample.fluidworx")
+    assert not filetypes.sniff_draftworx(FIXTURES / "draftworx" / "missing.draftworx")
+
+
 def test_filetype_classification_is_case_insensitive_and_honest():
     assert filetypes.classify("A.SLDPRT").category == "cad-part"
     assert filetypes.classify("a.ipt").capability == "recognized-only"

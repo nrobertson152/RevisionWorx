@@ -71,6 +71,7 @@ def test_custom_doctype_and_suggestion(ws):
                         "revision_scheme": "numeric2"})
     assert D.suggest_type(ws, "pump sizing.XLSX") == "hyd-calc"
     assert D.suggest_type(ws, "a.slddrw") == "drawing"
+    assert D.suggest_type(ws, "Bracket.DraftWorx") == "drawing"     # an engineering drawing, with lettered revisions
     assert D.suggest_type(ws, "notes.txt") == "general"
     with pytest.raises(D.DocumentError):
         D.save_doctype(ws, {"id": "Bad Id"})
