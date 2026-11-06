@@ -5,9 +5,7 @@ name: Real shares (one machine)
 
 on:
   push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+    branches: [diag/shares]
 
 permissions:
   contents: read
@@ -18,6 +16,7 @@ concurrency:
 
 jobs:
   windows-smb:
+    if: false
     name: "Windows client and server: SMB"
     runs-on: windows-latest
     timeout-minutes: 30
@@ -59,8 +58,14 @@ jobs:
       - name: Serve a folder and mount it twice, with separate caches
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq samba cifs-utils "linux-modules-extra-$(uname -r)"
-          sudo modprobe cifs
+          uname -a
+          apt-cache search "linux-modules.*$(uname -r)" | head
+          ls /lib/modules/$(uname -r)/kernel/fs | head -50 || true
+          find /lib/modules/$(uname -r) -name 'cifs*' -o -name 'nfsd*' -o -name 'smb*' | head
+          grep -E "cifs|nfs|smb" /proc/filesystems || true
+          sudo apt-get install -y -qq samba cifs-utils
+          sudo modprobe cifs || echo no-cifs-module
+          grep -E "cifs|smb" /proc/filesystems || true
           sudo mkdir -p /srv/rwshare /mnt/a /mnt/b
           sudo chown "$(id -u):$(id -g)" /srv/rwshare
           printf '[rwshare]\n path = /srv/rwshare\n read only = no\n guest ok = yes\n force user = %s\n' "$(id -un)" | sudo tee -a /etc/samba/smb.conf
@@ -86,7 +91,11 @@ jobs:
       - name: Export a folder and mount it twice, with separate caches
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq nfs-kernel-server nfs-common "linux-modules-extra-$(uname -r)"
+          find /lib/modules/$(uname -r) -name 'nfs*' | head
+          sudo apt-get install -y -qq nfs-kernel-server nfs-common
+          sudo modprobe nfsd || echo no-nfsd
+          sudo modprobe nfs || echo no-nfs
+          grep -E "nfs" /proc/filesystems || true
           sudo mkdir -p /srv/rwnfs /mnt/n1 /mnt/n2
           sudo chown "$(id -u):$(id -g)" /srv/rwnfs
           echo "/srv/rwnfs 127.0.0.1(rw,sync,no_subtree_check,insecure,all_squash,anonuid=$(id -u),anongid=$(id -g))" | sudo tee -a /etc/exports
