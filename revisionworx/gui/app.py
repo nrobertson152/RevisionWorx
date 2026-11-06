@@ -39,6 +39,22 @@ def exception_reporter(log=None):
     return report
 
 
+def _team_self_test(tmp: Path) -> str | None:
+    """Accounts need things a build could leave out, such as OpenSSL's scrypt. Set a team up, add someone, and log in as them."""
+    from .controller import Controller
+    boss = Controller(cfg_dir=tmp / "team-cfg", cache_dir=tmp / "team-cache", state_dir=tmp / "team-boss")
+    home = tmp / "Team"
+    boss.quick_start(home, "Team test")
+    boss.open_workspace(home)
+    boss.enable_team("boss", "Boss", "a self test password")
+    boss.create_account("someone", "a starting password")
+    someone = Controller(cfg_dir=tmp / "team-cfg-2", cache_dir=tmp / "team-cache-2", state_dir=tmp / "team-someone")
+    someone.open_workspace(home)
+    someone.log_in("someone", "a starting password")
+    someone.change_password("a starting password", "their own password")
+    return someone.team()["role"]
+
+
 def self_test(report: Path) -> int:
     """``--self-test REPORT``: start the real window offscreen-capable, create a project in a temporary
     folder, import a file, reopen the workspace, close, and write the result to REPORT. Used to prove that
@@ -80,6 +96,7 @@ def self_test(report: Path) -> int:
                 result["opened"] = window.open_location(home, quiet=True, select_project=project["id"])
                 result["documents"] = len(window.ctl.documents(project["id"]))
                 result["title"] = window.windowTitle()
+                result["team role"] = _team_self_test(tmp)
             except BaseException as exc:  # noqa: BLE001 - reported below
                 result["error"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
             finally:
@@ -91,6 +108,7 @@ def self_test(report: Path) -> int:
         lines += [f"{k}: {v}" for k, v in result.items()]
         ok = (not result.get("error") and result.get("opened") is True and result.get("documents") == 1
               and __version__ in str(result.get("title", "")) and result.get("splash") is True
+              and result.get("team role") == "user"
               and {16, 32, 48, 256} <= set(result.get("icon sizes", [])))
     except BaseException as exc:  # noqa: BLE001
         lines.append("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))

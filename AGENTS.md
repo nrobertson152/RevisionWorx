@@ -45,9 +45,10 @@ Use issue/PR comments and durable commits for handoffs, not chat-only status. Ke
 - **Authority:** shared `.revisionworx` metadata is authoritative; local SQLite is a disposable search cache. Never assume network filesystem operations are safe without verification.
 - **Administrative lock override stays and is fenced** (`docs/ADMINISTRATIVE_LOCK_FENCING_DIRECTIVE.md`). A revoked writer must have no path to publish.
 - **Fail closed** when authority cannot be established.
-- **Offline only:** no accounts, cloud dependency, subscriptions, telemetry or mandatory network services. Core and CLI use the standard library only.
+- **Offline only:** no online accounts, cloud dependency, subscriptions, telemetry or mandatory network services. Core and CLI use the standard library only. Accounts exist only in a workspace set up for a team, and live in that workspace (Director decision, 2026-11-05, ADR-024).
 - **OpenSchematix:** verify its actual formats and APIs before claiming interoperability. Do not modify OpenSchematix from this repository.
 - Design before editing shared-data protocols; document assumptions and failure modes.
+- **Team workspaces (ADR-024):** no server, by Director decision (2026-11-05), replacing the coordinator of ADR-014. Their rules are in `shared.judge`, which every computer applies; a change to it changes what every computer accepts, so it needs a format version.
 - Add regression tests for every material behaviour; reproduce defects before claiming they are fixed.
 - Keep `docs/ARCHITECTURE.md` aligned with verified design decisions; label unimplemented proposals.
 - Branding uses only the Director-supplied logo (`docs/REVISIONWORX_BRANDING_DIRECTIVE.md`).

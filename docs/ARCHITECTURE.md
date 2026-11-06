@@ -3,7 +3,7 @@
 **Status (1.0.0):** core (workspace, journal, fencing, recovery), documents and revisions, lifecycle,
 check-out/check-in, doctor, BOM (files) and change control are **implemented and tested** on Linux and Windows
 local disks, with the PySide6 desktop window run offscreen and on a real X display in CI. Multi-computer use of a
-shared network folder remains **unverified** (ADR-014, issue #5). Sections are marked **IMPLEMENTED** (code +
+shared network folder by a team is implemented, and **unverified between real computers** (ADR-024). Sections are marked **IMPLEMENTED** (code +
 automated tests exist), **PROPOSED** (designed, not built) or **OPEN** (decision pending). Keep this file in step
 with the code.
 
@@ -328,7 +328,7 @@ Implementation notes beyond the original design:
   which is verified only on local Linux filesystems. Production multi-user use waits for Agent D's
   findings (issue #1) and real SMB/NFS tests.
 
-### ADR-014 Multi-user authority: optional LAN coordinator — APPROVED (director, 2026-11-01), NOT IMPLEMENTED
+### ADR-014 Multi-user authority: optional LAN coordinator — SUPERSEDED by ADR-024 (Director, 2026-11-05), never implemented
 - **Decision:** the supported multi-user architecture is an optional on-premise coordinator (issue #5), following Agent D's design (PR #4). It provides authoritative write control, fencing generations checked atomically with each commit, ordered transactions, txid-idempotent recovery and audited override.
 - **Standalone mode** keeps the current file journal (ADR-004/005/008). It is single writer at a time, is fully offline and needs no coordinator.
 - **First target:** a Windows-hosted coordinator and SMB shares. Linux hosting and NFS come later.
@@ -784,7 +784,50 @@ cursor with different entries, and the cache kept serving records that exist in 
 - **Creating is safe to race:** the schema is created in one transaction, and the second opener finds it done.
 - **Not detected:** a bit flip that still parses. SQLite has no page checksums here, and the cache is disposable.
 
-## Shared filesystem coordination — OPEN design gate (Phase 3)
+### ADR-024 A team working from a shared folder, with no server — IMPLEMENTED; NOT VERIFIED between real computers
+
+**Decision (Director, 2026-11-05).** Several people work from one shared network folder, "like peer to peer out of the network folder". There is no server. An administrator account is created on the boss's computer, the administrator creates regular accounts, and people log in and check documents out. This replaces ADR-014's coordinator as the route to multi-user, and amends "no accounts" in REQUIREMENTS §5: accounts are local to a workspace, with no cloud. It's opt-in per workspace, and can't be undone. A workspace that isn't set up this way behaves exactly as before: same format, same code path, same tests.
+
+**What a shared folder can and can't give.** No server means nobody can refuse anything. So: (1) anyone with write access to the folder can delete or damage files, which this design detects but can't prevent; (2) authority has to come from something every computer can check for itself, which means signatures, and a rule every computer applies identically.
+
+**Assumed about the share.** Only two things, and they're what `revisionworx share check` and `share test` exercise:
+- *A1:* exclusive publish is decided by the file server. Windows clients publish with a rename that refuses to replace (SMB `SET_INFO` with `ReplaceIfExists=0`); POSIX with `link()`. Two clients racing for a name: exactly one wins.
+- *A2:* a file published complete can be read complete by anyone who opens that name. A file's data is fsynced and closed before its rename.
+
+**Not assumed.** Fresh directory listings (the Windows redirector caches them for about 10 s by default, NFS for up to 60 s). Fresh "not found" answers (about 5 s). Synchronized clocks. Byte-range locks or oplocks. Durable flush across a server power cut (see failure modes).
+
+**How it works.**
+1. **The journal's numbered names decide everything.** To publish entry N, a client must have read and checked 1 to N-1, and only one client can have N. A publish that succeeds was therefore built on the complete history. This holds whatever any cache says, and it's why a paused or stale writer can't publish on a stale view: its number is already taken. That closes the stale-writer vulnerability of issue #8 by construction. A listing is never believed: a client walks forward by name, and a collision tells it that it was behind.
+2. **Every entry is signed and chained.** Entries gain `prev` (the digest of the entry before), `signer` and `sig` (Ed25519 over everything but `digest` and `sig`, domain-separated). `digest` covers `sig`. The entry that turns team use on (`shared.enable`) is self-signed by the first administrator, quotes a rolling digest of all earlier entries (`history`), and introduces the recovery key.
+3. **Every computer applies the same rules** (`shared.judge`), to every entry, in order, from the entries before it and nothing else. An entry that breaks them has no effect anywhere, like a fenced entry: unsigned, signed by an unknown or disabled account, a signature that doesn't match, `actor.account` not its signer, an `expect_rev` or `RecordCheck` that doesn't hold (no one has to trust the publisher to have checked), a regular user changing accounts, settings, lifecycle, document types, templates or roots, a password change that changes anything else, removing the last active administrator, releasing or taking a checkout in someone else's name, changing a published revision, rewriting its history, a lifecycle step in someone else's name, a new revision that doesn't come from a check-in, changing or deleting an audit record, and anything but a password change while one is owed. A client runs the same function before publishing, and refuses (`NotPermitted`) rather than publish what everyone would ignore. An entry that's malformed, fails its digest, or doesn't chain to the one before is not "ineffective": nothing after it can be trusted, so writes stop (fail closed) until it's dealt with.
+4. **The writer lock only makes people take turns.** It's the same file name, with a much simpler protocol than ADR-019's, because integrity no longer depends on it. Its job is to keep whole operations serialized, so that read-check-commit code such as duplicate-name checks stays correct without being rewritten, and so that people don't keep aborting each other. If someone else's entry does appear during a turn, the commit stops (`StaleViewError`) instead of relying on every operation having declared what it read. A holder beats every 5 s after the first 5 s. A waiter that has seen the same lock and beat for 60 s by its own monotonic clock moves the lock aside, checks what it moved, and clears it, with an audit entry (`workspace.lock.cleared`) that also revokes its token. This amends ADR-005's "never stolen automatically" for team workspaces only: it isn't silent, and it can't harm the data. A holder that wakes up later finds its lock gone (`LockLostError`). If it got past that check, its number is taken, or if it wasn't, journal order decides as in ADR-015: an entry with a revoked token has no effect on any computer. So the fencing directive holds here too: a revoked writer has no path to publish. An administrator can clear a lock at once (`lock break`, with a reason). Clocks are never compared.
+5. **Reads come from a local copy** (`Replica`, SQLite in the per-user state folder, never on the share, one per folder path so that a backup with the same id isn't confused with the original). Each entry is checked once per computer and kept. `get` and `list` touch no network, which is why a click doesn't read a thousand files across a LAN. `records/` and `state.json` are frozen at the moment team use was turned on, and unused after. The copy is disposable (it's rebuilt from the journal), and it's also a backup: `team repair` puts back entries lost from the folder, and since they're signed, nobody has to take that on trust.
+6. **Keys come from passwords.** A password is stretched (scrypt, N=2^17, r=8, p=1, salted with a random salt, the workspace id and the account) into an Ed25519 seed. The password isn't stored, and only the public key is in the journal. Anyone who can read the folder can try guesses offline: that's inherent, so it's stretched hard and the docs say to choose long ones. An administrator's seed also mixes in a 32-byte secret kept only on their computer (the "local admin account"), so the folder alone isn't enough to guess it. A new account starts on a password the administrator hands over, and can do nothing but choose its own (`must_change`). The recovery code is a separate key, shown once and kept nowhere, that can only make an account an administrator's (`account.recover`). A login is held in memory; "stay logged in" keeps the seed in a private per-user file for 12 hours, which is what lets the command line and other programs act in that person's name.
+7. **Roots inside the shared folder are stored relative to it**, because one computer has `Z:\\` and another `\\\\server\\share`.
+8. **Turning it on.** Check the folder (`share check`, fail closed). Take the old writer lock. Write `workspace.json` with `format_version: 2` and `collaboration: shared`, so older versions refuse it. Then publish `shared.enable`. That order means a crash in between leaves nobody able to write until it's run again, rather than a journal old code keeps writing to unsigned. A plain handle that meets `shared.enable` in a journal refuses, so editing `workspace.json` doesn't switch the rules off. `Workspace.open` returns a `SharedWorkspace`, which meets the same `CommitAuthority` contract (ADR-017) and passes `tests/contract_commit_authority.py`.
+
+**Failure modes.**
+| What happens | What follows |
+|---|---|
+| Two people publish at once | One gets the number. The other reads what's there and gets a conflict, or carries on if it was only an audit note. Nothing is lost |
+| A computer dies or sleeps during its turn | Others wait up to a minute, then one clears it on the record. If it wakes, it's refused |
+| A computer dies between steps | A temp file at worst (swept after a day). See `tests/test_team_concurrency.py`, which kills a process before every file change |
+| A reply is lost after a publish landed | The entry is recognised by its txid as this client's own. Never reported as failure |
+| Stale listing or stale "not found" | Publish collides, nothing is written, and the writer waits for its view to catch up. The last writer's hint (`locks/last.json`, a file that already exists, so opening it asks the server) makes this rare. Only ever a hint |
+| A malformed or altered entry | Writes stop for computers that haven't read it; computers that have keep their copy and report it. `team repair` puts it back; the altered file goes to `quarantine/` |
+| Entries deleted | Same. A computer that has read them stops writing rather than fork history |
+| Folder restored from a backup on purpose | Each computer stops, and says so. `team forget-local` accepts it |
+| Server loses power with unflushed writes (A2 fails) | A published entry can vanish or tear. Detected as above, and repairable from any computer that read it. Content objects aren't replicated, so a lost one is restored from a backup |
+| Someone edits `workspace.json` | Refused, as above |
+| Administrator's computer lost, or password forgotten | The recovery code. If that's lost too, nobody can administer accounts any more; everyone can still work |
+| A regular user runs a modified program | They can't impersonate anyone, make themselves an administrator or forge an approval. They can publish junk documents in their own name, which carries their name, and delete files, which is noticed |
+| A brand new computer meets a journal someone replaced wholesale | It has nothing to compare with, so it believes it (trust on first use). A login is some assurance: the account's key is only derivable from that person's password. Computers that know the real journal refuse |
+
+**Not done.** Permissions per project or document: an account is an administrator or it isn't. Going back to single-computer use. Replicating content objects.
+
+**Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed before every file change, simulated client caches. `.github/workflows/shares.yml` runs the same races against real file servers on one hosted machine: Windows SMB 3.1.1 (client and server, by three server names, which makes three connections), the Linux kernel's SMB client against Samba (two mounts), and NFS 4.2 and 3 (two kernel clients). That found behaviour no simulation had, which the design now handles: a Linux SMB client answering EBUSY or EIO for a moment about a file that's fine, a client told a folder exists and then that it doesn't, and NFS taking seconds to show a change. Two NFS 4 mounts, being one client to the server, never heard about each other's changes at all, which is why that job mixes versions. **None of that is evidence across computers:** it's one machine and one network path, with no cable pulled and no server rebooted. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
+
+## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).
 The protocol above relies on exclusive `link()`/`rename()`, `os.replace` atomicity and fsync, which
@@ -796,12 +839,10 @@ claim of safe concurrent multi-user writes:
 3. Verify journal publication ordering and durability (fsync honoured by the server; close-to-open).
 4. Lock lease expiry and fencing tokens so a paused client cannot write after its lock was broken.
 5. Multi-machine fault-injection tests: cable pull, server reboot, disk full, permission revocation.
-6. If guarantees cannot be established, fail closed for writes and offer the optional on-premise LAN
-   coordinator (contingency, not a cloud service).
+6. If guarantees cannot be established, fail closed for writes (`share check` refuses to turn team use on).
 
-Known gap (narrowed by ADR-008, not closed): a writer whose lock is broken *between* its lock re-check
-and its journal publish can still publish one entry. Fencing is part of Phase 3 and is tracked with
-the QA/concurrency agents in GitHub issue #1.
+Known gap in single-writer workspaces (narrowed by ADR-008, not closed): a writer whose lock is broken *between* its lock re-check
+and its journal publish can still publish one entry, which ADR-015 fences. It doesn't apply to team workspaces (ADR-024, point 1).
 
 ## Core data entities
 

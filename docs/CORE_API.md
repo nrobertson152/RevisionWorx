@@ -19,6 +19,8 @@ ws = Workspace.open(location: Path, writable=False)     # read-only by default
 ws.close()                                              # or: with Workspace.open(...) as ws:
 ```
 
+In a workspace set up for a team (ADR-024), `open` returns a `SharedWorkspace` and takes `session=`, `state_dir=` and `wait=` (how long to wait for a turn). They're ignored otherwise. It has the same contract, plus `NotLoggedIn` and `NotPermitted` (nothing written), and `StaleViewError`, which is a `ConflictError`. Accounts and logins are in `revisionworx.accounts`.
+
 `close()` can raise `WorkspaceError` or `OSError` if the filesystem refuses. The lock is then still held, and nothing is lost. Call
 `close()` again; the next `Workspace.open(..., writable=True)` of that workspace in this process also retries. The handle stays closed.
 
@@ -154,6 +156,12 @@ Codes are stable; scripts can rely on them.
 | `L006` | warning | Administrative clear did not finish |
 | `L007` | error | Lock archived with its token not revoked: invariant W2 violated |
 | `L008` | error | Audited clear evidence missing or altered |
+| `J010` | error | Team workspace: an entry this computer has read is gone from the shared folder |
+| `J011` | error | Team workspace: an entry in the shared folder isn't the one this computer read |
+| `J012` | error | Team workspace: the next entry can't be trusted (damaged, or it doesn't follow the one before) |
+| `T001` | error | Team workspace: writes are refused, or the workspace can't be examined |
+| `T002` | error | Team workspace: no active administrator, which journal rules should make impossible |
+| `T003` | info | Team workspace: someone is taking a turn at saving |
 | `L009` | warning | Release file busy (in progress, or held by another program): check again |
 | `R001` | warning | Record differs from the journal |
 | `R002` | warning | Record missing |

@@ -25,6 +25,7 @@ from .workflow import Policy
 
 def service_for(ws, **kwargs) -> ChangeService:
     """A :class:`ChangeService` on an open workspace handle, verifying documents and projects."""
+    kwargs.setdefault("actor", ws.actor)
     return ChangeService(WorkspaceStore(ws), WorkspaceCatalog(ws), **kwargs)
 
 

@@ -83,6 +83,23 @@ Mark each step Pass or Fail. If a step fails, note what you saw, keep going if y
 |---|---|---|
 | 21 | Move around the screens: start page, project, documents and a dialog. | The scope notice stays visible on the main window. Nothing suggests that several computers may change a shared folder at once. |
 
+### Workflow 7: a team working from a shared folder
+
+This takes two computers and a real network folder, and it's the only real test of team use there is. Make a new folder on the share for it.
+
+| # | Do | Expect |
+|---|---|---|
+| T1 | On both computers, at the same time: `revisionworx share test FOLDER --seconds 60`. Then `revisionworx share report FOLDER`. | "passed between 2 computers". **Save this output with your results, and delete `.revisionworx-share-test`.** If it says FAILED, stop: this share isn't fit for team use. |
+| T2 | On the first computer, create a workspace in the folder, then **Team › Set this workspace up for a team…**. | It explains what it can't do. After you fill it in, it shows a recovery code, and won't close until you tick that you've written it down. The status bar shows your name. |
+| T3 | **Team › Accounts… › Add…** a regular user with a starting password. | They're listed as "Hasn't chosen a password yet". |
+| T4 | On the second computer, open the same workspace (it's fine if the drive letter differs). | It asks you to log in. Cancel it: you can look at everything, and trying to check out tells you to log in. |
+| T5 | Log in as the new user. | It makes you choose your own password. The status bar shows the name. |
+| T6 | Check a document out on the second computer. | Within a few seconds the first computer's window shows who has it, without pressing anything, and says someone made a change. Checking it out there says who has it. |
+| T7 | Edit its file on the second computer, and check it in. | The first computer shows the new revision, in that person's name. |
+| T8 | On the first computer, as administrator, try **Release checkout…** on a document the other person has out. | It asks why, releases it, and the audit says who and why. On the second computer as a regular user, that button isn't offered. |
+| T9 | Pull the second computer's network cable, or put it to sleep, in the middle of a large check-in. Try a change on the first computer. | It says that person is saving. Within about a minute, a change succeeds. Reconnect: the second computer is told its change wasn't made, and doing it again works. |
+| T10 | Both computers: `revisionworx -w FOLDER doctor --quick`. | No errors on either. |
+
 ### Worth judging while you go
 
 These aren't pass or fail, but they are what automation can't tell us.
@@ -138,10 +155,11 @@ Results come from exact-commit CI recorded in [`DESKTOP_ALPHA_PROGRESS.md`](DESK
   Windows Explorer icon of `revisionworx-gui.exe` (up to 256 px), and the Linux application menu after
   `install-desktop-entry.sh`. CI checks the files, their sizes and that the window loads them; nobody has looked.
 - Step 18 on Windows. The `icacls` commands and the resulting message have not been tried there.
+- Workflow 7. Team use has been tested with real processes and with real SMB and NFS servers on one machine, but never between two real computers.
 
 ## Known limitations
 
 - A session that crashes while writing leaves a lock. The GUI shows the exact `lock break` command, but you have to run it yourself. Whether this should be recovered automatically when the process is gone is an open question for the Director.
 - Reading a workspace file on Windows can be refused for a moment by another program or a concurrent write. The branch's current core does not retry this. A saved change is still reported as saved, and F5 retries. Core's retry arrives with the core merge.
-- Shared network folders are not supported.
+- Shared network folders: one computer making changes at a time, or Workflow 7. Without Workflow 7 having passed, team use is unverified.
 - No byte-level progress for very large files.

@@ -6,7 +6,7 @@ txid)``. Phase 2 code (``documents.py``) depends only on this contract, never on
 files. Two implementations are planned:
 
 * ``Workspace`` (file journal) - standalone single-user mode, implemented.
-* An optional on-premise LAN coordinator - approved (issue #5), not implemented.
+* ``SharedWorkspace`` (signed file journal) - a team working from a shared folder, with no server (ADR-024), implemented.
 
 A conforming implementation must pass ``tests/contract_commit_authority.py``. Semantics:
 
@@ -53,6 +53,8 @@ OUTCOME_CODES = (
     ("CommittedNotApplied", "committed"),     # durable; derived state completes on recovery
     ("WorkspaceLockedError", "busy"),         # another writer holds authority; retry later
     ("ReadOnlyError", "read-only"),
+    ("NotPermitted", "refused"),              # this account may not do that; nothing written (ADR-024)
+    ("NotLoggedIn", "refused"),               # nobody is logged in; nothing written (ADR-024)
     ("WorkspaceCorruptError", "corrupt"),     # authoritative data inconsistent; writes refused
     ("WorkspaceFormatError", "unsupported-format"),
 )
@@ -61,7 +63,7 @@ OUTCOME_CODES = (
 def classify(exc: BaseException) -> str:
     """Map an exception from ``commit`` to a stable outcome code; ``error`` if unclassified.
 
-    ``conflict``, ``txid-reuse``, ``identity-unverifiable``, ``fenced`` and ``busy`` guarantee nothing
+    ``conflict``, ``txid-reuse``, ``identity-unverifiable``, ``fenced``, ``busy`` and ``refused`` guarantee nothing
     took effect;
     ``committed`` guarantees it did; ``error``/``corrupt`` require ``transaction_outcome(txid)``."""
     names = {c.__name__ for c in type(exc).__mro__}

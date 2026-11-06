@@ -2,7 +2,7 @@
 
 # RevisionWorx
 
-Offline, accountless engineering Product Data Management (PDM) for small engineering teams, on Windows and
+Offline engineering Product Data Management (PDM) for small engineering teams, on Windows and
 Linux. No cloud, no subscription, no telemetry. Free software under the GNU GPL v3 or later.
 
 RevisionWorx keeps your existing project folders exactly where they are and adds revision control, check-out /
@@ -16,8 +16,10 @@ computer are safe together: only one can change the workspace at a time, the oth
 interrupted change is completed or rolled forward the next time the workspace is opened.
 
 **Shared network folders (SMB/NFS):** you may keep a workspace in a network folder, but **let only one computer
-make changes at a time**. Several computers writing to the same network folder at the same time has not been
-verified, and RevisionWorx shows a warning when a workspace is in a network folder. See
+make changes at a time**, and RevisionWorx shows a warning when a workspace is in a network folder. Or **set it up for a
+team**: each person logs in, an administrator manages the accounts, and everyone works directly from the folder, with no
+server. See [Working as a team](docs/USER_GUIDE.md#working-as-a-team-from-a-shared-folder). Between real computers that
+**has not been verified yet**: `revisionworx share test` is how to find out about your share. See
 [Known limitations](docs/KNOWN_LIMITATIONS.md).
 
 Keep regular backups of your project folders and their `.revisionworx` folder, as with any engineering data.

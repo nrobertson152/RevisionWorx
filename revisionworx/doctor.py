@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import atomicio, documents
 from .content import ContentStore, hash_file
-from .workspace import FORMAT_NAME, FORMAT_VERSION, Workspace, WorkspaceCorruptError, WorkspaceError, journal_gaps
+from .workspace import FORMAT_NAME, FORMAT_VERSION, Workspace, WorkspaceCorruptError, WorkspaceError, is_shared_info, journal_gaps
 
 ERROR, WARNING, INFO = "error", "warning", "info"
 _PASSES = 5
@@ -76,7 +76,7 @@ def _check_identity(meta: Path, out: _Report) -> dict | None:
     if not isinstance(version, int):
         out.add("W002", ERROR, "workspace.json", f"has an invalid format version {version!r}", _RESTORE)
         return None
-    if version > FORMAT_VERSION:
+    if version > FORMAT_VERSION and not is_shared_info(info):
         out.add("W003", ERROR, "workspace.json", f"format {info.get('format_version')} is newer than this RevisionWorx",
                 "update RevisionWorx")
         return None
@@ -115,11 +115,12 @@ def _check_journal(ws: Workspace, out: _Report) -> bool:
                     out.add("J003", WARNING, f"journal entry {seq}", "has no digest (written by an old version), so changes to "
                             "it could not be detected", "keep a backup; this does not stop anything working")
                 if ws.is_fenced(entry):
-                    out.add("J005", INFO, f"journal entry {seq}", "was published after its writer lost the lock, so it never took "
-                            "effect. This is fencing having worked")
+                    out.add("J005", INFO, f"journal entry {seq}", ws.fenced_reason(entry))
         except (WorkspaceCorruptError, OSError) as exc:
             whole = False
             out.add("J002", ERROR, "journal", str(exc), _RESTORE)
+    if not ws.materialises:
+        return whole                                 # a team workspace keeps no record files or state.json up to date
     head = seqs[-1] if seqs else 0
     try:
         applied = int(atomicio.read_json_object(ws.meta_dir / "state.json")["applied_seq"])
@@ -137,6 +138,23 @@ def _check_journal(ws: Workspace, out: _Report) -> bool:
         out.add("S003", INFO, "state.json", f"{head - applied} saved change(s) are not materialised yet",
                 "none: the next writer finishes this")
     return whole
+
+
+def _check_team(ws, out: _Report) -> None:
+    """What's different about a workspace set up for a team (ADR-024)."""
+    out.checked.append("team")
+    health = ws.health()
+    if not health["ok"]:
+        out.add("T001", ERROR, "team", f"writes are refused: {health['reason']}",
+                "'revisionworx team repair' puts back what this computer has; see the user guide")
+    accounts = ws.list("account")
+    if health["ok"] and not any(a.get("active") is True and a.get("role") == "admin" for a in accounts.values()):
+        out.add("T002", ERROR, "accounts", "there's no active administrator, and journal rules should make that impossible",
+                "'revisionworx team recover' with the recovery code")
+    holder = Workspace.read_writer_lock(ws.meta_dir)
+    if holder:
+        out.add("T003", INFO, "locks/writer.lock", f"{holder.get('user')} on {holder.get('host')} is taking a turn, since "
+                f"{holder.get('acquired')}", "none: if that computer has stopped, the lock clears itself after a minute")
 
 
 def _check_locks(ws: Workspace, out: _Report, journal_whole: bool) -> None:
@@ -198,9 +216,16 @@ def _check_materialised(ws: Workspace, out: _Report) -> None:
     codes = {"mismatch": ("R001", "differs from the journal"), "unreadable": ("R005", "cannot be read"),
              "missing": ("R002", "is missing"), "not-in-journal": ("R003", "was never written by the journal"),
              "deleted-but-present": ("R004", "should have been deleted")}
+    team = {"journal-entry-missing": ("J010", "is gone from the shared folder, though this computer has read it"),
+            "journal-entry-altered": ("J011", "in the shared folder isn't what this computer read: it's been changed"),
+            "journal-damaged": ("J012", "can't be trusted")}
     for problem in ws.verify()["problems"]:
         kind = problem["problem"]
-        if kind in codes:
+        if kind in team:
+            code, text = team[kind]
+            out.add(code, ERROR, f"journal entry {problem['seq']}", f"{text}. {problem.get('detail', '')}".strip(),
+                    "'revisionworx team repair' puts back what this computer has")
+        elif kind in codes:
             code, text = codes[kind]
             out.add(code, WARNING, f"records/{problem['kind']}/{problem['id']}", f"{text}. Reads use the journal; only the cache "
                     "is wrong", _REPAIR)
@@ -292,13 +317,31 @@ def _attempt(out: _Report, name: str, check, *args):
         return None, False
 
 
-def _examine_once(meta: Path, info: dict, hash_content: bool) -> _Report:
+def _examine_once(meta: Path, info: dict, hash_content: bool, state_dir=None) -> _Report:
     out = _Report()
     out.checked.append("identity")
-    ws = Workspace(meta, info, False, None)
+    if is_shared_info(info):
+        try:
+            ws = Workspace.open(meta, state_dir=state_dir)
+        except (OSError, WorkspaceError) as exc:
+            out.add("T001", ERROR, "team", f"can't be examined: {exc}", "check the folder is reachable from this computer")
+            return out
+    else:
+        ws = Workspace(meta, info, False, None)
+    try:
+        return _examine_handle(ws, out, hash_content)
+    finally:
+        if not ws.materialises:
+            ws.close()
+
+
+def _examine_handle(ws, out: _Report, hash_content: bool) -> _Report:
     whole, ok = _attempt(out, "journal", _check_journal, ws, out)
     whole = bool(ok and whole)
-    _attempt(out, "locks", _check_locks, ws, out, whole)
+    if ws.materialises:
+        _attempt(out, "locks", _check_locks, ws, out, whole)
+    else:
+        _attempt(out, "team", _check_team, ws, out)
     if not whole:
         out.skipped.append("records, documents, history and content: they are judged against the journal, which is damaged")
         return out
@@ -319,7 +362,7 @@ def _head(meta: Path) -> tuple[str, ...]:
         return ()
 
 
-def examine(location: Path, hash_content: bool = True) -> dict:
+def examine(location: Path, hash_content: bool = True, state_dir=None) -> dict:
     """Everything that can be established about a workspace without changing it.
 
     The checks are not one instant. A writer publishing between two of them could make healthy data look broken, such as a
@@ -334,7 +377,7 @@ def examine(location: Path, hash_content: bool = True) -> dict:
         return out.result(meta)
     for _ in range(_PASSES):
         before = _head(meta)
-        out = _examine_once(meta, info, hash_content)
+        out = _examine_once(meta, info, hash_content, state_dir)
         if _head(meta) == before:
             return out.result(meta)
     out.skipped.append("a consistent view: writers kept publishing throughout, so findings here may be momentary and nothing is proven healthy; run this again")

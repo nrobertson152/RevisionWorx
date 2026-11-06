@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "revisionworx"
 dynamic = ["version"]
-description = "Offline, accountless engineering PDM that integrates with OpenSchematix"
+description = "Offline engineering PDM that integrates with OpenSchematix"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"

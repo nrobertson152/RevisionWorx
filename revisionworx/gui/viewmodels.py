@@ -364,6 +364,13 @@ def preview_report(s: dict) -> str:
     return "\n".join(lines)
 
 
+def who_has(owner: dict) -> str:
+    """Who a checkout belongs to. In a team workspace that's a person; otherwise, a user on a computer."""
+    if owner.get("account"):
+        return f"{owner.get('name') or owner['account']} (on {owner.get('host', 'another computer')})"
+    return f"{owner.get('user')}@{owner.get('host')}"
+
+
 def short_time(stamp: str) -> str:
     """'2026-11-05T00:49:05+00:00' -> '2026-11-05 00:49' for tables (the full stamp stays in the details)."""
     m = re.match(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})", stamp or "")
@@ -419,6 +426,9 @@ class DocumentListModel(Observable):
         if quick == "mine":
             from ..workspace import current_actor
             me = current_actor()
+            account = self.ctl.my_account()
+            if account:                                  # in a team, a checkout is the account's, on whichever computer
+                return row.get("checked_out_by") == account
             return bool(row.get("checked_out_by")) and row.get("checked_out_by") == me["user"] and \
                 row.get("checked_out_host") == me["host"]
         if quick == "attention":
@@ -654,7 +664,7 @@ class DocumentPanel(Observable):
                  "unrevisioned": "No revision has been captured yet."}
         text = texts.get(st["state"], st["state"])
         if co:
-            who = "you" if self.detail["mine"] else f"{co['owner']['user']}@{co['owner']['host']}"
+            who = "you" if self.detail["mine"] else who_has(co["owner"])
             text += f"  Checked out by {who} since {co['acquired']}."
         return text
 
@@ -679,8 +689,7 @@ class DocumentPanel(Observable):
             return ("File missing", "The working file is not where RevisionWorx expects it. Restore it, or cancel "
                     "the checkout and discard edits to bring back the latest revision.", "danger")
         if co and not self.detail["mine"]:
-            who = f"{co['owner'].get('user')}@{co['owner'].get('host')}"
-            return (f"Checked out by {who}", "Read-only for you until they check it in.", "warn")
+            return (f"Checked out by {who_has(co['owner'])}", "Read-only for you until they check it in.", "warn")
         if st == "modified-externally":
             return ("Changed without a checkout", "Someone edited the file without checking it out. Check it "
                     "out, then check it in to keep the edits as a new revision.", "warn")
@@ -711,10 +720,18 @@ class DocumentPanel(Observable):
             return "Not checked out — available."
         if self.detail["mine"]:
             return "Checked out by you (this session can check in)."
-        return (f"Checked out by {co['owner'].get('user')}@{co['owner'].get('host')} since {co['acquired']}. "
-                "Read-only for you.")
+        return f"Checked out by {who_has(co['owner'])} since {co['acquired']}. Read-only for you."
 
     can_cancel = can_checkin
+
+    @property
+    def can_release(self) -> bool:
+        """An administrator of a team workspace, looking at someone else's checkout."""
+        return bool(self.detail) and bool(self.detail.get("can_release")) and not self.ctl.busy and not self.ctl.read_only
+
+    def release(self, reason: str) -> None:
+        self.ctl.release_checkout(self.doc_id, reason)
+        self.saved("Checkout released, and the journal records who did it and why. Their file was left as it is.")
 
     @property
     def can_transition(self) -> bool:
@@ -1029,6 +1046,9 @@ class AppStatus(Observable):
     @property
     def notice(self) -> str:
         """The permanent scope notice, plus the network-folder notice when the open workspace is on one."""
+        if getattr(self.ctl, "team_mode", False):
+            from .controller import TEAM_NOTICE
+            return TEAM_NOTICE
         if getattr(self.ctl, "network_location", None):
             from ..paths import NETWORK_NOTICE
             return f"{self.alpha_notice}\n\u26a0 {NETWORK_NOTICE}"

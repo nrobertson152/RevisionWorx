@@ -6,6 +6,13 @@ All notable changes to RevisionWorx. Versions follow [Semantic Versioning](https
 
 The first release. Everything below is new.
 
+### Working as a team
+- A workspace can be set up for a team working from one shared network folder, with no server. An administrator account is created on
+  the boss's computer, the administrator creates regular accounts, and people log in and check documents out. Every change is signed,
+  and every computer checks every change, so nobody can make themselves an administrator or act in someone else's name. Other programs can
+  use a login kept on the computer. It's opt-in, can't be undone, and hasn't been verified between real computers:
+  `revisionworx share test` is how to find out about your share. See [Known limitations](docs/KNOWN_LIMITATIONS.md).
+
 ### FluidWorx
 - `.fluidworx` simulation studies are recognised by content and registered under a new built-in "Simulation study"
   document type with alpha revisions. They are versioned byte for byte, like any other file.
@@ -13,7 +20,8 @@ The first release. Everything below is new.
 ### Supported use
 - One computer's local disk, Windows or Linux. Several RevisionWorx windows or command-line sessions on that
   computer are safe together. Shared network folders: one computer making changes at a time (a warning is
-  shown); see [Known limitations](docs/KNOWN_LIMITATIONS.md).
+  shown), or set up for a team, which isn't verified between real computers yet; see
+  [Known limitations](docs/KNOWN_LIMITATIONS.md).
 
 ### Core
 - `.revisionworx` workspace with an ordered, crash-safe journal; every change is one atomic, checked commit.

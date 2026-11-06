@@ -148,6 +148,9 @@ class DocumentsTab(QWidget):
         self.checkin_btn = QPushButton("Chec&k in…", detail)
         self.checkin_btn.setToolTip("Record your edits as a new revision (Ctrl+Shift+K)")
         self.cancel_btn = QPushButton("&Cancel checkout…", detail)
+        self.release_btn = QPushButton("Release checko&ut…", detail)
+        self.release_btn.setToolTip("Administrators: end someone else's checkout, for example if they're away. It's recorded, and their "
+                                    "file is left as it is.")
         self.open_file_btn = QPushButton("Open &file", detail)
         self.open_file_btn.setToolTip("Open the working file in its program (Enter or double-click)")
         self.open_dir_btn = QPushButton("Show in fo&lder", detail)
@@ -156,7 +159,7 @@ class DocumentsTab(QWidget):
         self.transition_btn = QPushButton("Change &state", detail)
         self.export_btn = QPushButton("&Export revision…", detail)
         self.export_btn.setToolTip("Save a copy of the selected revision anywhere (a copy is never managed)")
-        dl.addLayout(_row(self.checkout_btn, self.checkin_btn, self.cancel_btn, stretch_at=3))
+        dl.addLayout(_row(self.checkout_btn, self.checkin_btn, self.cancel_btn, self.release_btn, stretch_at=4))
         dl.addLayout(_row(self.open_file_btn, self.open_dir_btn, self.export_btn, stretch_at=3))
         state_row = _row(self.transition_box, self.transition_btn)
         state_row.setStretch(0, 1)
@@ -164,6 +167,7 @@ class DocumentsTab(QWidget):
         self.checkout_btn.clicked.connect(lambda *_: self.checkout())
         self.checkin_btn.clicked.connect(lambda *_: self.checkin())
         self.cancel_btn.clicked.connect(lambda *_: self.cancel())
+        self.release_btn.clicked.connect(lambda *_: self.release())
         self.open_file_btn.clicked.connect(lambda *_: self.open_file())
         self.open_dir_btn.clicked.connect(lambda *_: self.open_folder())
         self.transition_btn.clicked.connect(lambda *_: self.change_state())
@@ -203,7 +207,7 @@ class DocumentsTab(QWidget):
         self.split = split
         outer.addWidget(split, 1)
         for name in ("filter", "import_btn", "register_btn", "notice", "table", "checkout_btn",
-                     "checkin_btn", "cancel_btn", "open_file_btn", "open_dir_btn", "transition_box",
+                     "checkin_btn", "cancel_btn", "release_btn", "open_file_btn", "open_dir_btn", "transition_box",
                      "transition_btn", "export_btn", "compare_btn", "restore_btn", "history",
                      "revision_detail"):
             getattr(self, name).setObjectName("documents_" + name)
@@ -313,6 +317,8 @@ class DocumentsTab(QWidget):
         self.checkout_btn.setEnabled(p.can_checkout)
         self.checkin_btn.setEnabled(p.can_checkin)
         self.cancel_btn.setEnabled(p.can_cancel)
+        self.release_btn.setEnabled(p.can_release)
+        self.release_btn.setVisible(p.can_release)
         primary = p.primary_action
         theme.set_flag(self.checkout_btn, "primary", primary == "checkout")
         theme.set_flag(self.checkin_btn, "primary", primary == "checkin")
@@ -392,7 +398,8 @@ class DocumentsTab(QWidget):
         entries = [("Open file", self.open_file, p.can_open_file), ("Show in folder", self.open_folder, bool(p.detail)),
                    None,
                    ("Check out", self.checkout, p.can_checkout), ("Check in…", self.checkin, p.can_checkin),
-                   ("Cancel checkout…", self.cancel, p.can_cancel), None,
+                   ("Cancel checkout…", self.cancel, p.can_cancel),
+                   *([("Release checkout…", self.release, True)] if p.can_release else []), None,
                    ("Export revision…", self.export, bool(p.history) and not self.ctl.busy), None,
                    ("Copy document number", self.copy_number, bool(p.detail and p.detail["document"].get("number"))),
                    ("Copy file path", self.copy_path, bool(p.detail))]
@@ -500,6 +507,14 @@ class DocumentsTab(QWidget):
         box.exec()
         if box.clickedButton() in (keep, discard):
             self.run(lambda: self.panel.cancel(revert=box.clickedButton() is discard))
+
+    def release(self) -> None:
+        if not self.panel.can_release:
+            return
+        reason, ok = QInputDialog.getText(self, "Release checkout", "Why are you releasing this? It's recorded in the journal, and their file is "
+                                          "left as it is.")
+        if ok and reason.strip():
+            self.run(lambda: self.panel.release(reason))
 
     def refresh(self) -> None:
         """Reload the list and the selected document, keeping the selection (F5)."""

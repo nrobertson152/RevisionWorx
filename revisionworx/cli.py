@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -28,8 +29,11 @@ def _ws_location(args) -> Path:
     return Path(loc)
 
 
+CLI_LOCK_WAIT = 90.0   # a script would rather wait its turn than fail, and this outlasts a stuck lock clearing itself
+
+
 def _open(args, writable: bool) -> Workspace:
-    return Workspace.open(_ws_location(args), writable=writable)
+    return Workspace.open(_ws_location(args), writable=writable, state_dir=args.state_dir, wait=CLI_LOCK_WAIT)
 
 
 def _project_line(p: dict) -> str:
@@ -188,7 +192,7 @@ def cmd_verify(args):
 
 
 def cmd_doctor(args):
-    report = doctor.examine(_ws_location(args), hash_content=not args.quick)
+    report = doctor.examine(_ws_location(args), hash_content=not args.quick, state_dir=args.state_dir)
     _emit(args, report, doctor.render(report))
     if not report["ok"]:
         raise SystemExit(1)
@@ -214,8 +218,215 @@ def cmd_lock_clear_orphan(args):
 
 
 def cmd_lock_break(args):
-    holder = Workspace.break_writer_lock(_ws_location(args), args.token, args.reason)
+    holder = Workspace.break_writer_lock(_ws_location(args), args.token, args.reason, state_dir=args.state_dir)
     _emit(args, holder, f"Broke writer lock held by {holder.get('user')}@{holder.get('host')}; recorded in journal.")
+
+
+# ---------------------------------------------------------------- a team working from a shared folder (ADR-024)
+def _ask_password(args, prompt: str, confirm: bool = False) -> str:
+    if getattr(args, "password_stdin", False):
+        line = sys.stdin.readline()
+        if not line:
+            raise WorkspaceError("expected a password on standard input")
+        return line.rstrip("\r\n")
+    first = getpass.getpass(f"{prompt}: ")
+    if confirm and getpass.getpass("Type it again: ") != first:
+        raise WorkspaceError("those didn't match, so nothing was changed")
+    return first
+
+
+def _team_handle(args, writable: bool):
+    ws = _open(args, writable)
+    if ws.materialises:
+        ws.close()
+        raise WorkspaceError("this workspace isn't set up for a team. An administrator can do that with 'team enable'")
+    return ws
+
+
+def cmd_team_enable(args):
+    from . import accounts
+    password = _ask_password(args, f"Choose a password for {args.admin}", confirm=True)
+    made = accounts.enable_team_use(_ws_location(args), args.admin, args.name or args.admin, password, state_dir=args.state_dir)
+    from .shared import save_session
+    save_session(made["session"], args.state_dir)
+    lines = [f"This workspace is now set up for a team, with {made['session'].account} as its administrator on this computer.",
+             "", f"    Recovery code: {made['recovery_code']}", "",
+             "Write the recovery code down and keep it somewhere safe, away from the shared folder. It's shown only this once. It's "
+             "the only way to get an administrator account back if this computer is lost or the password is forgotten.",
+             "", "Not verified: whether this works across real computers on your share. Run 'revisionworx share test FOLDER' on two "
+             "computers at the same time to find out."]
+    _emit(args, {"recovery_code": made["recovery_code"], "admin": made["session"].account, "check": made["check"]}, "\n".join(lines))
+
+
+def cmd_team_status(args):
+    from . import accounts
+    with _open(args, False) as ws:
+        if ws.materialises:
+            _emit(args, {"team": False}, "This workspace isn't set up for a team: one computer makes changes at a time.")
+            return
+        rows = accounts.list_accounts(ws)
+        me = ws.session.account if ws.session else None
+        info = {"team": True, "accounts": rows, "logged_in": me, "role": ws.role, "journal_seq": ws.head_seq(),
+                "health": ws.health(), "writer_lock": Workspace.read_writer_lock(ws.meta_dir),
+                "network_location": paths.is_network_location(ws.meta_dir)}
+    lines = [f"Set up for a team, {len(rows)} account(s). Logged in as {me} ({info['role']})." if me
+             else f"Set up for a team, {len(rows)} account(s). Not logged in here."]
+    if not info["health"]["ok"]:
+        lines.append(f"Writes are refused: {info['health']['reason']}")
+    _emit(args, info, "\n".join(lines))
+
+
+def cmd_team_repair(args):
+    from .shared import SharedWorkspace
+    report = SharedWorkspace.repair(Workspace.meta_dir_for(_ws_location(args)), state_dir=args.state_dir, remove_damaged=args.remove_damaged)
+    restored, removed = report.get("restored", []), report.get("removed", [])
+    left = [p for p in report["problems"] if p.get("severity") != "info" and p.get("seq") not in restored]
+    text = f"Put back {len(restored)} journal entr{'y' if len(restored) == 1 else 'ies'} from this computer's copy. "
+    if removed:
+        text += f"Moved {len(removed)} damaged entr{'y' if len(removed) == 1 else 'ies'} to .revisionworx/quarantine. "
+    text += f"{len(left)} problem(s) left."
+    if any(p["problem"] == "journal-damaged" for p in left):
+        text += (" The next entry is damaged. If no computer can read it, nobody can have used it, and --remove-damaged moves it out of the "
+                 "way so that work can carry on.")
+    _emit(args, report, text)
+    if left:
+        raise SystemExit(1)
+
+
+def cmd_team_forget_local(args):
+    from .shared import SharedWorkspace
+    SharedWorkspace.forget_local(_ws_location(args), state_dir=args.state_dir)
+    _emit(args, {"forgotten": True}, "This computer's copy of the journal is gone. It's read again from the shared folder next time.")
+
+
+def cmd_team_recover(args):
+    from . import accounts
+    from .shared import save_session
+    code = args.code or (sys.stdin.readline().strip() if args.password_stdin else getpass.getpass("Recovery code: "))
+    password = _ask_password(args, f"Choose a new password for {args.admin}", confirm=True)
+    session = accounts.recover_admin(_ws_location(args), code, args.admin, password, state_dir=args.state_dir)
+    save_session(session, args.state_dir)
+    _emit(args, {"admin": session.account}, f"{session.account} is an administrator again, on this computer. Any earlier key for that "
+          "account has stopped working.")
+
+
+def cmd_login(args):
+    from . import accounts
+    password = _ask_password(args, f"Password for {args.name}")
+    made = accounts.login(_ws_location(args), args.name, password, state_dir=args.state_dir, remember_hours=args.hours)
+    session = made["session"]
+    text = f"Logged in as {session.account} ({made['role']}) for {args.hours:g} hours."
+    if made["must_change"]:
+        text += " This password was only to get you started: run 'revisionworx passwd' to choose your own before doing anything else."
+    _emit(args, {"account": session.account, "role": made["role"], "must_change": made["must_change"]}, text)
+
+
+def cmd_logout(args):
+    from . import accounts
+    with _open(args, False) as ws:
+        accounts.logout(ws.id, args.state_dir)
+    _emit(args, {"logged_out": True}, "Logged out on this computer.")
+
+
+def cmd_whoami(args):
+    with _open(args, False) as ws:
+        session = None if ws.materialises else ws.session
+        info = {"account": session.account if session else None, "role": ws.role if session else None}
+    _emit(args, info, f"{info['account']} ({info['role']})" if session else "Not logged in.")
+
+
+def cmd_passwd(args):
+    from . import accounts
+    old = _ask_password(args, "Current password")
+    new = _ask_password(args, "New password", confirm=True)
+    session = accounts.change_password(_ws_location(args), old, new, state_dir=args.state_dir)
+    _emit(args, {"account": session.account}, f"Password changed for {session.account}.")
+
+
+def cmd_user_list(args):
+    from . import accounts
+    with _team_handle(args, False) as ws:
+        rows = accounts.list_accounts(ws)
+    text = [f"{r['id']:<20} {r['role']:<6} {'active' if r['active'] else 'DISABLED':<9}"
+            f"{'must choose a password  ' if r.get('must_change') else ''}{r.get('name', '')}" for r in rows]
+    _emit(args, rows, "\n".join(text))
+
+
+def cmd_user_add(args):
+    from . import accounts
+    password = _ask_password(args, f"A starting password for {args.name} (they choose their own when they first log in)", confirm=True)
+    with _team_handle(args, True) as ws:
+        row = accounts.create_account(ws, args.name, password, name=args.display or "", role=args.role)
+    _emit(args, row, f"Created {row['id']} ({row['role']}). Give them the starting password yourself; it isn't stored anywhere.")
+
+
+def cmd_user_disable(args):
+    from . import accounts
+    with _team_handle(args, True) as ws:
+        row = accounts.set_active_flag(ws, args.name, False)
+    _emit(args, row, f"Disabled {row['id']}. What they did before stands; from now on, every computer ignores changes in their name.")
+
+
+def cmd_user_enable(args):
+    from . import accounts
+    with _team_handle(args, True) as ws:
+        row = accounts.set_active_flag(ws, args.name, True)
+    _emit(args, row, f"Enabled {row['id']}.")
+
+
+def cmd_user_reset(args):
+    from . import accounts
+    password = _ask_password(args, f"A new starting password for {args.name}", confirm=True)
+    with _team_handle(args, True) as ws:
+        row = accounts.reset_password(ws, args.name, password)
+    _emit(args, row, f"Reset {row['id']}. They choose their own password at their next login.")
+
+
+def cmd_user_role(args):
+    from . import accounts
+    with _team_handle(args, True) as ws:
+        row = accounts.set_role(ws, args.name, args.role)
+    _emit(args, row, f"{row['id']} is now {row['role']}.")
+
+
+def cmd_share_check(args):
+    from . import sharecheck
+    report = sharecheck.check_folder(Path(args.folder))
+    lines = [f"{'ok    ' if c['ok'] else 'FAILED'} {c['name']}: {c['detail']}" for c in report["checks"]]
+    lines.append(f"{'This folder passed' if report['ok'] else 'This folder FAILED'}, {report['scope']}.")
+    _emit(args, report, "\n".join(lines))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def _share_report_text(report: dict) -> str:
+    lines = [f"Result: {report['verdict']}.", f"Computers: {', '.join(report['hosts']) or 'none'} ({report['runners']} run(s)).",
+             f"Names won: {report['slots_won']}, races lost to another: {report['races_lost']}.",
+             f"Slowest read of a name just lost: {report['slowest_read_seconds']:.2f} s. Out-of-date folder listings seen: "
+             f"{report['stale_listings']} (oldest {report['oldest_stale_listing_seconds']:.1f} s; RevisionWorx doesn't rely on listings). "
+             f"Times the share said \"try again\": {report['busy_answers']}."]
+    lines += [f"  PROBLEM: {p}" for p in report["problems"][:50]]
+    return "\n".join(lines)
+
+
+def cmd_share_test(args):
+    from . import sharecheck
+    def say(text):
+        if not args.json:
+            print(text, flush=True)
+    say(f"Racing for {args.seconds:g} seconds. Start this at the same time on your other computers.")
+    report = sharecheck.run_test(Path(args.folder), seconds=args.seconds, say=say)
+    _emit(args, report, _share_report_text(report) + "\nRun 'share report' afterwards to see every computer's results together.")
+    if report["problems"]:
+        raise SystemExit(1)
+
+
+def cmd_share_report(args):
+    from . import sharecheck
+    report = sharecheck.read_report(Path(args.folder))
+    _emit(args, report, _share_report_text(report))
+    if report["problems"]:
+        raise SystemExit(1)
 
 
 # ---------------------------------------------------------------- Phase 2: documents
@@ -281,7 +492,7 @@ def cmd_doc_checkout(args):
 
 def cmd_doc_checkin(args):
     with _open(args, True) as ws:
-        token = _tokens(args).get(ws.id, args.id)
+        token = documents.my_token(ws, _tokens(args), args.id)
         if not token:
             raise WorkspaceError("this machine holds no checkout token for that document")
         note = ""
@@ -296,7 +507,7 @@ def cmd_doc_checkin(args):
 
 def cmd_doc_cancel(args):
     with _open(args, True) as ws:
-        token = _tokens(args).get(ws.id, args.id)
+        token = documents.my_token(ws, _tokens(args), args.id)
         if not token:
             raise WorkspaceError("this machine holds no checkout token for that document")
         documents.cancel_checkout(ws, args.id, token, revert=args.revert)
@@ -307,7 +518,7 @@ def cmd_doc_cancel(args):
 
 def cmd_doc_restore(args):
     with _open(args, True) as ws:
-        token = _tokens(args).get(ws.id, args.id)
+        token = documents.my_token(ws, _tokens(args), args.id)
         if not token:
             raise WorkspaceError("check the document out first")
         documents.restore_to_working(ws, args.id, token, args.revision)
@@ -538,6 +749,44 @@ def build_parser() -> argparse.ArgumentParser:
     s = lk.add_parser("break", help="administrative recovery of an abandoned writer lock")
     s.add_argument("--token", required=True, help="token shown by 'lock show'")
     s.add_argument("--reason", required=True); s.set_defaults(fn=cmd_lock_break)
+
+    def password_option(parser):
+        parser.add_argument("--password-stdin", action="store_true", help="read passwords from standard input, one per line")
+
+    tm = sub.add_parser("team", help="a team working from a shared folder: set up, status, repair").add_subparsers(dest="sub", required=True)
+    s = tm.add_parser("enable", help="set this workspace up for a team, with you as administrator on this computer (can't be undone)")
+    s.add_argument("--admin", required=True, help="your user name"); s.add_argument("--name", default="", help="your full name")
+    password_option(s); s.set_defaults(fn=cmd_team_enable)
+    tm.add_parser("status", help="accounts, who's logged in here, and whether writes are allowed").set_defaults(fn=cmd_team_status)
+    s = tm.add_parser("repair", help="put back journal entries the shared folder has lost, from this computer's copy")
+    s.add_argument("--remove-damaged", action="store_true", help="also move a damaged next entry, which no computer can have used, to quarantine")
+    s.set_defaults(fn=cmd_team_repair)
+    tm.add_parser("forget-local", help="discard this computer's copy of the journal (after a restore from backup)").set_defaults(fn=cmd_team_forget_local)
+    s = tm.add_parser("recover", help="with the recovery code: an administrator account on this computer, with a new password")
+    s.add_argument("--admin", required=True); s.add_argument("--code", default=None, help="the recovery code (asked for if not given)")
+    password_option(s); s.set_defaults(fn=cmd_team_recover)
+
+    s = sub.add_parser("login", help="log in on this computer"); s.add_argument("name")
+    s.add_argument("--hours", type=float, default=12.0, help="how long to stay logged in (default 12)")
+    password_option(s); s.set_defaults(fn=cmd_login)
+    sub.add_parser("logout", help="log out on this computer").set_defaults(fn=cmd_logout)
+    sub.add_parser("whoami", help="who's logged in here").set_defaults(fn=cmd_whoami)
+    s = sub.add_parser("passwd", help="change your password"); password_option(s); s.set_defaults(fn=cmd_passwd)
+
+    us = sub.add_parser("user", help="accounts (an administrator's job)").add_subparsers(dest="sub", required=True)
+    us.add_parser("list").set_defaults(fn=cmd_user_list)
+    s = us.add_parser("add"); s.add_argument("name"); s.add_argument("--display", default="", help="their full name")
+    s.add_argument("--role", choices=("user", "admin"), default="user"); password_option(s); s.set_defaults(fn=cmd_user_add)
+    s = us.add_parser("disable"); s.add_argument("name"); s.set_defaults(fn=cmd_user_disable)
+    s = us.add_parser("enable"); s.add_argument("name"); s.set_defaults(fn=cmd_user_enable)
+    s = us.add_parser("reset", help="give someone a new starting password"); s.add_argument("name"); password_option(s); s.set_defaults(fn=cmd_user_reset)
+    s = us.add_parser("role"); s.add_argument("name"); s.add_argument("role", choices=("user", "admin")); s.set_defaults(fn=cmd_user_role)
+
+    sh = sub.add_parser("share", help="find out whether a network folder is fit for team use").add_subparsers(dest="sub", required=True)
+    s = sh.add_parser("check", help="try the file operations a team workspace needs, from this computer"); s.add_argument("folder"); s.set_defaults(fn=cmd_share_check)
+    s = sh.add_parser("test", help="run this on two or more computers at the same time: the only real evidence for a share")
+    s.add_argument("folder"); s.add_argument("--seconds", type=float, default=60.0); s.set_defaults(fn=cmd_share_test)
+    s = sh.add_parser("report", help="what every computer that ran 'share test' saw"); s.add_argument("folder"); s.set_defaults(fn=cmd_share_report)
     return p
 
 
