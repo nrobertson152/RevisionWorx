@@ -827,6 +827,35 @@ cursor with different entries, and the cache kept serving records that exist in 
 
 **Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed before every file change, simulated client caches. `.github/workflows/shares.yml` runs the same races against real file servers on one hosted machine: Windows SMB 3.1.1 (client and server, by three server names, which makes three connections), the Linux kernel's SMB client against Samba (two mounts), and NFS 4.2 and 3 (two kernel clients). That found behaviour no simulation had, which the design now handles: a Linux SMB client answering EBUSY or EIO for a moment about a file that's fine, a client told a folder exists and then that it doesn't, and NFS taking seconds to show a change. Two NFS 4 mounts, being one client to the server, never heard about each other's changes at all, which is why that job mixes versions. **None of that is evidence across computers:** it's one machine and one network path, with no cable pulled and no server rebooted. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
 
+### ADR-025 Units: serial-numbered units and their configuration live in this journal — PROPOSED (design; phase 1 being implemented)
+
+**Decision (2026-11-06).** Every physical unit a company builds, sells or looks after gets one permanent identity and one append-only
+configuration history in the workspace journal, as a subsystem (`revisionworx/units/`, design and data contract in `docs/UNITS.md`)
+beside change control. It persists only through CORE_API §8; no core file changes.
+
+**Why here.** A unit's configuration is mostly references to records this journal already holds: revisions, parts, change orders. One
+entry can check those references and change the unit atomically. It is the family's only store shared between computers, signed per
+person and checked by every computer (ADR-024), and it works offline. OpenMeridian was the alternative: one person's local file, unsigned,
+and absent from service companies that never use it. A separate database would be a second register that could disagree.
+
+**Shape.**
+- Identity is a random `unt_` id. Serials, tags and other codes are identifiers with an issuer, held by claim records created with
+  `expect_rev=0`, so two units can't hold one.
+- Configuration is references: a **build standard** (a written-once set of document revisions shared by many units), the unit's own
+  **differences**, and **components** at positions. A component important enough to have its own life is a unit itself, fitted in one
+  place at a time.
+- History is events written once (`expect_rev=0`), chained by SHA-256 like change control's audit trail. The unit record is a pure
+  function of its events; `unit verify` recomputes it. Corrections void earlier events with a reason; nothing is edited.
+- A unit's documents are what its history says. A newer released revision is reported beside them, never substituted.
+
+**Phases.** 1: the register, standards, differences, components, history, verify, command line, `link units`, import (this). 2: ECO
+effectivity and per-unit compliance; a PDF derivative tied to each native revision; numbering rules; a Units screen. 3: accepting
+FieldWorx records into unit histories; deviations and concessions. 4: transfer between workspaces, merged identities, journal checkpoints.
+
+**Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
+`unit verify` detects but the journal rules don't refuse; making these kinds write-once in `shared.judge` needs a new format version and
+is planned. Not verified between real computers, like the rest of team use.
+
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).
@@ -856,6 +885,7 @@ and its journal publish can still publish one entry, which ADR-015 fences. It do
 | AuditEvent (lock break) | IMPLEMENTED (general audit trail PROPOSED) |
 | DocumentType, Document, Revision, Checkout, Lifecycle | IMPLEMENTED (Phase 2, single-writer) |
 | Part, Assembly, BOM, DependencyEdge, ChangeRequest | PROPOSED |
+| Unit, unit event, identifier claim, build standard (ADR-025) | PROPOSED (design in `docs/UNITS.md`) |
 
 Distinguish a part *identity* from a document file and from a specific revision. No path-based identity.
 
