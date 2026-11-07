@@ -42,7 +42,7 @@ def test_every_answer_is_one_json_object_with_ok(env, capsys):
     tmp, ws = env
     code, data = link(capsys, "link", "version")
     assert code == 0 and data == {"ok": True, "api": integration.API_VERSION, "version": data["version"],
-                                  "features": ["units"]}
+                                  "features": ["units", "unit-changes"]}
     code, data = link(capsys, "-w", str(ws), "link", "fetch", "NOPE", "--to", str(tmp / "o"))
     assert code == 2 and data["ok"] is False and data["kind"] == "not-found"
     code, data = link(capsys, "link", "frobnicate")

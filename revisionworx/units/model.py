@@ -27,9 +27,31 @@ STANDARD_SCHEME = "standard"                             # a build standard's nu
 UPDATABLE = ("class", "name", "model", "project", "customer", "site", "location", "notes")
 EVENT_TYPES = ("unit.registered", "unit.updated", "identifier.added", "identifier.retired", "identifier.removed",
                "status.changed", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-               "component.removed", "parent.set", "note", "void")
+               "component.removed", "parent.set", "note", "verified", "void")
 VOIDABLE = ("unit.updated", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-            "component.removed", "note")
+            "component.removed", "note", "verified")
+
+# Engineering changes reaching units (docs/UNITS.md section 10)
+EFFECTIVITY_KINDS = ("production", "retrofit-required", "retrofit-optional", "unit", "documentation")
+REQUIRED_KINDS = ("retrofit-required", "unit")          # a unit in scope is out of compliance until verified
+SCOPE_RULES = ("candidates", "standard", "serial-range", "customer", "units", "none")
+COMPLIANCE_STATES = ("pending", "offered", "accepted", "scheduled", "deferred", "declined", "installed", "verified",
+                     "not-applicable", "reversed")
+_AFTER_INSTALL = ("installed", "verified")
+TRANSITIONS = {
+    True: {"pending": ("scheduled", "deferred", "not-applicable") + _AFTER_INSTALL,
+           "scheduled": ("pending", "deferred", "not-applicable") + _AFTER_INSTALL,
+           "deferred": ("pending", "scheduled", "not-applicable") + _AFTER_INSTALL,
+           "installed": ("verified", "reversed"), "verified": ("reversed",)},
+    False: {"offered": ("accepted", "declined", "not-applicable") + _AFTER_INSTALL,
+            "accepted": ("scheduled", "declined") + _AFTER_INSTALL,
+            "scheduled": ("accepted", "deferred", "not-applicable") + _AFTER_INSTALL,
+            "deferred": ("accepted", "scheduled", "not-applicable") + _AFTER_INSTALL,
+            "declined": ("accepted",),
+            "installed": ("verified", "reversed"), "verified": ("reversed",)},
+}
+NEEDS_REASON = ("deferred", "declined", "not-applicable", "reversed")
+DONE_STATES = ("verified", "not-applicable")            # a required change in any other state is outstanding
 
 LIMITS = {"name": 200, "model": 100, "customer": 200, "site": 200, "location": 200, "notes": 4000, "value": 100,
           "issuer": 200, "position": 64, "serial": 100, "lot": 100, "reason": 2000, "text": 4000, "evidence": 50,
@@ -37,7 +59,8 @@ LIMITS = {"name": 200, "model": 100, "customer": 200, "site": 200, "location": 2
           "standard_documents": 2000}
 
 ID_PATTERNS = {"unit": "unt", "event": "uev", "key": "uky", "standard": "bst", "project": "prj", "document": "doc",
-               "revision": "rev", "part": "prt", "change": "eco", "fieldworx": "ast"}
+               "revision": "rev", "part": "prt", "change": "eco", "fieldworx": "ast", "effectivity": "uef",
+               "compliance": "ucp"}
 _ID_RES = {k: re.compile(rf"^{p}_[0-9a-f]{{32}}$") for k, p in ID_PATTERNS.items()}
 _TXID_RE = re.compile(r"^[0-9a-f]{32}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -187,6 +210,17 @@ def key_id(scheme: str, issuer: str, value: str) -> str:
 def event_id(unit_id: str, n: int) -> str:
     h = hashlib.sha256(f"{_EVENT_ID_DOMAIN}\0{unit_id}\0{n}".encode("ascii")).hexdigest()
     return f"uev_{h[:32]}"
+
+
+def effectivity_id(change_id: str) -> str:
+    """One effectivity decision per change order: its id comes from the order's."""
+    return "uef_" + hashlib.sha256(f"revisionworx/units/effectivity/v1\0{change_id}".encode("ascii")).hexdigest()[:32]
+
+
+def compliance_id(change_id: str, unit_id: str) -> str:
+    """One compliance record per change order and unit."""
+    h = hashlib.sha256(f"revisionworx/units/compliance/v1\0{change_id}\0{unit_id}".encode("ascii")).hexdigest()
+    return f"ucp_{h[:32]}"
 
 
 def derived_id(prefix: str, txid: str, salt: str) -> str:
@@ -382,6 +416,7 @@ BODY_KEYS = {
     "document.reset": {"document"},
     "component.installed": {"position", "part", "number", "unit", "serial", "lot"},
     "component.removed": {"position", "disposition", "unit"},
+    "verified": {"events"},
     "parent.set": {"parent", "position"},
     "note": {"text"},
     "void": {"events"},
@@ -402,10 +437,10 @@ def _check_body(t: str, b: dict, what: str) -> None:
     elif t == "standard.set":
         if not isinstance(b["cleared"], list) or not all(is_id("document", d) for d in b["cleared"]):
             raise MalformedUnitRecord(f"{what}: cleared must list document ids")
-    elif t == "void":
+    elif t in ("void", "verified"):
         if not isinstance(b["events"], list) or not b["events"] or not all(
                 isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in b["events"]):
-            raise MalformedUnitRecord(f"{what}: a void names event numbers")
+            raise MalformedUnitRecord(f"{what}: a {t} event names event numbers")
     for k, v in b.items():
         if k not in ("identifiers", "model", "fields", "cleared", "events") and not isinstance(v, str):
             raise MalformedUnitRecord(f"{what}: {k} must be text")
@@ -449,6 +484,93 @@ STANDARD_DOMAIN = "revisionworx/units/standard/v1"
 
 def standard_digest(std: dict) -> str:
     return digest(STANDARD_DOMAIN, {k: v for k, v in std.items() if k not in ("digest", "_rev")})
+
+
+EFFECTIVITY_DOMAIN = "revisionworx/units/effectivity/v1"
+EFFECTIVITY_FIELDS = {"schema", "id", "change", "kind", "standard", "documents", "scope", "units", "reason", "decided",
+                      "decided_by", "txid", "input", "digest"}
+COMPLIANCE_FIELDS = {"schema", "id", "change", "unit", "required", "state", "steps", "created", "updated"}
+STEP_FIELDS = {"state", "time", "effective", "actor", "basis", "reason", "events", "txid", "input"}
+
+
+def effectivity_digest(eff: dict) -> str:
+    return digest(EFFECTIVITY_DOMAIN, {k: v for k, v in eff.items() if k not in ("digest", "_rev")})
+
+
+def load_effectivity(record: Any) -> dict:
+    """An effectivity decision, refused unless it has exactly the documented shape (its digest is checked by verify)."""
+    r = _fields(record, EFFECTIVITY_FIELDS, "effectivity")
+    what = f"effectivity {r.get('id')!r}"
+    try:
+        if not is_id("effectivity", r["id"]) or not is_id("change", r["change"]):
+            raise MalformedUnitRecord(f"{what}: bad id")
+        if r["id"] != effectivity_id(r["change"]):
+            raise MalformedUnitRecord(f"{what}: its id isn't the one its change order gives")
+        check_choice(r["kind"], EFFECTIVITY_KINDS, "kind")
+        check_id("standard", r["standard"], "standard", empty_ok=True)
+        if not isinstance(r["documents"], list):
+            raise MalformedUnitRecord(f"{what}: documents must be a list")
+        for row in r["documents"]:
+            if not isinstance(row, dict) or set(row) != {"document", "from", "to"}:
+                raise MalformedUnitRecord(f"{what}: a document row has the wrong fields")
+            check_id("document", row["document"], "document")
+            check_id("revision", row["from"], "from revision")
+            check_id("revision", row["to"], "to revision")
+        scope = r["scope"]
+        if not isinstance(scope, dict) or set(scope) != {"rule", "value"}:
+            raise MalformedUnitRecord(f"{what}: scope must be {{rule, value}}")
+        check_choice(scope["rule"], SCOPE_RULES, "scope rule")
+        _str(scope["value"], f"{what} scope value")
+        if not isinstance(r["units"], list) or not all(is_id("unit", u) for u in r["units"]):
+            raise MalformedUnitRecord(f"{what}: units must list unit ids")
+        for k in ("reason", "decided", "txid", "input", "digest"):
+            _str(r[k], f"{what} {k}")
+        if not isinstance(r["decided_by"], dict):
+            raise MalformedUnitRecord(f"{what}: decided_by must be an object")
+    except ValidationError as exc:
+        raise MalformedUnitRecord(f"{what}: {exc}") from None
+    return {k: v for k, v in r.items() if k != "_rev"}
+
+
+def load_compliance(record: Any) -> dict:
+    """One unit's compliance with one change order. Its steps must be the allowed transitions and its state the last
+    step's; anything else is refused, so nothing is ever added on top of a damaged record."""
+    r = _fields(record, COMPLIANCE_FIELDS, "compliance")
+    what = f"compliance {r.get('id')!r}"
+    try:
+        if not is_id("compliance", r["id"]) or not is_id("change", r["change"]) or not is_id("unit", r["unit"]):
+            raise MalformedUnitRecord(f"{what}: bad id")
+        if r["id"] != compliance_id(r["change"], r["unit"]):
+            raise MalformedUnitRecord(f"{what}: its id isn't the one its change order and unit give")
+        if not isinstance(r["required"], bool):
+            raise MalformedUnitRecord(f"{what}: required must be true or false")
+        check_choice(r["state"], COMPLIANCE_STATES, "state")
+        _str(r["created"], f"{what} created"); _str(r["updated"], f"{what} updated")
+        steps = r["steps"]
+        if not isinstance(steps, list) or not steps:
+            raise MalformedUnitRecord(f"{what}: steps must list at least one step")
+        for i, s in enumerate(steps):
+            if not isinstance(s, dict) or set(s) != STEP_FIELDS:
+                raise MalformedUnitRecord(f"{what}: step {i + 1} has the wrong fields")
+            check_choice(s["state"], COMPLIANCE_STATES, "state")
+            check_choice(s["basis"], BASES, "basis")
+            for k in ("time", "effective", "reason", "txid", "input"):
+                _str(s[k], f"{what} step {k}")
+            if not isinstance(s["actor"], dict):
+                raise MalformedUnitRecord(f"{what}: step actor must be an object")
+            if not isinstance(s["events"], list) or not all(is_id("event", e) for e in s["events"]):
+                raise MalformedUnitRecord(f"{what}: step events must list unit event ids")
+        first = "pending" if r["required"] else "offered"
+        if steps[0]["state"] != first:
+            raise MalformedUnitRecord(f"{what}: a {'required' if r['required'] else 'optional'} change starts {first}")
+        for a, b in zip(steps, steps[1:]):
+            if b["state"] not in TRANSITIONS[r["required"]].get(a["state"], ()):
+                raise MalformedUnitRecord(f"{what}: {a['state']} can't become {b['state']}")
+        if r["state"] != steps[-1]["state"]:
+            raise MalformedUnitRecord(f"{what}: its state isn't its last step's")
+    except ValidationError as exc:
+        raise MalformedUnitRecord(f"{what}: {exc}") from None
+    return {k: v for k, v in r.items() if k != "_rev"}
 
 
 def load_standard(record: Any) -> dict:

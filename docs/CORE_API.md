@@ -233,7 +233,7 @@ starting with `_`.
 | `doctype`, `document`, `revision`, `checkout`, `lifecycle` | documents (core) |
 | `part`, `partnum`, `bomline`, `bomstruct`, `partseq`, `partrule` | BOM, Claude C (PR #21) |
 | `changereq`, `changeord`, `changeevt`, `changenum`, `changecfg` | change control, Claude D (PR #20) |
-| `unit`, `unitevt`, `unitkey`, `buildstd` | units (ADR-025, `docs/UNITS.md`) |
+| `unit`, `unitevt`, `unitkey`, `buildstd`, `uniteff`, `unitcmp` | units (ADR-025, `docs/UNITS.md`) |
 
 A new kind is added to this table and to the collision test on PR #7 before use.
 

@@ -99,6 +99,9 @@ case-folded, with runs of white space made one space and the ends stripped: `nh-
 
 Removing an identifier entered by mistake releases its claim whatever the scheme; the history still shows it.
 
+Section 10 adds two kinds for engineering changes: `uniteff` (an order's effectivity decision) and `unitcmp` (one unit's compliance
+with one order).
+
 ### 3.4 `buildstd` (`bst_` + 32 hex): written once, never changed
 
 `{"schema", "id", "number", "title", "model", "documents": {doc_id: rev_id}, "based_on", "change", "notes", "created", "created_by",
@@ -122,10 +125,11 @@ superseded need an explicit choice (`allow_unreleased`), as an unreleased BOM do
 | `component.removed` | `position, disposition, unit` (`disposition`: `scrapped`, `returned`, `repair`, `stock`, `reused`, `unknown`) | the position is emptied |
 | `parent.set` | `parent, position` | written on a component unit in the same entry as its `component.*` event: `parent` |
 | `note` | `text` | none: it is history |
+| `verified` | `events: [n, …]` | the facts those events recorded (documents, components, the standard) now have basis `verified`; written when a reported change is confirmed (section 10), so nothing moves twice |
 | `void` | `events: [n, …]` | the listed events are ignored from then on; the reason is required |
 
 **Voiding** corrects a record, it doesn't undo a physical change. It applies to `unit.updated`, `milestone`, `standard.set`,
-`document.*`, `note` and `component.*`. Voiding a component event also voids the matching `parent.set` on the component unit in the same
+`document.*`, `note`, `verified` and `component.*`. Voiding a component event also voids the matching `parent.set` on the component unit in the same
 entry, and is refused if a later event on either unit touches that position or that component (record the correction by hand then).
 Identifiers are corrected with `identifier.removed`; a status is corrected by setting it again. A void can't be voided.
 
@@ -216,9 +220,98 @@ directly.
 | A modified program in a team workspace overwrites a unit event | The journal rules accept a signed put of any subsystem record; `unit verify` reports `altered-event`. A journal rule making these kinds write-once would need a new workspace format (ADR-024) and is planned |
 | A unit record file altered on disk | Reads come from the journal (ADR-022); `verify` reports the file |
 
-## 10. Not done, and costs
+## 10. Engineering changes reaching units (phase 2)
+
+The ECR/ECO workflow (`docs/CHANGE_CONTROL.md`) stays the only change process, and change orders are unchanged. Beside an order, the
+unit register records an **effectivity** decision: which units the change reaches, and how. Each unit it reaches gets a **compliance**
+record. A unit's documents move only through events in its own history that cite the change.
+
+### 10.1 `uniteff` (`uef_` + first 32 hex of `SHA-256("revisionworx/units/effectivity/v1\0" + change id)`): written once
+
+`{"schema", "id", "change", "kind", "standard", "documents": [{"document", "from", "to"}], "scope": {"rule", "value"}, "units": [ids],
+"reason", "decided", "decided_by", "txid", "input", "digest"}`. Its id comes from the change order's, so an order has one decision, and
+two people deciding at once can't both succeed.
+
+| `kind` | Means | What deciding writes, in one entry |
+|---|---|---|
+| `production` | future units only | the decision, naming the build standard new units are built to; existing units get no record |
+| `retrofit-required` | every unit in scope must be changed | a compliance record per unit, `pending` |
+| `retrofit-optional` | offered to every unit in scope | a compliance record per unit, `offered` |
+| `unit` | one unit's own modification | one compliance record, `pending` |
+| `documentation` | drawings corrected, machines unchanged | `document.set` events moving each unit in scope from `from` to `to`, citing the change, "documentation correction, no physical change"; no compliance records |
+
+`documents` is copied from the change order when it is decided: each document item implemented by a revision gives a row, `from` its
+baseline and `to` its implementing revision. Deciding anything but `production` needs the order `implemented` or `closed`, so those
+revisions are final, and at least one row. `production` needs a build standard. A cancelled order can't be decided. The rows cover
+documents only: parts a retrofit fits or removes are recorded with `unit fit` and `unit remove` citing the change. `digest` covers every
+other field (`revisionworx/units/effectivity/v1`), and `verify` recomputes it.
+
+**Scope.** The *candidates* are units, not scrapped, whose applicable revision of a row's document is the row's `from`, or that have one
+of the order's affected parts fitted. Rules: `candidates` (all of them), `standard` (candidates conforming to one standard),
+`serial-range` (candidates with a serial from A to B, compared as people sort them, so `NH-9` comes before `NH-10`), `customer`
+(candidates of one customer), and `units` (units named one by one, which needn't be candidates: a unit whose configuration isn't recorded
+may still need the change). The rule and its value are kept for audit; `units` is the list it chose. A unit found later joins with
+`add`, which writes its compliance record and leaves the decision as it was.
+
+### 10.2 `unitcmp` (`ucp_` + first 32 hex of `SHA-256("revisionworx/units/compliance/v1\0" + change id + "\0" + unit id)`)
+
+`{"schema", "id", "change", "unit", "required", "state", "steps": [{"state", "time", "effective", "actor", "basis", "reason", "events",
+"txid", "input"}], "created", "updated"}`. One record per change and unit, created with `expect_rev=0`. Steps are only ever appended;
+`state` is the last step's; `events` are the unit events the step wrote.
+
+| From | To |
+|---|---|
+| `pending` (required) | `scheduled`, `installed`, `verified`, `deferred`, `not-applicable` |
+| `offered` (optional) | `accepted`, `declined`, `installed`, `verified`, `not-applicable` |
+| `accepted` | `scheduled`, `installed`, `verified`, `declined` |
+| `scheduled` | `installed`, `verified`, `deferred`, `not-applicable`, and back to `pending` (required) or `accepted` (optional) |
+| `deferred` | `pending`, `scheduled`, `installed`, `verified`, `not-applicable` |
+| `declined` | `accepted` |
+| `installed` | `verified`, `reversed` |
+| `verified` | `reversed` |
+| `not-applicable`, `reversed` | nothing: they are ends |
+
+`deferred`, `declined`, `not-applicable` and `reversed` need a reason. `not-applicable` is an engineering decision that the change
+doesn't concern this unit.
+
+**Installing** (`installed`, or `verified` when the basis is `verified`) writes, in the same entry, a `document.set` for each row whose
+`from` the unit has, citing the change, with the basis given (`reported` by default). Rows the unit already has at `to` are skipped. It
+is refused if the unit has another revision of a row's document (someone records that by hand), and if no row applies (mark it not
+applicable). Until it is verified the unit shows the new revisions flagged *reported*: showing the old drawing of a changed machine is
+the more dangerous error.
+
+**Verifying** an installed change appends a `verified` event to the unit naming the install's events, which makes their facts
+`verified`. The documents don't move a second time.
+
+**Reversing** writes `document.set` events back to `from` for rows the unit has at `to`, citing the change, and the state `reversed`.
+Nothing is voided, because both changes happened.
+
+**Out of compliance:** a unit with a required change (`retrofit-required` or `unit`) whose state is neither `verified` nor
+`not-applicable`. A reversed required change counts.
+
+### 10.3 Refusals, retries and checks
+
+Every action is one entry: the decision or step, the unit events, the unit records at the revisions read, and a `RecordCheck` on the
+change order. Refused, with nothing written: an unknown change; a change request rather than an order; a cancelled order; a second
+decision; `production` without a standard; another kind before the order is implemented, or with no implemented document; a scope that
+chooses nothing; a scrapped unit; a step the table doesn't allow; a step without a required reason; an install that doesn't apply. A
+`txid` makes a retry write nothing, as for every unit action.
+
+`unit verify` adds `effectivity-altered` (the digest doesn't match), `compliance-invalid` (steps that aren't allowed transitions, a
+state that isn't the last step's, step events that aren't on the unit or don't cite the change, a required flag that disagrees with the
+decision) and `dangling-reference` (a change, unit or standard that doesn't exist), and reports compliance with no decision.
+
+### 10.4 Commands and other programs
+
+`revisionworx unit change candidates|decide|status|add|set|install|verify|reverse` and `revisionworx unit compliance` (the units
+section of `docs/USER_GUIDE.md`). `link unit` and `link units --detail` give each unit's `changes`: change id and number, title, kind, required,
+state, the date of the last step, and the rows. FieldWorx shows them on the phone.
+
+## 11. Not done, and costs
 
 - Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
-- No desktop screen; ECO effectivity, field-record acceptance, numbering rules and transfers are later phases (ADR-025).
+- No desktop screen yet; field-record acceptance, deviations and transfers are later phases (ADR-025).
+- Effectivity rows cover documents only; parts a retrofit changes are recorded by hand, citing the change.
+- Candidates read every unit's configuration: fine for thousands of units.
 - Nothing here is verified between real computers, which RevisionWorx as a whole hasn't been (`docs/KNOWN_LIMITATIONS.md`).

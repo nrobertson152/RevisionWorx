@@ -14,6 +14,12 @@ The first release. Everything below is new.
   a time, and its own history says where it has been. `revisionworx unit ...`; `revisionworx link units` and `link unit` for
   other programs; existing registers and FieldWorx asset registers import all at once or not at all. See
   [docs/UNITS.md](docs/UNITS.md).
+- **Engineering changes reach units.** Beside an implemented ECO, record once which units it reaches: future production only,
+  a required or optional retrofit, one unit's own modification, or a documentation correction. Candidates are the units that
+  still have the revision it replaces; a scope picks them by customer, serial range, build standard or by name. Each unit in a
+  retrofit has its own compliance record (pending, scheduled, deferred, installed, verified, not applicable, reversed...), and
+  its drawings move only when its own history records the installation, flagged *reported* until verified. `revisionworx unit
+  change ...`, `unit compliance` for every unit still missing a required change, and `changes` on each unit for other programs.
 
 ### Working as a team
 - A workspace can be set up for a team working from one shared network folder, with no server. An administrator account is created on

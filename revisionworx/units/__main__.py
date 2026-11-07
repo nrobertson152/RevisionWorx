@@ -14,6 +14,9 @@
     fit REF POSITION (--component REF | --part-number PN) [--serial S] [--lot L] [--replace [--disposition D]]
     remove REF POSITION [--disposition D]                               void REF N [N ...] --reason R
     history REF                                                         where-used ...        verify
+    change candidates|status ECO          change decide ECO --kind K [--standard STD] [--scope RULE --value V | --unit REF]
+    change add ECO REF                    change set REF ECO STATE      change install|verify|reverse REF ECO
+    compliance [REF]                      (no REF: every unit out of compliance with a required change; exit 1 if any)
 
 Recording actions also take --effective DATE, --basis verified|reported|declared|legacy, --reason TEXT, --change ECO and
 --evidence KIND:REF[=LABEL] (repeatable). ``REF`` is a unit id or a serial, tag or other code. Exit codes: 0 ok, 1 problems
@@ -25,13 +28,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from ..workspace import CommittedNotApplied, Workspace, WorkspaceError
-from . import csvio, query
-from .model import BASES, CLASSES, DISPOSITIONS, MILESTONES, SCHEMES, STATUSES, UnitError, ValidationError, unit_label
+from . import csvio, effect, query
+from .model import (BASES, CLASSES, DISPOSITIONS, EFFECTIVITY_KINDS, MILESTONES, SCHEMES, SCOPE_RULES, STATUSES, UnitError,
+                    ValidationError, unit_label)
 from .service import UnitService, service_for
 
-READS = {"list", "show", "history", "where-used", "verify", "export"}
+READS = {"list", "show", "history", "where-used", "verify", "export", "compliance"}
+CHANGE_READS = {"candidates", "status"}
 
 
 def _common(s: argparse.ArgumentParser) -> None:
@@ -132,6 +138,39 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s.add_argument("--history", action="store_true", help="where it has ever been, not only now")
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("verify", help="check every unit's history and references"); s.add_argument("--json", action="store_true")
+
+    ch = sub.add_parser("change", help="which units an engineering change reaches, and where each one stands"
+                        ).add_subparsers(dest="sub", required=True)
+    s = ch.add_parser("candidates", help="units that hold a revision the change replaces, or one of its affected parts")
+    s.add_argument("change", help="the ECO, by number or id"); s.add_argument("--json", action="store_true")
+    s = ch.add_parser("decide", help="record which units the change reaches and how (written once)")
+    s.add_argument("change"); s.add_argument("--kind", required=True, choices=EFFECTIVITY_KINDS)
+    s.add_argument("--standard", default="", help="production: the build standard new units are built to")
+    s.add_argument("--scope", default="", choices=SCOPE_RULES[:-1], help="how the units are chosen (default: candidates; "
+                   "units for --kind unit)")
+    s.add_argument("--value", default="", help="the standard, FIRST..LAST serials or customer the scope names")
+    s.add_argument("--unit", action="append", default=[], help="a unit, for --scope units (repeatable)")
+    s.add_argument("--reason", required=True); s.add_argument("--json", action="store_true")
+    s = ch.add_parser("status", help="the decision and every unit in scope")
+    s.add_argument("change"); s.add_argument("--json", action="store_true")
+    s = ch.add_parser("add", help="a unit found later joins a retrofit")
+    s.add_argument("change"); s.add_argument("ref"); s.add_argument("--reason", default="")
+    s = ch.add_parser("set", help="schedule, defer, accept, decline, or mark not applicable")
+    s.add_argument("ref"); s.add_argument("change"); s.add_argument("state", choices=effect.SETTABLE)
+    s.add_argument("--reason", default=""); s.add_argument("--effective", default="")
+    s = ch.add_parser("install", help="the change was made on the unit: its documents move to the new revisions")
+    s.add_argument("ref"); s.add_argument("change")
+    s.add_argument("--basis", default="reported", choices=BASES, help="reported (default) or verified if it was seen")
+    s.add_argument("--effective", default=""); s.add_argument("--reason", default="")
+    s.add_argument("--evidence", action="append", default=[], metavar="KIND:REF[=LABEL]")
+    s = ch.add_parser("verify", help="a reported installation confirmed")
+    s.add_argument("ref"); s.add_argument("change"); s.add_argument("--effective", default="")
+    s.add_argument("--reason", default=""); s.add_argument("--evidence", action="append", default=[], metavar="KIND:REF[=LABEL]")
+    s = ch.add_parser("reverse", help="the change was taken out again")
+    s.add_argument("ref"); s.add_argument("change"); s.add_argument("--reason", required=True)
+    s.add_argument("--effective", default=""); s.add_argument("--evidence", action="append", default=[], metavar="KIND:REF[=LABEL]")
+    s = sub.add_parser("compliance", help="the changes that reach a unit, or every unit out of compliance")
+    s.add_argument("ref", nargs="?", default=""); s.add_argument("--json", action="store_true")
     return p
 
 
@@ -151,14 +190,19 @@ def _change_id(ws: Workspace, ref: str) -> str:
     return found.id
 
 
-def _meta(ws: Workspace, a: argparse.Namespace) -> dict:
+def _meta_evidence(items: list[str]) -> list[dict]:
     evidence = []
-    for e in a.evidence:
+    for e in items:
         kind, sep, rest = e.partition(":")
         if not sep:
             raise ValidationError(f"evidence {e!r} should look like KIND:REF, e.g. inspection:ins_...")
         ref, _, label = rest.partition("=")
         evidence.append({"kind": kind.strip(), "ref": ref.strip(), "label": label.strip()})
+    return evidence
+
+
+def _meta(ws: Workspace, a: argparse.Namespace) -> dict:
+    evidence = _meta_evidence(a.evidence)
     return {"effective": a.effective, "basis": a.basis, "reason": a.reason, "change": _change_id(ws, a.change),
             "evidence": evidence}
 
@@ -202,6 +246,11 @@ def _print_unit(out, svc: UnitService, detail: dict) -> None:
             notes = "; ".join(flags[f] + (f" (rev {r['released']['label']})" if f == "newer-released" and r["released"] else "")
                               for f in r["flags"])
             out.write(f"    {name:<16} {what:<28} {src}{'   ! ' + notes if notes else ''}\n")
+    if detail.get("changes"):
+        out.write("  engineering changes:\n")
+        for c in detail["changes"]:
+            out.write(f"    {c['number']:<12} {c['kind']:<18} {c['state']:<15} since {c['since']}"
+                      f"{'   OUTSTANDING' if c['outstanding'] else ''}\n")
     if detail["components"]:
         out.write("  components:\n")
         for c in detail["components"]:
@@ -227,7 +276,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     out = sys.stdout
     sub = getattr(a, "sub", None)
     writable = a.cmd not in READS and not (a.cmd == "standard" and sub in ("list", "show")) and \
-        not (a.cmd == "import" and a.dry_run)
+        not (a.cmd == "import" and a.dry_run) and not (a.cmd == "change" and sub in CHANGE_READS)
     try:
         with Workspace.open(Path(a.workspace), writable=writable) as ws:
             svc = service_for(ws)
@@ -290,6 +339,10 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
         return 0
     if cmd == "standard":
         return _standard(a, ws, svc, out)
+    if cmd == "change":
+        return _change(a, ws, svc, out)
+    if cmd == "compliance":
+        return _compliance(a, svc, out)
     if cmd == "import":
         text = Path(a.file).read_text(encoding="utf-8-sig")
         if a.dry_run:
@@ -375,6 +428,93 @@ def _new(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
     else:
         out.write(f"registered {unit_label(u)} as {u['id']}\n")
     return 0
+
+
+def _change(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
+    def dump(value: Any) -> int:
+        out.write(json.dumps(value, indent=1, ensure_ascii=False) + "\n")
+        return 0
+
+    if a.sub == "candidates":
+        o = effect.order(svc, a.change)
+        found = effect.candidates(svc, o)
+        if a.json:
+            return dump({"change": o.id, "number": o.number, "rows": effect.order_rows(o),
+                         "candidates": [{"unit": query.unit_summary(c["unit"]), "why": c["why"]} for c in found]})
+        for c in found:
+            u = c["unit"]
+            out.write(f"{unit_label(u):<20} {u['status']:<15} {u['customer']:<20} {'; '.join(c['why'])}\n")
+        out.write(f"{len(found)} candidate(s) for {o.number} among the units registered in this workspace\n")
+        return 0
+    if a.sub == "status":
+        st = effect.change_status(svc, a.change)
+        if a.json:
+            return dump(st)
+        eff = st["effectivity"]
+        out.write(f"{st['number']}  {st['title']}  [{st['status'].replace('_', ' ')}]\n")
+        if eff is None:
+            out.write("  no effectivity decision yet ('unit change decide')\n")
+            return 0
+        scope = eff["scope"]["rule"] + (f" {eff['scope']['value']}" if eff["scope"]["value"] else "")
+        out.write(f"  {eff['kind']}, scope {scope}, decided {eff['decided'][:10]}: {eff['reason']}\n")
+        names = query._Names(svc)
+        for r in eff["documents"]:
+            out.write(f"  {names('document', r['document']):<16} rev {names('revision', r['from'])} -> "
+                      f"rev {names('revision', r['to'])}\n")
+        if eff["standard"]:
+            out.write(f"  new units: build standard {names('standard', eff['standard'])}\n")
+        for u in st["units"]:
+            out.write(f"  {u['label']:<20} {u['state']:<15} since {u['since']}{'   OUTSTANDING' if u['outstanding'] else ''}\n")
+        if st["units"]:
+            out.write(f"  {len(st['units'])} unit(s), {st['outstanding']} outstanding\n")
+        return 0
+    if a.sub == "decide":
+        eff = effect.decide(svc, _change_id(ws, a.change) or a.change, a.kind, standard=a.standard, rule=a.scope,
+                            value=a.value, units=a.unit, reason=a.reason)
+        if a.json:
+            return dump(eff)
+        what = {"production": "new units only", "documentation": f"{len(eff['units'])} unit(s) corrected",
+                }.get(eff["kind"], f"{len(eff['units'])} unit(s) in scope")
+        out.write(f"recorded: {a.change} is {eff['kind']} ({what})\n")
+        return 0
+    if a.sub == "add":
+        rec = effect.add(svc, a.change, a.ref, reason=a.reason)
+    elif a.sub == "set":
+        rec = effect.set_state(svc, a.ref, a.change, a.state, reason=a.reason, effective=a.effective)
+    elif a.sub == "install":
+        rec = effect.install(svc, a.ref, a.change, basis=a.basis, effective=a.effective, reason=a.reason,
+                             evidence=_meta_evidence(a.evidence))
+    elif a.sub == "verify":
+        rec = effect.verify(svc, a.ref, a.change, effective=a.effective, reason=a.reason, evidence=_meta_evidence(a.evidence))
+    elif a.sub == "reverse":
+        rec = effect.reverse(svc, a.ref, a.change, reason=a.reason, effective=a.effective,
+                             evidence=_meta_evidence(a.evidence))
+    else:  # pragma: no cover
+        raise ValidationError(f"unknown command change {a.sub}")
+    out.write(f"{unit_label(svc.unit(rec['unit']))}: {a.change} {rec['state']}\n")
+    return 0
+
+
+def _compliance(a: argparse.Namespace, svc: UnitService, out) -> int:
+    if a.ref:
+        u = svc.resolve(a.ref)
+        rows = effect.unit_changes(svc, u["id"])
+        if a.json:
+            out.write(json.dumps({"unit": u["id"], "changes": rows}, indent=1, ensure_ascii=False) + "\n")
+            return 0
+        for c in rows:
+            out.write(f"{c['number']:<12} {c['kind']:<18} {c['state']:<15} since {c['since']}"
+                      f"{'   OUTSTANDING' if c['outstanding'] else ''}  {c['title']}\n")
+        out.write(f"{unit_label(u)}: {len(rows)} change(s), {sum(c['outstanding'] for c in rows)} outstanding\n")
+        return 0
+    rows = effect.out_of_compliance(svc)
+    if a.json:
+        out.write(json.dumps({"out_of_compliance": rows}, indent=1, ensure_ascii=False) + "\n")
+        return 0
+    for r in rows:
+        out.write(f"{r['label']:<20} " + ", ".join(f"{c['number']} {c['state']}" for c in r["changes"]) + "\n")
+    out.write(f"{len(rows)} unit(s) out of compliance with a required change\n")
+    return 1 if rows else 0
 
 
 def _standard(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:

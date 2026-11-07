@@ -22,7 +22,8 @@ from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_
                     check_model, check_position, check_txid, clean, derived_id, digest, event_id, is_id, key_id, load_event,
                     load_key, load_standard, load_unit, norm, position_key, standard_digest, unit_label)
 
-KIND = {"unit": "unit", "event": "unitevt", "key": "unitkey", "standard": "buildstd"}
+KIND = {"unit": "unit", "event": "unitevt", "key": "unitkey", "standard": "buildstd", "effectivity": "uniteff",
+        "compliance": "unitcmp"}
 for _kind in KIND.values():
     register_kind(_kind)
 
@@ -368,6 +369,15 @@ class UnitService:
         for rid in replay:
             if is_id("standard", rid):
                 continue                                # a standard's id comes from the txid; its content was checked
+            if is_id("effectivity", rid) or is_id("compliance", rid):
+                rec = self.ws.get(KIND["effectivity" if is_id("effectivity", rid) else "compliance"], rid) or {}
+                mine = [rec] if rec.get("txid") == txid else [s for s in rec.get("steps", ()) if s.get("txid") == txid]
+                if not mine:
+                    raise ReplayRefused(f"txid {txid} was already used for a different action")
+                if any(m.get("input") != inp for m in mine):
+                    raise ReplayRefused(f"txid {txid} was already used for this change with different input; nothing was "
+                                        "changed. Start again with a new txid")
+                continue
             try:
                 mine = [e for e in self.events(rid) if e["txid"] == txid]
             except NotFound:

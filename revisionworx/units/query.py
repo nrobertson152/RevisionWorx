@@ -6,12 +6,13 @@ Every answer is read from the journal through :class:`~revisionworx.units.servic
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from .. import documents as D
 from . import history as H
-from .model import (MalformedUnitRecord, NotFound, PERMANENT_SCHEMES, STANDARD_SCHEME, check_date, day_of, is_id, key_id,
-                    load_event, load_key, load_standard, load_unit, norm, position_key, standard_digest, unit_label)
+from .model import (REQUIRED_KINDS, MalformedUnitRecord, NotFound, PERMANENT_SCHEMES, STANDARD_SCHEME, check_date, day_of,
+                    effectivity_digest, is_id, key_id, load_compliance, load_effectivity, load_event, load_key, load_standard,
+                    load_unit, norm, position_key, standard_digest, unit_label)
 from .service import KIND, UnitService
 
 
@@ -80,6 +81,9 @@ class _Names:
         if kind == "part":
             p = self._get("part", rid)
             return p.get("number", rid) if isinstance(p, dict) else rid
+        if kind == "change":
+            c = self._get("changeord", rid)
+            return c.get("number", rid) if isinstance(c, dict) else rid
         return rid
 
 
@@ -140,7 +144,8 @@ def applicable_documents(svc: UnitService, unit: dict, names: _Names | None = No
 
 
 # ------------------------------------------------------------------------------------------------- one unit
-def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int | None = None, on: str = "") -> dict:
+def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int | None = None, on: str = "",
+                changes: Any = None) -> dict:
     """Everything a person or another program needs about one unit, in the shape ``revisionworx link unit`` answers
     (docs/INTEGRATION.md). ``at`` (an event number) or ``on`` (a date) answer for that point instead of now."""
     names = _Names(svc)
@@ -178,6 +183,9 @@ def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int |
         out["problems"] = [docs["standard_problem"]]
     if at or on:
         out["as_of"] = {"event": at} if at else {"date": on, "late": late}
+    if not (at or on):
+        from .effect import unit_changes
+        out["changes"] = unit_changes(svc, shown["id"], names, changes)
     if history:
         voided = H.voided_by(events)
         out["history"] = [{"n": e["n"], "type": e["type"], "summary": H.summary(e, names), "effective": e["effective"],
@@ -408,4 +416,56 @@ def verify(svc: UnitService) -> list[dict]:
     for uid in sorted(set(events_of) - set(units)):
         if uid:
             problem("unrecorded-event", uid, f"events for unit {uid}, which has no record")
+    _verify_changes(ws, units, standards, problem)
     return sorted(out, key=lambda p: (p["code"], p["subject"]))
+
+
+def _verify_changes(ws: Any, units: dict[str, dict], standards: dict[str, dict], problem: Callable[[str, str, str], None]) -> None:
+    """Effectivity decisions and compliance records (docs/UNITS.md section 10.3)."""
+    decisions: dict[str, dict] = {}
+    for eid, rec in ws.list(KIND["effectivity"]).items():
+        try:
+            eff = load_effectivity(rec)
+        except MalformedUnitRecord as exc:
+            problem("malformed", eid, str(exc))
+            continue
+        decisions[eff["change"]] = eff
+        if eff["id"] != eid or eff["digest"] != effectivity_digest(eff):
+            problem("effectivity-altered", eid, f"the effectivity of {eff['change']} doesn't match its digest")
+        if ws.get("changeord", eff["change"]) is None:
+            problem("dangling-reference", eid, f"effectivity names change order {eff['change']}, which doesn't exist")
+        if eff["standard"] and eff["standard"] not in standards:
+            problem("dangling-reference", eid, f"effectivity names build standard {eff['standard']}, which doesn't exist")
+        for uid in eff["units"]:
+            if uid not in units:
+                problem("dangling-reference", eid, f"effectivity names unit {uid}, which doesn't exist")
+        for row in eff["documents"]:
+            for rev in (row["from"], row["to"]):
+                r = ws.get("revision", rev)
+                if r is None or r.get("document_id") != row["document"]:
+                    problem("dangling-reference", eid, f"effectivity names {row['document']}@{rev}, which doesn't exist")
+    for cid, rec in ws.list(KIND["compliance"]).items():
+        try:
+            c = load_compliance(rec)
+        except MalformedUnitRecord as exc:
+            problem("compliance-invalid", cid, str(exc))
+            continue
+        u = units.get(c["unit"])
+        label = unit_label(u) if u else c["unit"]
+        if c["id"] != cid:
+            problem("compliance-invalid", cid, "the record is filed under another id")
+        if u is None:
+            problem("dangling-reference", cid, f"compliance names unit {c['unit']}, which doesn't exist")
+        eff = decisions.get(c["change"])
+        if eff is None:
+            problem("compliance-invalid", cid, f"{label}: compliance with {c['change']}, which has no effectivity decision")
+        elif c["required"] != (eff["kind"] in REQUIRED_KINDS):
+            problem("compliance-invalid", cid, f"{label}: marked {'required' if c['required'] else 'optional'}, but the "
+                                               f"decision is {eff['kind']}")
+        for step in c["steps"]:
+            for ev_id in step["events"]:
+                ev = ws.get(KIND["event"], ev_id)
+                if ev is None or ev.get("unit") != c["unit"]:
+                    problem("compliance-invalid", cid, f"{label}: step {step['state']} names event {ev_id}, which isn't on the unit")
+                elif ev.get("change") != c["change"]:
+                    problem("compliance-invalid", cid, f"{label}: event {ev.get('n')} doesn't cite the change its step is for")

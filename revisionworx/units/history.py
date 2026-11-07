@@ -115,6 +115,15 @@ def _apply_change(s: dict, ev: dict) -> list[str]:
             return [f"event {n} removes something from {b['position']}, which was empty"]
     elif t == "parent.set":
         s["parent"] = {"unit": b["parent"], "position": b["position"]} if b["parent"] else None
+    elif t == "verified":                               # a reported change confirmed: its facts become verified
+        named, hit = set(b["events"]), False
+        for entry in list(s["documents"].values()) + list(s["components"].values()):
+            if entry["event"] in named:
+                entry["basis"], hit = "verified", True
+        if s["standard"] is not None and s["standard"]["event"] in named:
+            s["standard"]["basis"], hit = "verified", True
+        if not hit:
+            return [f"event {n} verifies events {sorted(named)}, which set nothing the unit still has"]
     return []                                           # note, void: history only
 
 
@@ -238,6 +247,9 @@ def summary(ev: dict, name: Callable[[str, str], str] = lambda kind, rid: rid) -
         return f"fitted in {name('unit', b['parent'])} at {b['position']}" if b["parent"] else "taken out of its unit"
     if t == "note":
         return b["text"].splitlines()[0][:120] if b["text"] else "note"
+    if t == "verified":
+        cited = f" ({name('change', ev['change'])})" if ev.get("change") else ""
+        return "verified event " + ", ".join(str(n) for n in b["events"]) + cited
     if t == "void":
         return "voided event " + ", ".join(str(n) for n in b["events"])
     return t  # pragma: no cover

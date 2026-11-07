@@ -144,6 +144,24 @@ one place at a time, and `unit where-used --component SERIAL --history` says eve
 and computes the unit without it. `unit history` shows everything; `unit show --on 2027-05-01` shows the unit as known now on
 that date; `unit verify` checks every history and reference, and changes nothing.
 
+**Which units an engineering change reaches.** Once an ECO is implemented, decide which units it reaches. This is written once,
+beside the ECO, which itself doesn't change:
+
+- `revisionworx unit change candidates ECO-0042` lists the units that still have the revision the ECO replaces (or one of its
+  affected parts), with why.
+- `unit change decide ECO-0042 --kind retrofit-required --reason "cracks found in service"` puts every candidate in scope.
+  `--scope customer --value Acme`, `--scope serial-range --value NH-26-0001..NH-26-0040`, `--scope standard --value HPU-75-A`
+  or `--scope units --unit NH-26-0007 ...` choose fewer. Other kinds: `retrofit-optional` (offered; each customer accepts or
+  declines), `unit` (one unit's own modification), `production` (new units only: `--standard HPU-75-B`), and `documentation`
+  (a drawing corrected, machines unchanged: every unit in scope moves to the new revision at once, marked as a correction).
+- Each unit in scope then goes its own way: `unit change set NH-26-0007 ECO-0042 scheduled`, `... deferred --reason ...`,
+  `... not-applicable --reason ...`. `unit change install NH-26-0007 ECO-0042` records that it was done: the unit's drawings
+  move to the new revisions, flagged *reported* until `unit change verify NH-26-0007 ECO-0042` confirms it (or install with
+  `--basis verified` when someone saw it). `unit change reverse ... --reason ...` records it being taken out again.
+- `unit change status ECO-0042` shows every unit in scope and where it stands. `unit compliance` lists every unit still
+  missing a required change (and exits 1 if there is one, for scripts); `unit compliance NH-26-0007` lists one unit's changes.
+  A unit found later joins with `unit change add ECO-0042 NH-26-0099`.
+
 ## Troubleshooting
 
 | You see | What it means | What to do |
