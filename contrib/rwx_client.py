@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-RWX_CLIENT_VERSION = 2
+RWX_CLIENT_VERSION = 3
 API_VERSION = 1
 _TIMEOUT = 120
 
@@ -36,7 +36,8 @@ class RwxError(Exception):
     """RevisionWorx refused or could not do something. ``kind``: not-found, ambiguous, checked-out, busy, no-workspace,
     bad-input, refused, unavailable, error; and when recording on units: duplicate (an identifier another unit holds),
     changed (the unit changed since you read it), txid-used (that txid was used for something else), conflict (retry with the
-    same txid). The message is written for the person using your program."""
+    same txid), signature (a field signature that can't be trusted; nothing written). The message is written for the person
+    using your program."""
 
     def __init__(self, message: str, kind: str = "error"):
         super().__init__(message)
@@ -211,13 +212,17 @@ class RevisionWorx:
     # Recording on units: every call needs a ``txid`` (32 lowercase hex) that you keep and send again with every attempt at
     # the same action, so a retry after a lost answer writes nothing ("result": "already-recorded"). ``if_events``: act only
     # if the unit still has that many events (its ``events.count`` when you decided), else RwxError kind "changed".
+    # ``field_signature`` "DEVICE:EVENT:SIG" (feature "field-signatures"): a field record signed on a phone enrolled to an
+    # account, accepted with basis="verified" and evidence ["fieldworx-event:EVENT"]; RwxError kind "signature" if it can't be
+    # trusted.
     @staticmethod
     def _recording(txid: str, if_events: Optional[int] = None, effective: str = "", basis: Optional[str] = None,
-                   reason: str = "", change: str = "", evidence: Iterable[str] = ()) -> List[str]:
+                   reason: str = "", change: str = "", evidence: Iterable[str] = (), field_signature: str = "") -> List[str]:
         args = ["--txid", txid]
         if if_events is not None:
             args += ["--if-events", str(if_events)]
-        for flag, value in (("--effective", effective), ("--basis", basis), ("--reason", reason), ("--change", change)):
+        for flag, value in (("--effective", effective), ("--basis", basis), ("--reason", reason), ("--change", change),
+                            ("--field-signature", field_signature)):
             if value:
                 args += [flag, value]
         for e in evidence:                  # "KIND:REF" or "KIND:REF=LABEL", e.g. "work-order:WO-00012"
@@ -278,6 +283,18 @@ class RevisionWorx:
         """The change order ``order`` was made on the unit: its drawings move to the order's new revisions, reported unless
         ``basis="verified"``. Returns {"result", "unit", "events", "compliance"}."""
         return self._run(*(["unit-change-install", ref, order] + self._recording(txid, **record)))
+
+
+    # ------------------------------------------------------------------ phones (feature "field-signatures")
+    def devices(self) -> List[Dict[str, Any]]:
+        """Phones enrolled to accounts in a team workspace, revoked ones too; ``active`` says whether they count now."""
+        return self._run("devices")["devices"]
+
+    def device_enrol(self, account: str, device: str, key: str, fingerprint: str, name: str = "") -> Dict[str, Any]:
+        """Enrol a phone to an account, as the administrator logged in on this computer. ``fingerprint`` is what the person
+        typed from the phone's screen. Returns {"result": "enrolled" | "already-enrolled", "device": {...}}."""
+        args = ["device-enrol", "--account", account, "--device", device, "--key", key, "--fingerprint", fingerprint]
+        return self._run(*(args + (["--name", name] if name else [])))
 
 
 def describe(status: Dict[str, Any]) -> str:

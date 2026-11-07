@@ -197,6 +197,8 @@ does one whose attempt was fenced (start again with a new txid). New units take 
 | `parent-mismatch` | a component unit and the unit it is fitted in disagree |
 | `dangling-reference` | a project, standard, document, revision or unit that doesn't exist |
 | `standard-altered` | a build standard's digest doesn't match |
+| `signature-invalid` | an event's field signature (section 8) is malformed, isn't one signature and one signer, has a basis other than `verified`, cites another field record, or doesn't hold with the key the signer's account enrolled for that phone |
+| `signature-reused` | one signed field record is cited by more than one action (txid) |
 
 Problems are reported, never repaired: the journal holds every entry, and a person decides.
 
@@ -220,6 +222,19 @@ directly. Three rules make a program's write safe to repeat and safe to decide o
   the action is refused (`Changed`, nothing written) if anything was recorded on the unit since. The count is compared when the
   action reads the unit, at the revision its commit insists on (`UnitService.expecting`).
 
+**Signed field records** (feature `field-signatures`, ADR-028). A field record signed on a phone an administrator enrolled to an
+account is accepted with `--field-signature DEVICE:EVENT:SIG`, `--basis verified` and `--evidence fieldworx-event:EVENT`. RevisionWorx
+checks it first (the phone enrolled to exactly one active account, not revoked, the signature holding over the record with the key
+enrolled for it), then the event carries two more evidence items:
+
+| `kind` | `ref` | `label` |
+|---|---|---|
+| `field-signature` | `DEVICE:EVENT`: the phone and the record it signed | the signature, 128 hex digits |
+| `field-signer` | the account the phone is enrolled to | the phone's name |
+
+They are reserved: nothing records them except `link` after checking, so typing one as `--evidence`, here or through `link`, is
+refused. Revoking the phone stops its signatures being accepted on anything new; `unit verify` still checks those accepted before.
+
 The Director decided (2026-11-07) that OpenMeridian may register the units its own work orders build, and nothing else; FieldWorx
 records only what someone in the office accepts. Proposals from phones are never applied by themselves.
 
@@ -238,6 +253,8 @@ records only what someone in the office accepts. Proposals from phones are never
 | An older RevisionWorx opens the workspace | It reads and replays these entries like any others, and can't write these kinds (CORE_API §8) |
 | A modified program in a team workspace overwrites a unit event | The journal rules accept a signed put of any subsystem record; `unit verify` reports `altered-event`. A journal rule making these kinds write-once would need a new workspace format (ADR-024) and is planned |
 | A unit record file altered on disk | Reads come from the journal (ADR-022); `verify` reports the file |
+| A phone that signed records is lost, or enrolled to the wrong person | An administrator revokes it (`revisionworx user device revoke`); its signatures are refused from then on, and what was accepted stands |
+| Signature evidence written by a program that skips the checks | `verify` reports `signature-invalid` |
 
 ## 10. Engineering changes reaching units (phase 2)
 

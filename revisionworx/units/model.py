@@ -51,6 +51,7 @@ TRANSITIONS = {
             "installed": ("verified", "reversed"), "verified": ("reversed",)},
 }
 NEEDS_REASON = ("deferred", "declined", "not-applicable", "reversed")
+SIGNED_EVIDENCE = ("field-signature", "field-signer")  # added only by link --field-signature, after checking (ADR-028)
 DEVIATION_KINDS = ("deviation", "concession")       # permission before the work; acceptance of units already made
 DEVIATION_STATES = ("in-effect", "cleared", "not-used")
 DEVIATION_TRANSITIONS = {"in-effect": ("cleared", "not-used")}   # cleared: a temporary one, the unit conforms again

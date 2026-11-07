@@ -104,6 +104,20 @@ Your administrator login works on your computer only. To use another one, use th
 
 **Disabling an account** stops that person's changes being accepted, by every computer, from then on. What they did before stands.
 
+**Phones (FieldWorx).** A FieldWorx phone signs every record it makes. Enrol a person's phone to their account, and what they
+record on it can be accepted as *verified* in their name, rather than just *reported*:
+
+1. On the phone, **Library › This phone** shows its device id and **fingerprint**, four groups of four characters.
+2. Bring the phone's field log to the office as usual.
+3. Logged in as an administrator: `fieldworx-bridge enrol FIELDLOG -w "Z:\Engineering" --account riley --fingerprint
+   3F2A-91C0-77B1-04DE --name "Riley's phone"`, typing the fingerprint **from the phone's screen**. If it isn't the one in the field log, nothing is enrolled: you have
+   the wrong phone's log, or someone else's.
+
+`revisionworx user device list` shows every phone and whose it is. If a phone is lost, stolen or handed to someone else,
+`revisionworx user device revoke riley dev_… --reason "lost on site"`: its signatures aren't accepted from then on, and what was
+accepted before stands. A phone that's been revoked can't be enrolled again; reinstalling FieldWorx gives it a new identity to
+enrol. Disabling someone's account stops their phone being trusted too.
+
 | You see | What it means | What to do |
 |---|---|---|
 | "Alice is saving a change…" | It's her turn, and it's taking a while. | Try again in a moment. If her computer has stopped, this clears itself after a minute, and it's recorded. |
