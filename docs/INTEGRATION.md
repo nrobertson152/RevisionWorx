@@ -11,7 +11,7 @@ kind)` with a message written for your user.
 
 **Version:** `API_VERSION = 1` (`revisionworx link version`). It increments only on incompatible changes. New
 fields may be added to answers at any time, so ignore fields you do not know. Commands added since API 1 are named in
-`version`'s `features` (today `["units", "unit-changes"]`): check for one before using it.
+`version`'s `features` (today `["units", "unit-changes", "pdf-derivatives"]`): check for one before using it.
 
 ## Safety
 
@@ -39,7 +39,7 @@ folder above it that holds `.revisionworx`, then the workspaces recently opened 
 | `projects` | projects in the workspace | `projects: [{id, name, number, customer, mode, archived, folder}]` |
 | `documents [--project P] [--text T]` | documents, optionally filtered | `documents: [document]` |
 | `document REF [--project P]` | one document with its history | `document` (+ `history: [revision]`) |
-| `fetch REF --to DIR [--revision L \| --released]` | copy a revision's verified content to DIR, named `name (rev L).ext` | `path`, `revision` |
+| `fetch REF --to DIR [--revision L \| --released] [--pdf]` | copy a revision's verified content to DIR, named `name (rev L).ext`; with `--pdf` (feature `pdf-derivatives`) the PDF tied to that revision instead, `not-found` if it has none | `path`, `revision` |
 | `publish FILE [--project P] [--document REF] [--number N] [--title T] [--folder F] [-m MSG]` | put FILE under revision control (below) | `result`, `action`, `document`, `revision` |
 | `open [--document REF \| --file FILE]` | show it in the desktop window | `launched`, `command` |
 | `units [--project P] [--text T] [--detail]` | the unit register (feature `units`): summaries, or with `--detail` each `unit` object below | `units: [summary \| unit]` |
@@ -58,7 +58,9 @@ folder above it that holds `.revisionworx`, then the workspaces recently opened 
 **`document`** objects: `id, number, title, status, type, project {id, name, number}, path` (the working file),
 `revisions, latest, released, checkout {user, host, since, mine} | null`.
 
-**`revision`** objects: `id, label, state, state_name, sha256, size, created, author, description`.
+**`revision`** objects: `id, label, state, state_name, sha256, size, created, author, description, pdf`. `pdf` (feature
+`pdf-derivatives`, ADR-026) is `null` or `{sha256, size, tool}`: the PDF attached to *this* revision. A newer revision without
+one has `null`; another revision's PDF is never offered in its place.
 
 **`unit` objects** (docs/UNITS.md; `REF` is a unit id, a FieldWorx `ast_` id, or an identifier such as a serial or tag):
 `id, label, class, name, model {part, number}, identifiers [{scheme, issuer, value, active, since}], status,

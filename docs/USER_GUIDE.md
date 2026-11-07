@@ -113,6 +113,14 @@ Your administrator login works on your computer only. To use another one, use th
 | "This administrator account only works on the computer it was set up on" | You're on another computer. | Use **Use recovery code…** in the login window, or a second administrator account. |
 | "journal entry N is gone from the shared folder" / "isn't the one this computer read" | Files in `.revisionworx` have been lost, altered or restored. Changes are refused. | Lost or altered: on a computer that has read them, `revisionworx team repair`. Restored from a backup on purpose: on each computer, `revisionworx team forget-local`. Then `revisionworx doctor`. |
 
+## PDFs of CAD drawings
+
+A phone or a customer can't open an Inventor or SolidWorks drawing, so attach the PDF you export with each revision:
+`revisionworx doc pdf FRM-200@B "FRM-200 rev B.pdf" --tool "Inventor 2025 export"`. The PDF is tied to revision B only: when rev
+C is checked in, it has no PDF until you attach one, and rev B's is never shown in its place. A wrong PDF is replaced with
+`--replace --reason "..."`; the earlier one stays on record. `revisionworx doc pdfs --missing` lists released revisions that have
+no PDF yet. `revisionworx doc verify` checks the stored PDFs as well as the revisions.
+
 ## Units: what you built, and what's fitted in it
 
 A **unit** is one physical thing with a serial number: a machine you built, a pump fitted in it, a gauge you test it with.
