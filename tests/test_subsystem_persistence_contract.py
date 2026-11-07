@@ -80,6 +80,7 @@ def test_proposed_subsystem_kinds_fit_the_core_rules_and_do_not_collide():
         "documents": {"doctype", "document", "revision", "checkout", "lifecycle"},
         "bom (PR #21)": {"part", "partnum", "bomline", "bomstruct", "partseq", "partrule"},
         "change control (PR #20)": {"changereq", "changeord", "changeevt", "changenum", "changecfg"},
+        "units (ADR-025)": {"unit", "unitevt", "unitkey", "buildstd"},
     }
     seen: dict[str, str] = {}
     for owner, kinds in owners.items():

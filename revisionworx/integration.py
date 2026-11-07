@@ -174,8 +174,11 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------------------------- commands
+FEATURES = ["units"]                       # additive commands since API 1: ask before relying on one
+
+
 def version() -> dict:
-    return {"api": API_VERSION, "version": __version__}
+    return {"api": API_VERSION, "version": __version__, "features": list(FEATURES)}
 
 
 def workspaces(cfg_dir: Path | None = None) -> dict:
@@ -408,6 +411,49 @@ def _new_revision(ctl, doc: dict, source: Path, message: str) -> dict:
     return out
 
 
+def _unit_service(ws: Workspace):
+    from .units import service_for
+    return service_for(ws)
+
+
+def _unit_error(exc: Exception) -> LinkError:
+    from .units import Ambiguous, MalformedUnitRecord, NotFound
+    kind = "not-found" if isinstance(exc, NotFound) else "ambiguous" if isinstance(exc, Ambiguous) else \
+        "error" if isinstance(exc, MalformedUnitRecord) else "bad-input"
+    return LinkError(str(exc), kind)
+
+
+def list_units(workspace: Path | None = None, project: str | None = None, text: str = "", detail: bool = False,
+               cfg_dir: Path | None = None) -> dict:
+    """The unit register (docs/UNITS.md): summaries, or with ``detail`` everything ``unit`` answers for each, history
+    included, in one call."""
+    from .units import UnitError, query
+    loc = _one_workspace(workspace, cfg_dir)
+    with Workspace.open(loc) as ws:
+        svc = _unit_service(ws)
+        try:
+            pid = _find_project(ws, project)["id"] if project else ""
+            units = query.search(svc, text, pid)
+            rows = [query.unit_detail(svc, u) if detail else query.unit_summary(u) for u in units]
+        except UnitError as exc:
+            raise _unit_error(exc) from None
+        return {"workspace": _ws_summary(ws, loc), "units": rows}
+
+
+def unit(ref: str, workspace: Path | None = None, at: int | None = None, on: str = "", cfg_dir: Path | None = None) -> dict:
+    """One unit by id, FieldWorx asset id or identifier value: identity, the documents that apply to it (with flags, never
+    a substituted revision), components, milestones and history. ``at``/``on`` answer for an event or a date."""
+    from .units import UnitError, query
+    loc = _one_workspace(workspace, cfg_dir)
+    with Workspace.open(loc) as ws:
+        svc = _unit_service(ws)
+        try:
+            u = svc.resolve(ref)
+            return {"workspace": _ws_summary(ws, loc), "unit": query.unit_detail(svc, u, at=at, on=on)}
+        except UnitError as exc:
+            raise _unit_error(exc) from None
+
+
 def open_in_gui(ref: str | None = None, file: Path | None = None, workspace: Path | None = None,
                 cfg_dir: Path | None = None, launch: bool = True) -> dict:
     """Start the desktop window on a document (by reference, or the document a file belongs to)."""
@@ -474,6 +520,10 @@ def main(argv: list[str], workspace: str | None = None) -> int:
     s.add_argument("--number", default=""); s.add_argument("--title", default=""); s.add_argument("--folder", default="")
     s.add_argument("-m", "--message", default="")
     s = sub.add_parser("open"); s.add_argument("--document"); s.add_argument("--file")
+    s = sub.add_parser("units"); s.add_argument("--project"); s.add_argument("--text", default="")
+    s.add_argument("--detail", action="store_true")
+    s = sub.add_parser("unit"); s.add_argument("ref"); g = s.add_mutually_exclusive_group()
+    g.add_argument("--at", type=int); g.add_argument("--on", default="")
     try:
         a = p.parse_args(argv)
     except SystemExit as exc:
@@ -500,6 +550,10 @@ def main(argv: list[str], workspace: str | None = None) -> int:
         elif a.cmd == "publish":
             out = publish(Path(a.file), workspace=ws, project=a.project, document_ref=a.document, number=a.number,
                           title=a.title, folder=a.folder, message=a.message)
+        elif a.cmd == "units":
+            out = list_units(ws, a.project, a.text, a.detail)
+        elif a.cmd == "unit":
+            out = unit(a.ref, ws, a.at, a.on)
         else:
             out = open_in_gui(a.document, Path(a.file) if a.file else None, ws)
     except LinkError as exc:

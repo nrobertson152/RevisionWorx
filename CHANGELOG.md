@@ -6,6 +6,15 @@ All notable changes to RevisionWorx. Versions follow [Semantic Versioning](https
 
 The first release. Everything below is new.
 
+### Units: what was built, and what's in it
+- A register of serial-numbered units (machines, tracked components, instruments, tools), each with one permanent identity,
+  its serial numbers and tags, and one history that can't be edited, only added to. Units built to the same drawings share a
+  **build standard**; a unit records only where it differs. A unit's drawings are what its history says: a newer released
+  revision is shown beside them, never instead. Components are fitted at positions; a tracked component can be in one place at
+  a time, and its own history says where it has been. `revisionworx unit ...`; `revisionworx link units` and `link unit` for
+  other programs; existing registers and FieldWorx asset registers import all at once or not at all. See
+  [docs/UNITS.md](docs/UNITS.md).
+
 ### Working as a team
 - A workspace can be set up for a team working from one shared network folder, with no server. An administrator account is created on
   the boss's computer, the administrator creates regular accounts, and people log in and check documents out. Every change is signed,

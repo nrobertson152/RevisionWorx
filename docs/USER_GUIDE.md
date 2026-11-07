@@ -113,6 +113,37 @@ Your administrator login works on your computer only. To use another one, use th
 | "This administrator account only works on the computer it was set up on" | You're on another computer. | Use **Use recovery code…** in the login window, or a second administrator account. |
 | "journal entry N is gone from the shared folder" / "isn't the one this computer read" | Files in `.revisionworx` have been lost, altered or restored. Changes are refused. | Lost or altered: on a computer that has read them, `revisionworx team repair`. Restored from a backup on purpose: on each computer, `revisionworx team forget-local`. Then `revisionworx doctor`. |
 
+## Units: what you built, and what's fitted in it
+
+A **unit** is one physical thing with a serial number: a machine you built, a pump fitted in it, a gauge you test it with.
+RevisionWorx records which revisions describe each unit from the day it was built, without copying a single drawing
+(`docs/UNITS.md` has the details). There's no Units screen in the window yet; use the command line.
+
+**Build standards.** Most units are built to the same drawings. Name that set once:
+`revisionworx unit standard new HPU-75-A --title "HPU-75 standard A" --from-project J-2001` takes the released revision of every
+document in the project (`--doc FRM-200@A` names them one by one). A build standard never changes; a new set is a new standard.
+
+**Registering units.** `revisionworx unit new --serial NH-26-0001 --model HPU-75 --standard HPU-75-A --project J-2001 --built 2026-03-14 --status built`.
+A serial from another maker gets `--issuer Parker`; a customer's tag is `--tag P-101A --tag-issuer "Acme Refinery"`. A serial can
+belong to one unit only, and so can a tag, until it's retired (`unit id retire`) and moves to the machine that replaces it.
+An existing register imports in one go: `revisionworx unit import register.csv --dry-run` lists every problem and writes
+nothing; without `--dry-run` it registers every row or none. FieldWorx asset registers (`*.fwassets.csv`) import as they are,
+and keep their FieldWorx ids, so inspections already recorded still find their unit.
+
+**What a unit is built to.** `revisionworx unit show NH-26-0001` lists each document with the revision that applies to *this*
+unit and where that came from. When engineering releases a newer revision, the unit keeps its own and says
+"a later revision is released, not applied to this unit". When a unit is modified: `unit doc NH-26-0001 FRM-200@B --change ECO-0042
+--basis verified`. When many are: `unit conform HPU-75-B NH-26-0001 NH-26-0002 ... --clear`, one entry for all of them.
+
+**Components.** `unit fit NH-26-0001 P1 --part-number PMP-10 --serial 12345`. A component important enough to follow on its own
+(repaired, refitted elsewhere) is registered as a unit with `--class component` and fitted with `--component SERIAL`; it can be in
+one place at a time, and `unit where-used --component SERIAL --history` says everywhere it has been. A replacement is
+`unit fit ... --replace --disposition repair`.
+
+**Mistakes** are never edited away: `unit void NH-26-0001 7 --reason "recorded on the wrong unit"` keeps the event in the history
+and computes the unit without it. `unit history` shows everything; `unit show --on 2027-05-01` shows the unit as known now on
+that date; `unit verify` checks every history and reference, and changes nothing.
+
 ## Troubleshooting
 
 | You see | What it means | What to do |
