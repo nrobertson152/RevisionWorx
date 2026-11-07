@@ -1,7 +1,7 @@
 # RevisionWorx units: serial-numbered units, their identifiers and configuration (ADR-025)
 
-**Status:** design first, then implemented on `feature/unit-register` (local filesystem, single writer and team workspaces through the
-same contract as change control). The desktop window has no Units screen yet; use `revisionworx unit` and `revisionworx link units`.
+**Status:** implemented and tested (`tests/test_units_*.py`) on local disks, single-writer and team workspaces, through the same
+contract as change control. The desktop window has no Units screen yet; use `revisionworx unit` and `revisionworx link units`.
 **Package:** `revisionworx/units/` (standard library only). **No core file is changed**: it persists through CORE_API §8, like
 `changes/` and `bom/`.
 

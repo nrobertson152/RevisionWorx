@@ -1,0 +1,468 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""``revisionworx [-w WORKSPACE] unit ...``: the unit register from the command line (docs/UNITS.md).
+
+    list [--text T] [--project P] [--json]            show REF [--at N | --on DATE] [--json]
+    new [--serial S [--issuer I]] [--tag T [--tag-issuer I]] [--model PN] [--name N] [--project P] [--standard STD]
+        [--doc DOC@REV ...] [--built DATE] [--status S] ...
+    import FILE [--dry-run] [--fieldworx-ids | --no-fieldworx-ids]      export FILE
+    update REF [--name] [--model] [--class] [--project] [--customer] [--site] [--location] [--notes]
+    id add|retire|remove REF SCHEME VALUE [--issuer I]                  status REF STATUS
+    milestone REF NAME [--on DATE]                                      note REF TEXT
+    standard new NUMBER --title T (--doc DOC@REV ... | --from-project P) [--allow-unreleased]
+    standard list | standard show STD                                   conform STD REF [REF ...] [--clear]
+    doc REF DOC@REV | doc REF DOC --not-applicable | doc REF DOC --reset
+    fit REF POSITION (--component REF | --part-number PN) [--serial S] [--lot L] [--replace [--disposition D]]
+    remove REF POSITION [--disposition D]                               void REF N [N ...] --reason R
+    history REF                                                         where-used ...        verify
+
+Recording actions also take --effective DATE, --basis verified|reported|declared|legacy, --reason TEXT, --change ECO and
+--evidence KIND:REF[=LABEL] (repeatable). ``REF`` is a unit id or a serial, tag or other code. Exit codes: 0 ok, 1 problems
+found, 2 refused or bad input (nothing was changed).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from ..workspace import CommittedNotApplied, Workspace, WorkspaceError
+from . import csvio, query
+from .model import BASES, CLASSES, DISPOSITIONS, MILESTONES, SCHEMES, STATUSES, UnitError, ValidationError, unit_label
+from .service import UnitService, service_for
+
+READS = {"list", "show", "history", "where-used", "verify", "export"}
+
+
+def _common(s: argparse.ArgumentParser) -> None:
+    s.add_argument("--effective", default="", help="when it happened (YYYY-MM-DD), if not today")
+    s.add_argument("--basis", default="declared", choices=BASES, help="how well it is known (default: declared)")
+    s.add_argument("--reason", default="", help="why")
+    s.add_argument("--change", default="", help="the ECO it carries out (number or id)")
+    s.add_argument("--evidence", action="append", default=[], metavar="KIND:REF[=LABEL]",
+                   help="a record that supports it, e.g. inspection:ins_... or work-order:WO-00012 (repeatable)")
+
+
+def build_parser(prog: str) -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog=prog, description="The unit register: serial-numbered units and their configuration.")
+    p.add_argument("workspace", help="folder containing .revisionworx")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("list", help="units, optionally searched")
+    s.add_argument("--text", default=""); s.add_argument("--project", default=""); s.add_argument("--json", action="store_true")
+    s = sub.add_parser("show", help="one unit: identity, the documents that apply to it, components and history")
+    s.add_argument("ref"); g = s.add_mutually_exclusive_group()
+    g.add_argument("--at", type=int, help="as it stood after this event"); g.add_argument("--on", help="as known now, on this date")
+    s.add_argument("--json", action="store_true"); s.add_argument("--no-history", action="store_true")
+    s = sub.add_parser("history", help="a unit's events"); s.add_argument("ref"); s.add_argument("--json", action="store_true")
+
+    s = sub.add_parser("new", help="register a unit")
+    s.add_argument("--serial"); s.add_argument("--issuer", default="", help="who issued the serial (default: you)")
+    s.add_argument("--tag"); s.add_argument("--tag-issuer", default="", help="whose tag it is, e.g. the customer")
+    s.add_argument("--other", help="another code"); s.add_argument("--name", default="")
+    s.add_argument("--model", default="", help="model or part number"); s.add_argument("--class", dest="cls", default="product",
+                                                                                        choices=CLASSES)
+    s.add_argument("--status", default="planned", choices=STATUSES); s.add_argument("--project", default="")
+    s.add_argument("--customer", default=""); s.add_argument("--site", default=""); s.add_argument("--location", default="")
+    s.add_argument("--standard", default="", help="build standard number"); s.add_argument("--doc", action="append", default=[],
+                                                                                          metavar="DOC@REV")
+    for m in MILESTONES:
+        s.add_argument(f"--{m}", default="", metavar="DATE", help=f"{m} on this date")
+    s.add_argument("--notes", default=""); s.add_argument("--json", action="store_true"); _common(s)
+
+    s = sub.add_parser("import", help="register every unit in a CSV register (all or nothing)")
+    s.add_argument("file"); s.add_argument("--dry-run", action="store_true")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--fieldworx-ids", dest="fwx", action="store_true", default=None,
+                   help="keep FieldWorx asset ids (the default for a *.fwassets.csv register)")
+    g.add_argument("--no-fieldworx-ids", dest="fwx", action="store_false")
+    s.add_argument("--status", default="in-service", choices=STATUSES, help="for rows that don't say (default in-service)")
+    s.add_argument("--reason", default="")
+    s = sub.add_parser("export", help="the register as CSV"); s.add_argument("file"); s.add_argument("--overwrite", action="store_true")
+
+    s = sub.add_parser("update", help="change a unit's description, model, project or whereabouts")
+    s.add_argument("ref")
+    for f in ("name", "model", "project", "customer", "site", "location", "notes"):
+        s.add_argument(f"--{f}")
+    s.add_argument("--class", dest="cls", choices=CLASSES); _common(s)
+
+    s = sub.add_parser("id", help="add, retire or remove an identifier")
+    s.add_argument("action", choices=("add", "retire", "remove")); s.add_argument("ref")
+    s.add_argument("scheme", choices=SCHEMES); s.add_argument("value"); s.add_argument("--issuer", default=""); _common(s)
+    s = sub.add_parser("status", help="set a unit's status"); s.add_argument("ref"); s.add_argument("status", choices=STATUSES)
+    _common(s)
+    s = sub.add_parser("milestone", help="record built, shipped, installed, commissioned or decommissioned")
+    s.add_argument("ref"); s.add_argument("milestone", choices=MILESTONES)
+    s.add_argument("--on", default="", help="the date (empty when unknown)"); _common(s)
+    s = sub.add_parser("note", help="add a note to a unit's history"); s.add_argument("ref"); s.add_argument("text"); _common(s)
+
+    st = sub.add_parser("standard", help="build standards").add_subparsers(dest="sub", required=True)
+    s = st.add_parser("new", help="a named set of document revisions, written once")
+    s.add_argument("number"); s.add_argument("--title", default=""); s.add_argument("--model", default="")
+    s.add_argument("--doc", action="append", default=[], metavar="DOC@REV")
+    s.add_argument("--from-project", default="", help="every released document of this project")
+    s.add_argument("--based-on", default=""); s.add_argument("--change", default=""); s.add_argument("--notes", default="")
+    s.add_argument("--allow-unreleased", action="store_true"); s.add_argument("--json", action="store_true")
+    s = st.add_parser("list"); s.add_argument("--json", action="store_true")
+    s = st.add_parser("show"); s.add_argument("standard"); s.add_argument("--json", action="store_true")
+
+    s = sub.add_parser("conform", help="record that units conform to a build standard ('none' for none)")
+    s.add_argument("standard"); s.add_argument("refs", nargs="+")
+    s.add_argument("--clear", action="store_true", help="drop unit differences for documents the standard names"); _common(s)
+    s = sub.add_parser("doc", help="a unit's own revision of a document")
+    s.add_argument("ref"); s.add_argument("document", help="DOC@REV, or DOC with --not-applicable or --reset")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--not-applicable", action="store_true"); g.add_argument("--reset", action="store_true"); _common(s)
+    s = sub.add_parser("fit", help="fit something at a position")
+    s.add_argument("ref"); s.add_argument("position")
+    s.add_argument("--component", default="", help="a unit fitted in its own right"); s.add_argument("--part-number", default="")
+    s.add_argument("--serial", default=""); s.add_argument("--lot", default=""); s.add_argument("--replace", action="store_true")
+    s.add_argument("--disposition", default="unknown", choices=DISPOSITIONS, help="of what is replaced"); _common(s)
+    s = sub.add_parser("remove", help="take something out of a position")
+    s.add_argument("ref"); s.add_argument("position"); s.add_argument("--disposition", default="unknown", choices=DISPOSITIONS)
+    _common(s)
+    s = sub.add_parser("void", help="mark recorded events as mistakes")
+    s.add_argument("ref"); s.add_argument("events", nargs="+", type=int); s.add_argument("--reason", required=True)
+
+    s = sub.add_parser("where-used", help="units that use a revision, document, standard, part, serial, lot or component")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--revision", metavar="DOC@REV"); g.add_argument("--document"); g.add_argument("--standard")
+    g.add_argument("--part-number"); g.add_argument("--serial"); g.add_argument("--lot", metavar="PN@LOT")
+    g.add_argument("--component", metavar="REF")
+    s.add_argument("--history", action="store_true", help="where it has ever been, not only now")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("verify", help="check every unit's history and references"); s.add_argument("--json", action="store_true")
+    return p
+
+
+# ---------------------------------------------------------------------------------------------------- helpers
+def _change_id(ws: Workspace, ref: str) -> str:
+    if not ref:
+        return ""
+    from .. import changes
+    from .model import is_id
+    if is_id("change", ref):
+        return ref
+    found = changes.service_for(ws).find_by_number(ref)
+    if found is None:
+        raise ValidationError(f"no change order {ref!r}")
+    if not found.id.startswith("eco_"):
+        raise ValidationError(f"{ref} is a change request; units carry out change orders (ECO)")
+    return found.id
+
+
+def _meta(ws: Workspace, a: argparse.Namespace) -> dict:
+    evidence = []
+    for e in a.evidence:
+        kind, sep, rest = e.partition(":")
+        if not sep:
+            raise ValidationError(f"evidence {e!r} should look like KIND:REF, e.g. inspection:ins_...")
+        ref, _, label = rest.partition("=")
+        evidence.append({"kind": kind.strip(), "ref": ref.strip(), "label": label.strip()})
+    return {"effective": a.effective, "basis": a.basis, "reason": a.reason, "change": _change_id(ws, a.change),
+            "evidence": evidence}
+
+
+def _print_unit(out, svc: UnitService, detail: dict) -> None:
+    flags = {"newer-released": "a later revision is released, not applied to this unit",
+             "not-released": "not released", "obsolete": "obsolete", "missing": "MISSING: this reference is damaged"}
+    out.write(f"{detail['label']}  {detail['name']}  [{detail['status']}]\n  id {detail['id']}   class {detail['class']}"
+              f"   model {detail['model']['number'] or '-'}\n")
+    for i in detail["identifiers"]:
+        out.write(f"  {i['scheme']} {i['value']}{' (' + i['issuer'] + ')' if i['issuer'] else ''}"
+                  f"{'' if i['active'] else ' (former)'}\n")
+    where = [f"{k} {detail[k]}" for k in ("customer", "site", "location") if detail[k]]
+    if detail["project"]:
+        where.insert(0, f"project {detail['project']['number'] or detail['project']['name']}")
+    if where:
+        out.write("  " + "   ".join(where) + "\n")
+    if detail["parent"]:
+        out.write(f"  fitted in {detail['parent']['label']} at {detail['parent']['position']}\n")
+    for name, m in detail["milestones"].items():
+        out.write(f"  {name} {m['date'] or '(date unknown)'}\n")
+    if "as_of" in detail:
+        a = detail["as_of"]
+        out.write(f"  AS OF {'event ' + str(a['event']) if 'event' in a else a['date']}"
+                  f"{'; recorded out of order: events ' + ', '.join(map(str, a['late'])) if a.get('late') else ''}\n")
+    std = detail["standard"]
+    out.write(f"  build standard {std['number'] + ' ' + std['title'] if std else '(none)'}\n")
+    if not detail["configuration_recorded"]:
+        out.write("  documents: configuration not recorded\n")
+    else:
+        out.write("  documents:\n")
+        for r in detail["documents"]:
+            name = r["document"]["number"] or r["document"]["id"]
+            if not r["applies"]:
+                what = "doesn't apply to this unit"
+            elif r["revision"] is None:
+                what = "?"
+            else:
+                what = f"rev {r['revision']['label']} ({r['revision']['state_name']})"
+            src = "standard" if r["source"] == "standard" else f"this unit, event {r['event']}"
+            notes = "; ".join(flags[f] + (f" (rev {r['released']['label']})" if f == "newer-released" and r["released"] else "")
+                              for f in r["flags"])
+            out.write(f"    {name:<16} {what:<28} {src}{'   ! ' + notes if notes else ''}\n")
+    if detail["components"]:
+        out.write("  components:\n")
+        for c in detail["components"]:
+            what = c["label"] or c["number"] or c["part"]
+            extra = "".join(f" {k} {c[k]}" for k in ("serial", "lot") if c[k])
+            out.write(f"    {c['position']:<10} {what}{extra}{'  since ' + c['since'] if c['since'] else ''}\n")
+    if "history" in detail:
+        out.write("  history:\n")
+        for e in detail["history"]:
+            who = e["actor"].get("name") or e["actor"].get("account") or e["actor"].get("user", "?")
+            out.write(f"    {e['n']:>3} {e['time'][:16]} {who}: {e['summary']}"
+                      f"{' [' + e['basis'] + ']' if e['basis'] != 'declared' else ''}{' (VOID)' if e['voided'] else ''}"
+                      f"{' - ' + e['reason'] if e['reason'] else ''}\n")
+
+
+def _units(svc: UnitService, refs: list[str]) -> list[str]:
+    return [svc.resolve(r)["id"] for r in refs]
+
+
+# ----------------------------------------------------------------------------------------------------- main
+def main(argv: list[str] | None = None, prog: str | None = None) -> int:
+    a = build_parser(prog or "python -m revisionworx.units").parse_args(argv)
+    out = sys.stdout
+    sub = getattr(a, "sub", None)
+    writable = a.cmd not in READS and not (a.cmd == "standard" and sub in ("list", "show")) and \
+        not (a.cmd == "import" and a.dry_run)
+    try:
+        with Workspace.open(Path(a.workspace), writable=writable) as ws:
+            svc = service_for(ws)
+            return _dispatch(a, ws, svc, out)
+    except CommittedNotApplied as exc:
+        sys.stderr.write(f"saved; the workspace finishes recording it when next opened for writing ({exc})\n")
+        return 0
+    except csvio.ImportProblems as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+    except (UnitError, WorkspaceError, OSError, ValueError) as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+
+
+def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
+    cmd = a.cmd
+    if cmd == "list":
+        project = svc.project_id(a.project) if a.project else ""
+        rows = [query.unit_summary(u) for u in query.search(svc, a.text, project)]
+        if a.json:
+            out.write(json.dumps({"units": rows}, indent=1, ensure_ascii=False) + "\n")
+        else:
+            for r in rows:
+                out.write(f"{r['label']:<20} {r['status']:<15} {r['model']['number']:<14} {r['name']}\n")
+            out.write(f"{len(rows)} unit(s)\n")
+        return 0
+    if cmd in ("show", "history"):
+        unit = svc.resolve(a.ref)
+        if cmd == "history":
+            detail = query.unit_detail(svc, unit)
+            if a.json:
+                out.write(json.dumps(detail["history"], indent=1, ensure_ascii=False) + "\n")
+                return 0
+            for e in detail["history"]:
+                out.write(f"{e['n']:>3} {e['time']} {e['effective'] or '':<10} {e['basis']:<8} {e['summary']}"
+                          f"{' (VOID)' if e['voided'] else ''}\n")
+            return 0
+        detail = query.unit_detail(svc, unit, history=not a.no_history, at=a.at, on=a.on or "")
+        if a.json:
+            out.write(json.dumps(detail, indent=1, ensure_ascii=False) + "\n")
+        else:
+            _print_unit(out, svc, detail)
+        return 0
+    if cmd == "verify":
+        problems = query.verify(svc)
+        if a.json:
+            out.write(json.dumps({"problems": problems}, indent=1) + "\n")
+        else:
+            for p in problems:
+                out.write(f"{p['code']}: {p['message']}\n")
+            out.write(f"{len(svc.ws.list('unit'))} unit(s) checked, {len(problems)} problem(s)\n")
+        return 1 if problems else 0
+    if cmd == "where-used":
+        return _where_used(a, svc, out)
+    if cmd == "export":
+        from ..bom.fileio import write_file
+        write_file(Path(a.file), csvio.units_to_csv(svc).encode("utf-8-sig"), overwrite=a.overwrite)
+        out.write(f"wrote {a.file}\n")
+        return 0
+    if cmd == "standard":
+        return _standard(a, ws, svc, out)
+    if cmd == "import":
+        text = Path(a.file).read_text(encoding="utf-8-sig")
+        if a.dry_run:
+            specs = csvio.plan_import(svc, text, fieldworx_ids=a.fwx, status=a.status)
+            out.write(f"{len(specs)} unit(s) would be registered; nothing was written\n")
+            return 0
+        made = csvio.import_register(svc, text, fieldworx_ids=a.fwx, status=a.status, reason=a.reason)
+        out.write(f"registered {len(made)} unit(s)\n")
+        return 0
+    if cmd == "new":
+        return _new(a, ws, svc, out)
+    meta = _meta(ws, a) if hasattr(a, "evidence") else {}
+    if cmd == "void":
+        u = svc.void(svc.resolve(a.ref)["id"], a.events, a.reason)
+    elif cmd == "update":
+        fields = {k: getattr(a, k) for k in ("name", "customer", "site", "location", "notes") if getattr(a, k) is not None}
+        if a.model is not None:
+            fields["model"] = {"part": "", "number": a.model}
+        if a.project is not None:
+            fields["project"] = a.project
+        if a.cls is not None:
+            fields["class"] = a.cls
+        u = svc.update(svc.resolve(a.ref)["id"], **fields, **meta)
+    elif cmd == "id":
+        uid = svc.resolve(a.ref)["id"]
+        fn = {"add": svc.add_identifier, "retire": svc.retire_identifier, "remove": svc.remove_identifier}[a.action]
+        u = fn(uid, a.scheme, a.value, a.issuer, **meta)
+    elif cmd == "status":
+        u = svc.set_status(svc.resolve(a.ref)["id"], a.status, **meta)
+    elif cmd == "milestone":
+        meta.pop("effective")
+        u = svc.milestone(svc.resolve(a.ref)["id"], a.milestone, a.on, **meta)
+    elif cmd == "note":
+        u = svc.note(svc.resolve(a.ref)["id"], a.text, **meta)
+    elif cmd == "conform":
+        std = "" if a.standard.casefold() == "none" else svc.resolve_standard(a.standard)["id"]
+        made = svc.set_standard(_units(svc, a.refs), std, clear_differences=a.clear, **meta)
+        for u in made:
+            out.write(f"{unit_label(u)}: {'build standard ' + a.standard if std else 'no build standard'}\n")
+        return 0
+    elif cmd == "doc":
+        uid = svc.resolve(a.ref)["id"]
+        if a.not_applicable or a.reset:
+            did = svc.document_id(a.document)
+            u = svc.reset_document(uid, did, **meta) if a.reset else svc.set_document(uid, did, "", **meta)
+        else:
+            did, rid = svc.doc_rev(a.document)
+            u = svc.set_document(uid, did, rid, **meta)
+    elif cmd == "fit":
+        comp = svc.resolve(a.component)["id"] if a.component else ""
+        u = svc.install(svc.resolve(a.ref)["id"], a.position, number=a.part_number, component=comp, serial=a.serial,
+                        lot=a.lot, replace=a.replace, disposition=a.disposition, **meta)
+    elif cmd == "remove":
+        u = svc.remove(svc.resolve(a.ref)["id"], a.position, a.disposition, **meta)
+    else:  # pragma: no cover
+        raise ValidationError(f"unknown command {cmd}")
+    out.write(f"{unit_label(u)}: event {u['events']['count']} recorded\n")
+    return 0
+
+
+def _new(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
+    idents = []
+    if a.serial:
+        idents.append({"scheme": "serial", "value": a.serial, "issuer": a.issuer})
+    if a.tag:
+        idents.append({"scheme": "tag", "value": a.tag, "issuer": a.tag_issuer})
+    if a.other:
+        idents.append({"scheme": "other", "value": a.other, "issuer": ""})
+    if not idents:
+        raise ValidationError("give the unit a --serial, --tag or --other code, so it can be found")
+    docs = {}
+    for ref in a.doc:
+        did, rid = svc.doc_rev(ref)
+        docs[did] = rid
+    spec = {"identifiers": idents, "class": a.cls, "name": a.name, "model": {"part": "", "number": a.model},
+            "status": a.status, "project": svc.project_id(a.project) if a.project else "", "customer": a.customer,
+            "site": a.site, "location": a.location, "notes": a.notes,
+            "standard": svc.resolve_standard(a.standard)["id"] if a.standard else "", "documents": docs,
+            "milestones": {m: getattr(a, m) for m in MILESTONES if getattr(a, m)}}
+    u = svc.register(**spec, **_meta(ws, a))
+    if a.json:
+        out.write(json.dumps(query.unit_detail(svc, u), indent=1, ensure_ascii=False) + "\n")
+    else:
+        out.write(f"registered {unit_label(u)} as {u['id']}\n")
+    return 0
+
+
+def _standard(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
+    def show(std: dict) -> None:
+        out.write(f"{std['number']}  {std['title']}\n  id {std['id']}   model {std['model']['number'] or '-'}\n")
+        for doc, rev in sorted(std["documents"].items(), key=lambda kv: query._Names(svc)("document", kv[0])):
+            names = query._Names(svc)
+            out.write(f"  {names('document', doc):<16} rev {names('revision', rev)}\n")
+    if a.sub == "list":
+        stds = svc.standards()
+        if a.json:
+            out.write(json.dumps({"standards": stds}, indent=1, ensure_ascii=False) + "\n")
+        else:
+            for s in stds:
+                out.write(f"{s['number']:<20} {len(s['documents']):>4} document(s)  {s['title']}\n")
+        return 0
+    if a.sub == "show":
+        std = svc.resolve_standard(a.standard)
+        if a.json:
+            users = query.units_on_standard(svc, std["id"])
+            out.write(json.dumps({"standard": std, "units": users}, indent=1, ensure_ascii=False) + "\n")
+        else:
+            show(std)
+            out.write(f"  {len(query.units_on_standard(svc, std['id']))} unit(s) conform to it\n")
+        return 0
+    docs: dict[str, str] = {}
+    skipped: list[str] = []
+    if a.from_project:
+        from .. import documents as D
+        pid = svc.project_id(a.from_project)
+        for d in D.list_documents(ws, pid):
+            if d.get("released_rev_id"):
+                docs[d["id"]] = d["released_rev_id"]
+            else:
+                skipped.append(d.get("number") or d["id"])
+    for ref in a.doc:
+        did, rid = svc.doc_rev(ref)
+        docs[did] = rid
+    std = svc.create_standard(a.number, a.title, docs, model={"part": "", "number": a.model}, based_on=(
+        svc.resolve_standard(a.based_on)["id"] if a.based_on else ""), change=_change_id(ws, a.change), notes=a.notes,
+        allow_unreleased=a.allow_unreleased)
+    if a.json:
+        out.write(json.dumps({"standard": std, "skipped": skipped}, indent=1, ensure_ascii=False) + "\n")
+    else:
+        out.write(f"build standard {std['number']} names {len(std['documents'])} document revision(s)\n")
+        if skipped:
+            out.write("left out, with nothing released: " + ", ".join(skipped) + "\n")
+    return 0
+
+
+def _where_used(a: argparse.Namespace, svc: UnitService, out) -> int:
+    if a.revision:
+        did, rid = svc.doc_rev(a.revision)
+        rows = query.units_using_revision(svc, rid)
+    elif a.document:
+        rows = query.units_using_document(svc, svc.document_id(a.document))
+    elif a.standard:
+        rows = [{"unit": u} for u in query.units_on_standard(svc, svc.resolve_standard(a.standard)["id"])]
+    else:
+        kwargs = {"history": a.history}
+        if a.part_number:
+            kwargs["number"] = a.part_number
+        elif a.serial:
+            kwargs["serial"] = a.serial
+        elif a.lot:
+            pn, sep, lot = a.lot.rpartition("@")
+            if not sep:
+                raise ValidationError("--lot looks like PART-NUMBER@LOT")
+            kwargs.update(number=pn, lot=lot)
+        else:
+            kwargs["component"] = svc.resolve(a.component)["id"]
+        rows = query.units_with_component(svc, **kwargs)
+    if a.json:
+        out.write(json.dumps({"rows": rows, "coverage": "every unit in this workspace's register"}, indent=1,
+                             ensure_ascii=False) + "\n")
+        return 0
+    for r in rows:
+        u = r["unit"]
+        extra = ""
+        if "position" in r:
+            extra = f" at {r['position']}" + ("" if r.get("current") else f" (removed, event {r['removed']})")
+        elif "revision" in r:
+            extra = f" rev {r['revision']['label']}" if r.get("revision") else " (doesn't apply)"
+        out.write(f"{u['label']:<20} {u['status']:<15}{extra}\n")
+    out.write(f"{len(rows)} found among the units registered in this workspace (units recorded nowhere else can't be "
+              "searched)\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

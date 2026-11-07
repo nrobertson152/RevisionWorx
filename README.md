@@ -38,6 +38,8 @@ Keep regular backups of your project folders and their `.revisionworx` folder, a
   An administrator can release an abandoned checkout (`revisionworx doc release-checkout`, audited).
 - **Lifecycle.** Work in Progress, In Review, Approved, Released, Superseded, Obsolete, with audited
   transitions.
+- **Units.** A register of what you built: serial numbers and tags, the build standard each unit was built to,
+  its own modifications, the components fitted in it, and a history that can only be added to.
 - **Engineering change control.** Change requests (ECR) and change orders (ECO): review and approval
   signoffs, actions, the revision that implements each affected document, impact reports, and a tamper-evident
   audit chain per change.
@@ -107,6 +109,16 @@ revisionworx change implement ECO-0001 document:DOC_ID --rev B
 revisionworx change action-done ECO-0001 ACTION_ID
 revisionworx change implemented ECO-0001 && revisionworx change signoff ECO-0001 approve
 revisionworx change close ECO-0001
+```
+
+Units built, and what's fitted in them (`docs/UNITS.md`):
+
+```bash
+revisionworx unit standard new HPU-75-A --title "HPU-75 standard A" --from-project J-2001
+revisionworx unit new --serial NH-26-0001 --model HPU-75 --standard HPU-75-A --built 2026-03-14 --status built
+revisionworx unit fit NH-26-0001 P1 --part-number PMP-10 --serial 12345
+revisionworx unit show NH-26-0001                # the revisions that apply to this unit, its components and history
+revisionworx unit where-used --revision FRM-200@A
 ```
 
 BOM files: `revisionworx bom validate bom.csv`, `revisionworx bom explode bom.xlsx`, `revisionworx bom diff old.csv new.csv`

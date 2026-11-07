@@ -61,6 +61,17 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
 6. **RevisionWorx does not edit CAD references.** Native Inventor/SolidWorks files are versioned byte-for-byte
    and never rewritten. Reference-aware copy/rename of assemblies is not part of 1.0.
 
+## The unit register (new, docs/UNITS.md)
+
+- **Command line only.** There's no Units screen in the desktop window yet: `revisionworx unit`, and `revisionworx link units` for
+  other programs.
+- **Engineering changes don't reach units by themselves yet.** An ECO can be cited on a unit's record, but which units it applies
+  to (effectivity) and each unit's compliance are the next phase. Until then, record a retrofit on each unit (`unit doc`,
+  `unit conform`).
+- **Queries read every unit.** Fine for thousands; there's no index yet.
+- **In a team workspace, a modified program could overwrite a unit's history.** `revisionworx unit verify` notices, and actions on
+  that unit are refused, but the journal's rules don't stop the write itself yet.
+
 ## Not in 1.0
 
 - Part and BOM records inside the workspace are available through the Python API (`revisionworx.bom`); the

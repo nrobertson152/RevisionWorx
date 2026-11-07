@@ -631,6 +631,8 @@ def build_parser() -> argparse.ArgumentParser:
                    add_help=False)
     sub.add_parser("change", help="engineering changes (ECR/ECO): list, show, impact, verify, export, "
                    "import-csv (run 'revisionworx change -h')", add_help=False)
+    sub.add_parser("unit", help="the unit register: serial numbers, build standards, configuration and history "
+                   "(run 'revisionworx unit -h')", add_help=False)
     sub.add_parser("link", help="JSON commands for other programs: status, publish, fetch, open "
                    "(see docs/INTEGRATION.md)", add_help=False)
 
@@ -791,9 +793,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _delegate(argv: list[str]) -> int | None:
-    """``revisionworx bom ...`` and ``revisionworx change ...`` run the BOM and change-control command
+    """``revisionworx bom ...``, ``change ...`` and ``unit ...`` run the BOM, change-control and unit-register command
     lines, which have their own parsers. Global options before the subcommand are honoured for
-    ``change`` (the workspace); ``bom`` works on files and never opens a workspace."""
+    ``change`` and ``unit`` (the workspace); ``bom`` works on files and never opens a workspace."""
     workspace = None
     i = 0
     while i < len(argv) and argv[i].startswith("-"):
@@ -805,7 +807,7 @@ def _delegate(argv: list[str]) -> int | None:
             i += 1
         else:
             return None                       # --help, --version etc.: the main parser handles them
-    if i >= len(argv) or argv[i] not in ("bom", "change", "link"):
+    if i >= len(argv) or argv[i] not in ("bom", "change", "link", "unit"):
         return None
     rest = argv[i + 1:]
     if argv[i] == "link":
@@ -814,6 +816,15 @@ def _delegate(argv: list[str]) -> int | None:
     if argv[i] == "bom":
         from .bom.__main__ import main as bom_main
         return bom_main(rest, prog="revisionworx bom")
+    if argv[i] == "unit":
+        from .units.__main__ import main as unit_main
+        if rest and rest[0] in ("-h", "--help"):
+            return unit_main(["--help"], prog="revisionworx [-w WORKSPACE] unit")
+        workspace = workspace or os.environ.get("REVISIONWORX_WORKSPACE")
+        if not workspace:
+            print("error: no workspace: use -w FOLDER or set REVISIONWORX_WORKSPACE", file=sys.stderr)
+            return 2
+        return unit_main([workspace, *rest], prog="revisionworx unit")
     from .changes.__main__ import main as change_main
     if rest and rest[0] in ("-h", "--help"):
         return change_main(["--help"], prog="revisionworx [-w WORKSPACE] change")

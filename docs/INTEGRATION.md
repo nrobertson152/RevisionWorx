@@ -10,7 +10,8 @@ Python 3.9+. Copy it into your program. It finds the executable, runs the comman
 kind)` with a message written for your user.
 
 **Version:** `API_VERSION = 1` (`revisionworx link version`). It increments only on incompatible changes. New
-fields may be added to answers at any time, so ignore fields you do not know.
+fields may be added to answers at any time, so ignore fields you do not know. Commands added since API 1 are named in
+`version`'s `features` (today `["units"]`): check for one before using it.
 
 ## Safety
 
@@ -41,6 +42,8 @@ folder above it that holds `.revisionworx`, then the workspaces recently opened 
 | `fetch REF --to DIR [--revision L \| --released]` | copy a revision's verified content to DIR, named `name (rev L).ext` | `path`, `revision` |
 | `publish FILE [--project P] [--document REF] [--number N] [--title T] [--folder F] [-m MSG]` | put FILE under revision control (below) | `result`, `action`, `document`, `revision` |
 | `open [--document REF \| --file FILE]` | show it in the desktop window | `launched`, `command` |
+| `units [--project P] [--text T] [--detail]` | the unit register (feature `units`): summaries, or with `--detail` each `unit` object below | `units: [summary \| unit]` |
+| `unit REF [--at N \| --on DATE]` | one unit, now, after its event N, or as known now on a date | `unit` |
 
 `REF` is a document id or document number. `P` is a project id, number or name.
 
@@ -56,6 +59,18 @@ folder above it that holds `.revisionworx`, then the workspaces recently opened 
 `revisions, latest, released, checkout {user, host, since, mine} | null`.
 
 **`revision`** objects: `id, label, state, state_name, sha256, size, created, author, description`.
+
+**`unit` objects** (docs/UNITS.md; `REF` is a unit id, a FieldWorx `ast_` id, or an identifier such as a serial or tag):
+`id, label, class, name, model {part, number}, identifiers [{scheme, issuer, value, active, since}], status,
+project {id, number, name} | null, customer, site, location, parent {unit, label, position} | null,
+standard {id, number, title, event, basis} | null, configuration_recorded, documents, components, milestones, notes, aliases,
+events {count, head}, created, updated, rev, history`, and `as_of` when `--at`/`--on` was given. Each of `documents` is
+`{document {id, number, title}, revision {id, label, number, state, state_name, sha256} | null, applies, source ("standard" |
+"unit"), event, basis, released {id, label} | null, flags}`; `flags` among `newer-released`, `not-released`, `obsolete`, `missing`.
+The revision is always the one recorded for this unit; a newer released one is only ever named in `released`. Each of
+`components` is `{position, part, number, unit, label, serial, lot, since, event, basis}`; each of `history` is
+`{n, type, summary, effective, time, actor, basis, evidence, reason, change, voided}`. A summary (`units` without `--detail`) is
+`{id, label, class, name, model, status, project, customer, site, location, identifiers, standard, parent, events, rev}`.
 
 **`file.state`:**
 - `unchanged`: the file is identical to the latest revision.

@@ -827,7 +827,7 @@ cursor with different entries, and the cache kept serving records that exist in 
 
 **Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed before every file change, simulated client caches. `.github/workflows/shares.yml` runs the same races against real file servers on one hosted machine: Windows SMB 3.1.1 (client and server, by three server names, which makes three connections), the Linux kernel's SMB client against Samba (two mounts), and NFS 4.2 and 3 (two kernel clients). That found behaviour no simulation had, which the design now handles: a Linux SMB client answering EBUSY or EIO for a moment about a file that's fine, a client told a folder exists and then that it doesn't, and NFS taking seconds to show a change. Two NFS 4 mounts, being one client to the server, never heard about each other's changes at all, which is why that job mixes versions. **None of that is evidence across computers:** it's one machine and one network path, with no cable pulled and no server rebooted. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
 
-### ADR-025 Units: serial-numbered units and their configuration live in this journal — PROPOSED (design; phase 1 being implemented)
+### ADR-025 Units: serial-numbered units and their configuration live in this journal — IMPLEMENTED (phase 1 of 4)
 
 **Decision (2026-11-06).** Every physical unit a company builds, sells or looks after gets one permanent identity and one append-only
 configuration history in the workspace journal, as a subsystem (`revisionworx/units/`, design and data contract in `docs/UNITS.md`)
@@ -885,7 +885,7 @@ and its journal publish can still publish one entry, which ADR-015 fences. It do
 | AuditEvent (lock break) | IMPLEMENTED (general audit trail PROPOSED) |
 | DocumentType, Document, Revision, Checkout, Lifecycle | IMPLEMENTED (Phase 2, single-writer) |
 | Part, Assembly, BOM, DependencyEdge, ChangeRequest | PROPOSED |
-| Unit, unit event, identifier claim, build standard (ADR-025) | PROPOSED (design in `docs/UNITS.md`) |
+| Unit, unit event, identifier claim, build standard (ADR-025) | IMPLEMENTED (`units/`, `docs/UNITS.md`) |
 
 Distinguish a part *identity* from a document file and from a specific revision. No path-based identity.
 
