@@ -16,14 +16,15 @@ from typing import Any, Callable, Iterable
 from .. import documents as D
 from ..workspace import RecordCheck, RecordDelete, RecordPut, Workspace, new_id, now_iso, register_kind
 from . import history as H
-from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_SCHEMES, STANDARD_SCHEME, STATUSES,
-                    UPDATABLE, VOIDABLE, Ambiguous, DuplicateIdentifier, MalformedUnitRecord, NotFound, ReplayRefused,
-                    ValidationError, actor_record, check_choice, check_date, check_evidence, check_id, check_identifier,
-                    check_model, check_position, check_txid, clean, derived_id, digest, event_id, is_id, key_id, load_event,
-                    load_key, load_standard, load_unit, norm, position_key, standard_digest, unit_label)
+from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_SCHEMES, STANDARD_SCHEME, STATUSES, UPDATABLE,
+                    VOIDABLE, Ambiguous, DuplicateIdentifier, MalformedUnitRecord, NotFound, ReplayRefused, ValidationError,
+                    actor_record, check_choice, check_date, check_evidence, check_id, check_identifier, check_model,
+                    check_pattern, check_position, check_txid, clean, day_of, derived_id, digest, event_id, is_id, key_id,
+                    load_event, load_key, load_numbering, load_standard, load_unit, norm, numbering_id, pattern_period,
+                    position_key, render_pattern, standard_digest, unit_label)
 
 KIND = {"unit": "unit", "event": "unitevt", "key": "unitkey", "standard": "buildstd", "effectivity": "uniteff",
-        "compliance": "unitcmp"}
+        "compliance": "unitcmp", "numbering": "unitseq"}
 for _kind in KIND.values():
     register_kind(_kind)
 
@@ -49,6 +50,8 @@ class _Tx:
         self.key_deletes: dict[str, int] = {}
         self.checks: dict[tuple[str, str], int] = {}
         self.extra_puts: list[RecordPut] = []
+        self.numberings: dict[str, dict] = {}          # working copies of numberings this action issues from
+        self.numbering_revs: dict[str, int] = {}
 
     # -------------------------------------------------------------------------------------------- units
     def unit(self, unit_id: str) -> dict:
@@ -122,6 +125,27 @@ class _Tx:
             self.checks.pop((KIND["key"], kid), None)
             self.key_deletes[kid] = int(rec.get("_rev", 0))
 
+    def next_serial(self, numbering: str, day: str) -> tuple[str, str]:
+        """The next free serial of a numbering for ``day``, and its issuer. The numbering is written at the revision read, so two
+        actions can't issue the same number; a number whose serial is already claimed is skipped (docs/UNITS.md section 11)."""
+        nid = numbering if is_id("numbering", numbering) else numbering_id(numbering)
+        if nid not in self.numberings:
+            rec = self.svc.ws.get(KIND["numbering"], nid)
+            if rec is None:
+                raise NotFound(f"no numbering {numbering!r}")
+            self.numberings[nid], self.numbering_revs[nid] = load_numbering(rec), int(rec.get("_rev", 0))
+        num = self.numberings[nid]
+        period = pattern_period(num["pattern"], day)
+        n = num["counters"].get(period, num["start"] - 1)
+        for _ in range(100_000):
+            n += 1
+            value = render_pattern(num["pattern"], n, day)
+            kid = key_id("serial", num["issuer"], value)
+            if kid not in self.key_puts and self.svc.ws.get(KIND["key"], kid) is None:
+                num["counters"][period] = n
+                return value, num["issuer"]
+        raise ValidationError(f"numbering {num['name']} found no free serial in 100,000 tries")  # pragma: no cover
+
     def check(self, kind: str, rid: str) -> None:
         rec = self.svc.ws.get(kind, rid)
         if rec is None:
@@ -143,6 +167,8 @@ class _Tx:
         out += [RecordPut(KIND["key"], kid, rec, expect_rev=0) for kid, rec in self.key_puts.items()]
         out += [RecordDelete(KIND["key"], kid, expect_rev=rev) for kid, rev in self.key_deletes.items()]
         out += self.extra_puts
+        out += [RecordPut(KIND["numbering"], nid, rec, expect_rev=self.numbering_revs[nid])
+                for nid, rec in self.numberings.items()]
         written = {(o.kind, o.id) for o in out}
         if len(written) != len(out):
             raise AssertionError("one action wrote the same record twice")  # pragma: no cover - a bug, never data
@@ -254,6 +280,29 @@ class UnitService:
         if not hits:
             raise NotFound(f"no build standard {ref!r}")
         return hits[0]
+
+    def numbering(self, ref: str) -> dict:
+        """A numbering by name or id."""
+        ref = (ref or "").strip()
+        nid = ref if is_id("numbering", ref) else numbering_id(ref)
+        rec = self.ws.get(KIND["numbering"], nid) if ref else None
+        if rec is None:
+            raise NotFound(f"no numbering {ref!r}")
+        return {**load_numbering(rec), "_rev": rec.get("_rev", 0)}
+
+    def numberings(self) -> list[dict]:
+        out = []
+        for rec in self.ws.list(KIND["numbering"]).values():
+            try:
+                out.append(load_numbering(rec))
+            except MalformedUnitRecord:
+                continue
+        return sorted(out, key=lambda n: norm(n["name"]))
+
+    def next_serial_preview(self, ref: str, day: str = "") -> str:
+        """The serial a registration would get now, without taking it."""
+        tx = _Tx(self, None, "", {})
+        return tx.next_serial(self.numbering(ref)["id"], day_of(check_date(day, "date")) if day else self.clock()[:10])[0]
 
     def describe(self, rid: str) -> str:
         """A short name for an id, for messages."""
@@ -369,8 +418,9 @@ class UnitService:
         for rid in replay:
             if is_id("standard", rid):
                 continue                                # a standard's id comes from the txid; its content was checked
-            if is_id("effectivity", rid) or is_id("compliance", rid):
-                rec = self.ws.get(KIND["effectivity" if is_id("effectivity", rid) else "compliance"], rid) or {}
+            kind = next((k for k in ("effectivity", "compliance", "numbering") if is_id(k, rid)), "")
+            if kind:
+                rec = self.ws.get(KIND[kind], rid) or {}
                 mine = [rec] if rec.get("txid") == txid else [s for s in rec.get("steps", ()) if s.get("txid") == txid]
                 if not mine:
                     raise ReplayRefused(f"txid {txid} was already used for a different action")
@@ -391,7 +441,7 @@ class UnitService:
     # ------------------------------------------------------------------------------------------- register
     def _spec(self, spec: dict, where: str) -> dict:
         allowed = {"identifiers", "class", "name", "model", "status", "project", "customer", "site", "location", "notes",
-                   "standard", "documents", "milestones"}
+                   "standard", "documents", "milestones", "serial_from"}
         unknown = set(spec) - allowed
         if unknown:
             raise ValidationError(f"{where}: unknown fields {sorted(unknown)}")
@@ -426,6 +476,12 @@ class UnitService:
             check_id("project", project, "project")
             if self.ws.get("project", project) is None:
                 raise ValidationError(f"{where}: no project {project}")
+        serial_from = spec.get("serial_from", "") or ""
+        if serial_from:
+            num = self.numbering(serial_from)
+            if any(i["scheme"] == "serial" and norm(i["issuer"]) == norm(num["issuer"]) for i in idents):
+                raise ValidationError(f"{where}: give a serial or a numbering to issue one, not both")
+            serial_from = num["id"]
         return {"identifiers": idents, "class": check_choice(spec.get("class", "product"), CLASSES, "class"),
                 "name": clean(spec.get("name", ""), "name", LIMITS["name"]), "model": model,
                 "status": check_choice(spec.get("status", "planned"), STATUSES, "status"), "project": project,
@@ -433,7 +489,7 @@ class UnitService:
                 "site": clean(spec.get("site", ""), "site", LIMITS["site"]),
                 "location": clean(spec.get("location", ""), "location", LIMITS["location"]),
                 "notes": clean(spec.get("notes", ""), "notes", LIMITS["notes"], multiline=True),
-                "standard": standard, "documents": docs, "milestones": milestones}
+                "standard": standard, "documents": docs, "milestones": milestones, "serial_from": serial_from}
 
     def register(self, txid: str | None = None, **spec: Any) -> dict:
         """Register one unit. ``spec``: identifiers ``[{scheme, value, issuer}]``, ``class``, name, model ``{part, number}``,
@@ -458,9 +514,13 @@ class UnitService:
                 tx.new_unit(uid)
                 body = {k: s[k] for k in ("class", "name", "model", "status", "project", "customer", "site", "location",
                                           "notes")}
-                body["identifiers"] = s["identifiers"]
+                body["identifiers"] = list(s["identifiers"])
+                if s["serial_from"]:
+                    day = day_of(meta["effective"] or s["milestones"].get("built", "") or tx.time)
+                    value, issuer = tx.next_serial(s["serial_from"], day)
+                    body["identifiers"].insert(0, {"scheme": "serial", "issuer": issuer, "value": value})
                 tx.emit(uid, "unit.registered", body)
-                for ident in s["identifiers"]:
+                for ident in body["identifiers"]:
                     tx.claim(ident["scheme"], ident["issuer"], ident["value"], uid)
                 # The configuration given at registration is the one it was built to: it dates from the build, when known.
                 as_built = meta["effective"] or s["milestones"].get("built", "")
@@ -604,6 +664,30 @@ class UnitService:
         return self.unit(unit_id)
 
     # ---------------------------------------------------------------------------------------- build standards
+    def create_numbering(self, name: str, pattern: str, *, issuer: str = "", start: int = 1, txid: str | None = None) -> dict:
+        """A numbering that issues serials (docs/UNITS.md section 11). Its name is unique."""
+        name = clean(name, "name", 64, required=True)
+        pattern = check_pattern(pattern)
+        issuer = clean(issuer, "issuer", LIMITS["issuer"])
+        if not isinstance(start, int) or isinstance(start, bool) or start < 0:
+            raise ValidationError("start must be a whole number, 0 or more")
+        nid = numbering_id(name)
+        replaying = txid is not None and self.ws.transaction_outcome(txid)["state"] == "committed"
+        if not replaying and self.ws.get(KIND["numbering"], nid) is not None:
+            raise ValidationError(f"there is already a numbering {name!r}")
+        meta = self._meta()
+
+        def build(tx: _Tx) -> dict:
+            rec = {"schema": 1, "id": nid, "name": name, "pattern": pattern, "issuer": issuer, "start": start, "counters": {},
+                   "created": tx.time, "created_by": tx.actor, "txid": tx.txid, "input": tx.input}
+            load_numbering(rec)
+            tx.extra_puts.append(RecordPut(KIND["numbering"], nid, rec, expect_rev=0))
+            return rec
+
+        self._run("unit.numbering.new", txid, {"name": name, "pattern": pattern, "issuer": issuer, "start": start}, [nid],
+                  build, meta)
+        return self.numbering(nid)
+
     def create_standard(self, number: str, title: str, documents: dict[str, str], *, model: dict | None = None,
                         based_on: str = "", change: str = "", notes: str = "", allow_unreleased: bool = False,
                         txid: str | None = None) -> dict:

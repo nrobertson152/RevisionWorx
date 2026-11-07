@@ -14,6 +14,9 @@ The first release. Everything below is new.
   a time, and its own history says where it has been. `revisionworx unit ...`; `revisionworx link units` and `link unit` for
   other programs; existing registers and FieldWorx asset registers import all at once or not at all. See
   [docs/UNITS.md](docs/UNITS.md).
+- **Serial numbering.** `revisionworx unit numbering new NH --pattern "NH-{yy}-{seq:4}"`, then `unit new --serial-from NH`:
+  the next serial of the unit's year (or month) is issued and claimed in the same step as the registration, so two people never
+  get the same one, and a serial already in use is skipped.
 - **Engineering changes reach units.** Beside an implemented ECO, record once which units it reaches: future production only,
   a required or optional retrofit, one unit's own modification, or a documentation correction. Candidates are the units that
   still have the revision it replaces; a scope picks them by customer, serial range, build standard or by name. Each unit in a

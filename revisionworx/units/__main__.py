@@ -14,6 +14,8 @@
     fit REF POSITION (--component REF | --part-number PN) [--serial S] [--lot L] [--replace [--disposition D]]
     remove REF POSITION [--disposition D]                               void REF N [N ...] --reason R
     history REF                                                         where-used ...        verify
+    numbering new NAME --pattern 'NH-{yy}-{seq:4}' [--issuer I]       numbering list | numbering next NAME
+    new --serial-from NAME ...  (the next serial of a numbering, taken in the same entry)
     change candidates|status ECO          change decide ECO --kind K [--standard STD] [--scope RULE --value V | --unit REF]
     change add ECO REF                    change set REF ECO STATE      change install|verify|reverse REF ECO
     compliance [REF]                      (no REF: every unit out of compliance with a required change; exit 1 if any)
@@ -64,6 +66,7 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
 
     s = sub.add_parser("new", help="register a unit")
     s.add_argument("--serial"); s.add_argument("--issuer", default="", help="who issued the serial (default: you)")
+    s.add_argument("--serial-from", default="", metavar="NUMBERING", help="issue the next serial from this numbering")
     s.add_argument("--tag"); s.add_argument("--tag-issuer", default="", help="whose tag it is, e.g. the customer")
     s.add_argument("--other", help="another code"); s.add_argument("--name", default="")
     s.add_argument("--model", default="", help="model or part number"); s.add_argument("--class", dest="cls", default="product",
@@ -101,6 +104,15 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s.add_argument("ref"); s.add_argument("milestone", choices=MILESTONES)
     s.add_argument("--on", default="", help="the date (empty when unknown)"); _common(s)
     s = sub.add_parser("note", help="add a note to a unit's history"); s.add_argument("ref"); s.add_argument("text"); _common(s)
+
+    nb = sub.add_parser("numbering", help="numberings that issue serials").add_subparsers(dest="sub", required=True)
+    s = nb.add_parser("new", help="a numbering, e.g. NH --pattern 'NH-{yy}-{seq:4}'")
+    s.add_argument("name"); s.add_argument("--pattern", required=True)
+    s.add_argument("--issuer", default="", help="whose serials these are (default: yours)")
+    s.add_argument("--start", type=int, default=1, help="the first number of each run (default 1)")
+    s = nb.add_parser("list"); s.add_argument("--json", action="store_true")
+    s = nb.add_parser("next", help="the serial the next unit would get, without taking it")
+    s.add_argument("name"); s.add_argument("--on", default="", help="for a unit built on this date")
 
     st = sub.add_parser("standard", help="build standards").add_subparsers(dest="sub", required=True)
     s = st.add_parser("new", help="a named set of document revisions, written once")
@@ -275,7 +287,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     a = build_parser(prog or "python -m revisionworx.units").parse_args(argv)
     out = sys.stdout
     sub = getattr(a, "sub", None)
-    writable = a.cmd not in READS and not (a.cmd == "standard" and sub in ("list", "show")) and \
+    writable = a.cmd not in READS and not (a.cmd in ("standard", "numbering") and sub in ("list", "show", "next")) and \
         not (a.cmd == "import" and a.dry_run) and not (a.cmd == "change" and sub in CHANGE_READS)
     try:
         with Workspace.open(Path(a.workspace), writable=writable) as ws:
@@ -341,6 +353,20 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
         return _standard(a, ws, svc, out)
     if cmd == "change":
         return _change(a, ws, svc, out)
+    if cmd == "numbering":
+        if a.sub == "new":
+            n = svc.create_numbering(a.name, a.pattern, issuer=a.issuer, start=a.start)
+            out.write(f"numbering {n['name']}: next serial {svc.next_serial_preview(n['id'])}\n")
+        elif a.sub == "next":
+            out.write(svc.next_serial_preview(a.name, a.on) + "\n")
+        else:
+            rows = svc.numberings()
+            if a.json:
+                out.write(json.dumps({"numberings": rows}, indent=1, ensure_ascii=False) + "\n")
+            for n in ([] if a.json else rows):
+                out.write(f"{n['name']:<16} {n['pattern']:<24} {n['issuer'] or '(yours)':<16} next "
+                          f"{svc.next_serial_preview(n['id'])}\n")
+        return 0
     if cmd == "compliance":
         return _compliance(a, svc, out)
     if cmd == "import":
@@ -411,8 +437,9 @@ def _new(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
         idents.append({"scheme": "tag", "value": a.tag, "issuer": a.tag_issuer})
     if a.other:
         idents.append({"scheme": "other", "value": a.other, "issuer": ""})
-    if not idents:
-        raise ValidationError("give the unit a --serial, --tag or --other code, so it can be found")
+    if not idents and not a.serial_from:
+        raise ValidationError("give the unit a --serial (or --serial-from a numbering), --tag or --other code, so it can be "
+                              "found")
     docs = {}
     for ref in a.doc:
         did, rid = svc.doc_rev(ref)
@@ -421,7 +448,7 @@ def _new(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
             "status": a.status, "project": svc.project_id(a.project) if a.project else "", "customer": a.customer,
             "site": a.site, "location": a.location, "notes": a.notes,
             "standard": svc.resolve_standard(a.standard)["id"] if a.standard else "", "documents": docs,
-            "milestones": {m: getattr(a, m) for m in MILESTONES if getattr(a, m)}}
+            "milestones": {m: getattr(a, m) for m in MILESTONES if getattr(a, m)}, "serial_from": a.serial_from}
     u = svc.register(**spec, **_meta(ws, a))
     if a.json:
         out.write(json.dumps(query.unit_detail(svc, u), indent=1, ensure_ascii=False) + "\n")

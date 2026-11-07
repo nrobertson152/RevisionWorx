@@ -11,8 +11,8 @@ from typing import Any, Callable
 from .. import documents as D
 from . import history as H
 from .model import (REQUIRED_KINDS, MalformedUnitRecord, NotFound, PERMANENT_SCHEMES, STANDARD_SCHEME, check_date, day_of,
-                    effectivity_digest, is_id, key_id, load_compliance, load_effectivity, load_event, load_key, load_standard,
-                    load_unit, norm, position_key, standard_digest, unit_label)
+                    effectivity_digest, is_id, key_id, load_compliance, load_effectivity, load_event, load_key, load_numbering,
+                    load_standard, load_unit, norm, position_key, standard_digest, unit_label)
 from .service import KIND, UnitService
 
 
@@ -417,6 +417,12 @@ def verify(svc: UnitService) -> list[dict]:
         if uid:
             problem("unrecorded-event", uid, f"events for unit {uid}, which has no record")
     _verify_changes(ws, units, standards, problem)
+    for nid, rec in ws.list(KIND["numbering"]).items():
+        try:
+            if load_numbering(rec)["id"] != nid:
+                problem("malformed", nid, "the numbering is filed under another id")
+        except MalformedUnitRecord as exc:
+            problem("malformed", nid, str(exc))
     return sorted(out, key=lambda p: (p["code"], p["subject"]))
 
 

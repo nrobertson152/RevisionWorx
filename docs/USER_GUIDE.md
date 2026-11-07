@@ -124,6 +124,11 @@ RevisionWorx records which revisions describe each unit from the day it was buil
 document in the project (`--doc FRM-200@A` names them one by one). A build standard never changes; a new set is a new standard.
 
 **Registering units.** `revisionworx unit new --serial NH-26-0001 --model HPU-75 --standard HPU-75-A --project J-2001 --built 2026-03-14 --status built`.
+To have RevisionWorx issue serials, make a numbering once, `revisionworx unit numbering new NH --pattern "NH-{yy}-{seq:4}"`, and
+register with `--serial-from NH` instead of `--serial`: the next number of the unit's year is taken in the same step, so two people
+never get the same one. `{seq:4}` is the number padded to 4 digits; `{yyyy}`, `{yy}` and `{mm}` come from the built date (else
+today), and numbers start again each year (or month) the pattern shows. `unit numbering next NH` shows the next serial without
+taking it.
 A serial from another maker gets `--issuer Parker`; a customer's tag is `--tag P-101A --tag-issuer "Acme Refinery"`. A serial can
 belong to one unit only, and so can a tag, until it's retired (`unit id retire`) and moves to the machine that replaces it.
 An existing register imports in one go: `revisionworx unit import register.csv --dry-run` lists every problem and writes

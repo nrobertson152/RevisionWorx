@@ -60,7 +60,7 @@ LIMITS = {"name": 200, "model": 100, "customer": 200, "site": 200, "location": 2
 
 ID_PATTERNS = {"unit": "unt", "event": "uev", "key": "uky", "standard": "bst", "project": "prj", "document": "doc",
                "revision": "rev", "part": "prt", "change": "eco", "fieldworx": "ast", "effectivity": "uef",
-               "compliance": "ucp"}
+               "compliance": "ucp", "numbering": "usq"}
 _ID_RES = {k: re.compile(rf"^{p}_[0-9a-f]{{32}}$") for k, p in ID_PATTERNS.items()}
 _TXID_RE = re.compile(r"^[0-9a-f]{32}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -221,6 +221,49 @@ def compliance_id(change_id: str, unit_id: str) -> str:
     """One compliance record per change order and unit."""
     h = hashlib.sha256(f"revisionworx/units/compliance/v1\0{change_id}\0{unit_id}".encode("ascii")).hexdigest()
     return f"ucp_{h[:32]}"
+
+
+def numbering_id(name: str) -> str:
+    """A numbering's id comes from its name, so two can't share one."""
+    return "usq_" + hashlib.sha256(f"revisionworx/units/numbering/v1\0{norm(name)}".encode("utf-8")).hexdigest()[:32]
+
+
+_TOKEN_RE = re.compile(r"\{(seq(?::(\d{1,2}))?|yyyy|yy|mm)\}")
+
+
+def check_pattern(pattern: Any) -> str:
+    """A serial pattern: exactly one ``{seq}``/``{seq:N}`` (N 1-12), any of ``{yyyy}``, ``{yy}``, ``{mm}``, no other braces, and
+    never more than 100 characters once filled."""
+    p = clean(pattern, "pattern", 200, required=True)
+    seqs = [m for m in _TOKEN_RE.finditer(p) if m.group(1).startswith("seq")]
+    if len(seqs) != 1:
+        raise ValidationError("a pattern has exactly one {seq} or {seq:N}, e.g. NH-{yy}-{seq:4}")
+    width = int(seqs[0].group(2) or 1)
+    if not 1 <= width <= 12:
+        raise ValidationError("{seq:N} pads to 1 to 12 digits")
+    rest = _TOKEN_RE.sub("", p)
+    if "{" in rest or "}" in rest:
+        raise ValidationError("a pattern's only braces are {seq}, {seq:N}, {yyyy}, {yy} and {mm}")
+    longest = len(_TOKEN_RE.sub(lambda m: "x" * {"yyyy": 4, "yy": 2, "mm": 2}.get(m.group(1), 12), p))
+    if longest > LIMITS["value"]:
+        raise ValidationError(f"this pattern can give serials longer than {LIMITS['value']} characters")
+    return p
+
+
+def pattern_period(pattern: str, day: str) -> str:
+    """Which run a number belongs to: the year (and month) the pattern shows, or one run."""
+    tokens = {m.group(1) for m in _TOKEN_RE.finditer(pattern)}
+    year = day[:4] if tokens & {"yyyy", "yy"} else ""
+    return year + (f"-{day[5:7]}" if year and "mm" in tokens else "")
+
+
+def render_pattern(pattern: str, n: int, day: str) -> str:
+    def fill(m: re.Match) -> str:
+        tok = m.group(1)
+        if tok.startswith("seq"):
+            return str(n).zfill(int(m.group(2) or 1))
+        return {"yyyy": day[:4], "yy": day[2:4], "mm": day[5:7]}[tok]
+    return _TOKEN_RE.sub(fill, pattern)
 
 
 def derived_id(prefix: str, txid: str, salt: str) -> str:
@@ -568,6 +611,33 @@ def load_compliance(record: Any) -> dict:
                 raise MalformedUnitRecord(f"{what}: {a['state']} can't become {b['state']}")
         if r["state"] != steps[-1]["state"]:
             raise MalformedUnitRecord(f"{what}: its state isn't its last step's")
+    except ValidationError as exc:
+        raise MalformedUnitRecord(f"{what}: {exc}") from None
+    return {k: v for k, v in r.items() if k != "_rev"}
+
+
+NUMBERING_FIELDS = {"schema", "id", "name", "pattern", "issuer", "start", "counters", "created", "created_by", "txid",
+                    "input"}
+
+
+def load_numbering(record: Any) -> dict:
+    r = _fields(record, NUMBERING_FIELDS, "numbering")
+    what = f"numbering {r.get('name')!r}"
+    try:
+        if not is_id("numbering", r["id"]) or r["id"] != numbering_id(_str(r["name"], f"{what} name")):
+            raise MalformedUnitRecord(f"{what}: its id isn't the one its name gives")
+        check_pattern(r["pattern"])
+        for k in ("issuer", "created", "txid", "input"):
+            _str(r[k], f"{what} {k}")
+        _int(r["start"], f"{what} start", 0)
+        if not isinstance(r["created_by"], dict):
+            raise MalformedUnitRecord(f"{what}: created_by must be an object")
+        if not isinstance(r["counters"], dict):
+            raise MalformedUnitRecord(f"{what}: counters must be an object")
+        for period, n in r["counters"].items():
+            if not re.match(r"^(\d{4}(-\d{2})?)?$", period):
+                raise MalformedUnitRecord(f"{what}: counter period {period!r} isn't a year or a month")
+            _int(n, f"{what} counter", 0)
     except ValidationError as exc:
         raise MalformedUnitRecord(f"{what}: {exc}") from None
     return {k: v for k, v in r.items() if k != "_rev"}
