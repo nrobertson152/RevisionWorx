@@ -51,16 +51,20 @@ TRANSITIONS = {
             "installed": ("verified", "reversed"), "verified": ("reversed",)},
 }
 NEEDS_REASON = ("deferred", "declined", "not-applicable", "reversed")
+DEVIATION_KINDS = ("deviation", "concession")       # permission before the work; acceptance of units already made
+DEVIATION_STATES = ("in-effect", "cleared", "not-used")
+DEVIATION_TRANSITIONS = {"in-effect": ("cleared", "not-used")}   # cleared: a temporary one, the unit conforms again
 DONE_STATES = ("verified", "not-applicable")            # a required change in any other state is outstanding
 
 LIMITS = {"name": 200, "model": 100, "customer": 200, "site": 200, "location": 200, "notes": 4000, "value": 100,
           "issuer": 200, "position": 64, "serial": 100, "lot": 100, "reason": 2000, "text": 4000, "evidence": 50,
           "evidence_ref": 200, "evidence_label": 200, "standard_number": 64, "standard_title": 200,
-          "standard_documents": 2000}
+          "standard_documents": 2000, "deviation_number": 64, "deviation_title": 200, "departure": 4000,
+          "deviation_documents": 200, "deviation_units": 10000}
 
 ID_PATTERNS = {"unit": "unt", "event": "uev", "key": "uky", "standard": "bst", "project": "prj", "document": "doc",
                "revision": "rev", "part": "prt", "change": "eco", "fieldworx": "ast", "effectivity": "uef",
-               "compliance": "ucp", "numbering": "usq"}
+               "compliance": "ucp", "numbering": "usq", "deviation": "udv", "devunit": "udu"}
 _ID_RES = {k: re.compile(rf"^{p}_[0-9a-f]{{32}}$") for k, p in ID_PATTERNS.items()}
 _TXID_RE = re.compile(r"^[0-9a-f]{32}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -225,6 +229,17 @@ def compliance_id(change_id: str, unit_id: str) -> str:
     """One compliance record per change order and unit."""
     h = hashlib.sha256(f"revisionworx/units/compliance/v1\0{change_id}\0{unit_id}".encode("ascii")).hexdigest()
     return f"ucp_{h[:32]}"
+
+
+def deviation_id(number: str) -> str:
+    """A deviation's or concession's id comes from its number, so two can't share one."""
+    return "udv_" + hashlib.sha256(f"revisionworx/units/deviation-id/v1\0{norm(number)}".encode("utf-8")).hexdigest()[:32]
+
+
+def devunit_id(deviation: str, unit_id: str) -> str:
+    """One record per deviation and unit it covers."""
+    h = hashlib.sha256(f"revisionworx/units/deviation-unit/v1\0{deviation}\0{unit_id}".encode("ascii")).hexdigest()
+    return f"udu_{h[:32]}"
 
 
 def numbering_id(name: str) -> str:
@@ -625,6 +640,93 @@ def load_compliance(record: Any) -> dict:
             raise MalformedUnitRecord(f"{what}: a {'required' if r['required'] else 'optional'} change starts {first}")
         for a, b in zip(steps, steps[1:]):
             if b["state"] not in TRANSITIONS[r["required"]].get(a["state"], ()):
+                raise MalformedUnitRecord(f"{what}: {a['state']} can't become {b['state']}")
+        if r["state"] != steps[-1]["state"]:
+            raise MalformedUnitRecord(f"{what}: its state isn't its last step's")
+    except ValidationError as exc:
+        raise MalformedUnitRecord(f"{what}: {exc}") from None
+    return {k: v for k, v in r.items() if k != "_rev"}
+
+
+DEVIATION_DOMAIN = "revisionworx/units/deviation/v1"
+DEVIATION_FIELDS = {"schema", "id", "number", "kind", "title", "departure", "documents", "units", "temporary", "until",
+                    "reason", "approved", "approved_by", "txid", "input", "digest"}
+DEVUNIT_FIELDS = {"schema", "id", "deviation", "unit", "state", "steps", "created", "updated"}
+
+
+def deviation_digest(dev: dict) -> str:
+    return digest(DEVIATION_DOMAIN, {k: v for k, v in dev.items() if k not in ("digest", "_rev")})
+
+
+def load_deviation(record: Any) -> dict:
+    """A deviation or concession, refused unless it has exactly the documented shape (its digest is checked by verify)."""
+    r = _fields(record, DEVIATION_FIELDS, "deviation")
+    what = f"deviation {r.get('number') or r.get('id')!r}"
+    try:
+        if not is_id("deviation", r["id"]) or r["id"] != deviation_id(_str(r["number"], f"{what} number")):
+            raise MalformedUnitRecord(f"{what}: its id isn't the one its number gives")
+        clean(r["number"], "number", LIMITS["deviation_number"], required=True)
+        check_choice(r["kind"], DEVIATION_KINDS, "kind")
+        clean(r["title"], "title", LIMITS["deviation_title"], required=True)
+        clean(r["departure"], "departure", LIMITS["departure"], multiline=True, required=True)
+        clean(r["reason"], "reason", LIMITS["reason"], multiline=True, required=True)
+        docs = r["documents"]
+        if not isinstance(docs, list) or len(docs) > LIMITS["deviation_documents"]:
+            raise MalformedUnitRecord(f"{what}: documents must be a list of at most {LIMITS['deviation_documents']}")
+        for row in docs:
+            if not isinstance(row, dict) or set(row) != {"document", "revision"}:
+                raise MalformedUnitRecord(f"{what}: a document row has the wrong fields")
+            check_id("document", row["document"], "document")
+            check_id("revision", row["revision"], "revision")
+        if len({row["document"] for row in docs}) != len(docs):
+            raise MalformedUnitRecord(f"{what}: a document is named twice")
+        units = r["units"]
+        if not isinstance(units, list) or not units or len(units) > LIMITS["deviation_units"] \
+                or not all(is_id("unit", u) for u in units) or len(set(units)) != len(units):
+            raise MalformedUnitRecord(f"{what}: units must list the unit ids it covers, each once")
+        if not isinstance(r["temporary"], bool):
+            raise MalformedUnitRecord(f"{what}: temporary must be true or false")
+        until = _str(r["until"], f"{what} until")
+        if until and (not r["temporary"] or not _DATE_RE.match(until)):
+            raise MalformedUnitRecord(f"{what}: only a temporary one has an end date, as YYYY-MM-DD")
+        for k in ("approved", "txid", "input", "digest"):
+            _str(r[k], f"{what} {k}")
+        if not isinstance(r["approved_by"], dict):
+            raise MalformedUnitRecord(f"{what}: approved_by must be an object")
+    except ValidationError as exc:
+        raise MalformedUnitRecord(f"{what}: {exc}") from None
+    return {k: v for k, v in r.items() if k != "_rev"}
+
+
+def load_devunit(record: Any) -> dict:
+    """Whether one deviation is in effect on one unit. Its steps must be allowed transitions and its state the last step's."""
+    r = _fields(record, DEVUNIT_FIELDS, "deviation on a unit")
+    what = f"deviation record {r.get('id')!r}"
+    try:
+        if not is_id("devunit", r["id"]) or not is_id("deviation", r["deviation"]) or not is_id("unit", r["unit"]):
+            raise MalformedUnitRecord(f"{what}: bad id")
+        if r["id"] != devunit_id(r["deviation"], r["unit"]):
+            raise MalformedUnitRecord(f"{what}: its id isn't the one its deviation and unit give")
+        check_choice(r["state"], DEVIATION_STATES, "state")
+        _str(r["created"], f"{what} created"); _str(r["updated"], f"{what} updated")
+        steps = r["steps"]
+        if not isinstance(steps, list) or not steps:
+            raise MalformedUnitRecord(f"{what}: steps must list at least one step")
+        for i, s in enumerate(steps):
+            if not isinstance(s, dict) or set(s) != STEP_FIELDS:
+                raise MalformedUnitRecord(f"{what}: step {i + 1} has the wrong fields")
+            check_choice(s["state"], DEVIATION_STATES, "state")
+            check_choice(s["basis"], BASES, "basis")
+            for k in ("time", "effective", "reason", "txid", "input"):
+                _str(s[k], f"{what} step {k}")
+            if not isinstance(s["actor"], dict):
+                raise MalformedUnitRecord(f"{what}: step actor must be an object")
+            if not isinstance(s["events"], list) or not all(is_id("event", e) for e in s["events"]):
+                raise MalformedUnitRecord(f"{what}: step events must list unit event ids")
+        if steps[0]["state"] != "in-effect":
+            raise MalformedUnitRecord(f"{what}: it starts in effect")
+        for a, b in zip(steps, steps[1:]):
+            if b["state"] not in DEVIATION_TRANSITIONS.get(a["state"], ()):
                 raise MalformedUnitRecord(f"{what}: {a['state']} can't become {b['state']}")
         if r["state"] != steps[-1]["state"]:
             raise MalformedUnitRecord(f"{what}: its state isn't its last step's")

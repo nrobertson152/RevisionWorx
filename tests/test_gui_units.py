@@ -87,6 +87,34 @@ def test_a_unit_still_on_the_old_revision_says_a_later_one_is_released(plant):
     assert sections["Engineering changes"] == ["ECO-0001 Thicker frame: pending (outstanding); FRM-200 rev A to B"]
 
 
+def test_a_units_detail_shows_its_deviations_and_says_when_one_is_past_its_end(plant, tmp_path):
+    from revisionworx.units import deviation
+    with Workspace.open(tmp_path / "share", writable=True) as ws:
+        svc = units.service_for(ws)
+        unit_id = svc.resolve("NH-26-0001")["id"]
+        [rec] = [r for r in effect.all_compliance(svc)[0] if r["unit"] == unit_id]
+        effect.verify(svc, "NH-26-0001", rec["change"])                   # nothing else due on it
+        deviation.approve(svc, "concession", title="Weld undercut", departure="W4 undercut 0.6 mm",
+                          reason="load test passed", units=["NH-26-0001"])
+        deviation.approve(svc, "deviation", title="PMP-11 for PMP-10", departure="P1 is a PMP-11", reason="shortage",
+                          units=["NH-26-0001"], temporary=True, until="2020-01-31")
+
+    def sections():
+        found = unit_sections(plant.unit_detail(unit_id))
+        return dict((h or f"_{i}", lines) for i, (h, lines) in enumerate(found))
+    first = sections()
+    assert first["_1"] == ["1 temporary deviation past its end date on this unit: DEV-0001."]
+    assert first["Deviations and concessions"] == [
+        "DEV-0001 deviation: PMP-11 for PMP-10: in effect (temporary, until 2020-01-31) — PAST ITS END DATE. P1 is a PMP-11",
+        "CON-0001 concession: Weld undercut: in effect (permanent). W4 undercut 0.6 mm"]
+    with Workspace.open(tmp_path / "share", writable=True) as ws:
+        deviation.clear(units.service_for(ws), "NH-26-0001", "DEV-0001", reason="PMP-10 fitted")
+    after = sections()
+    assert after["_1"] == ["Nothing is due on this unit. It differs from its drawings where CON-0001 allows it."]
+    assert after["Deviations and concessions"][0] == "CON-0001 concession: Weld undercut: in effect (permanent). W4 undercut 0.6 mm"
+    assert after["Deviations and concessions"][1].startswith("DEV-0001 deviation: PMP-11 for PMP-10: cleared 20")
+
+
 @pytest.mark.qt
 def test_the_window_finds_filters_and_closes_with_its_workspace(plant):
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")

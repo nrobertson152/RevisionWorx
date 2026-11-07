@@ -180,7 +180,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------------------------- commands
-FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records"]       # additive commands since API 1: ask before relying on one
+FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations"]       # additive commands since API 1: ask before relying on one
 
 
 def version() -> dict:
@@ -450,9 +450,10 @@ def list_units(workspace: Path | None = None, project: str | None = None, text: 
             pid = _find_project(ws, project)["id"] if project else ""
             units = query.search(svc, text, pid)
             if detail:
+                from .units.deviation import DeviationIndex
                 from .units.effect import ChangeIndex
-                index = ChangeIndex(svc)
-                rows = [query.unit_detail(svc, u, changes=index) for u in units]
+                index, devs = ChangeIndex(svc), DeviationIndex(svc)
+                rows = [query.unit_detail(svc, u, changes=index, deviations=devs) for u in units]
             else:
                 rows = [query.unit_summary(u) for u in units]
         except UnitError as exc:

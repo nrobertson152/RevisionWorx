@@ -145,7 +145,7 @@ def applicable_documents(svc: UnitService, unit: dict, names: _Names | None = No
 
 # ------------------------------------------------------------------------------------------------- one unit
 def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int | None = None, on: str = "",
-                changes: Any = None) -> dict:
+                changes: Any = None, deviations: Any = None) -> dict:
     """Everything a person or another program needs about one unit, in the shape ``revisionworx link unit`` answers
     (docs/INTEGRATION.md). ``at`` (an event number) or ``on`` (a date) answer for that point instead of now."""
     names = _Names(svc)
@@ -184,8 +184,10 @@ def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int |
     if at or on:
         out["as_of"] = {"event": at} if at else {"date": on, "late": late}
     if not (at or on):
+        from .deviation import unit_deviations
         from .effect import unit_changes
         out["changes"] = unit_changes(svc, shown["id"], names, changes)
+        out["deviations"] = unit_deviations(svc, shown["id"], names, deviations)
     if history:
         voided = H.voided_by(events)
         out["history"] = [{"n": e["n"], "type": e["type"], "summary": H.summary(e, names), "effective": e["effective"],
@@ -417,6 +419,7 @@ def verify(svc: UnitService) -> list[dict]:
         if uid:
             problem("unrecorded-event", uid, f"events for unit {uid}, which has no record")
     _verify_changes(ws, units, standards, problem)
+    _verify_deviations(ws, units, problem)
     for nid, rec in ws.list(KIND["numbering"]).items():
         try:
             if load_numbering(rec)["id"] != nid:
@@ -475,3 +478,55 @@ def _verify_changes(ws: Any, units: dict[str, dict], standards: dict[str, dict],
                     problem("compliance-invalid", cid, f"{label}: step {step['state']} names event {ev_id}, which isn't on the unit")
                 elif ev.get("change") != c["change"]:
                     problem("compliance-invalid", cid, f"{label}: event {ev.get('n')} doesn't cite the change its step is for")
+
+
+def _verify_deviations(ws: Any, units: dict[str, dict], problem: Callable[[str, str, str], None]) -> None:
+    """Deviations and concessions, and their records on units (docs/UNITS.md section 12)."""
+    from .model import deviation_digest, deviation_id, load_deviation, load_devunit
+    devs: dict[str, dict] = {}
+    for did, rec in ws.list(KIND["deviation"]).items():
+        try:
+            dev = load_deviation(rec)
+        except MalformedUnitRecord as exc:
+            problem("malformed", did, str(exc))
+            continue
+        devs[did] = dev
+        if dev["id"] != did or did != deviation_id(dev["number"]) or dev["digest"] != deviation_digest(dev):
+            problem("deviation-altered", did, f"{dev['number']} doesn't match its digest or its number")
+        for uid in dev["units"]:
+            if uid not in units:
+                problem("dangling-reference", did, f"{dev['number']} names unit {uid}, which doesn't exist")
+        for row in dev["documents"]:
+            r = ws.get("revision", row["revision"])
+            if r is None or r.get("document_id") != row["document"]:
+                problem("dangling-reference", did, f"{dev['number']} names {row['document']}@{row['revision']}, which "
+                                                   "doesn't exist")
+    covered: set[tuple[str, str]] = set()
+    for rid, rec in ws.list(KIND["devunit"]).items():
+        try:
+            r = load_devunit(rec)
+        except MalformedUnitRecord as exc:
+            problem("deviation-invalid", rid, str(exc))
+            continue
+        covered.add((r["deviation"], r["unit"]))
+        u = units.get(r["unit"])
+        label = unit_label(u) if u else r["unit"]
+        dev = devs.get(r["deviation"])
+        if r["id"] != rid:
+            problem("deviation-invalid", rid, "the record is filed under another id")
+        if u is None:
+            problem("dangling-reference", rid, f"a deviation record names unit {r['unit']}, which doesn't exist")
+        if dev is None:
+            problem("deviation-invalid", rid, f"{label}: a record of deviation {r['deviation']}, which doesn't exist")
+        elif r["state"] == "cleared" and not dev["temporary"]:
+            problem("deviation-invalid", rid, f"{label}: {dev['number']} is permanent, but it is recorded as cleared")
+        for step in r["steps"]:
+            for ev_id in step["events"]:
+                ev = ws.get(KIND["event"], ev_id)
+                if ev is None or ev.get("unit") != r["unit"]:
+                    problem("deviation-invalid", rid, f"{label}: step {step['state']} names event {ev_id}, which isn't on "
+                                                      "the unit")
+    for did, dev in devs.items():
+        for uid in dev["units"]:
+            if (did, uid) not in covered:
+                problem("deviation-invalid", did, f"{dev['number']} covers {uid}, which has no record of it")

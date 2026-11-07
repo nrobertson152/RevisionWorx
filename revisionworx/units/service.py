@@ -25,7 +25,7 @@ from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_
                     position_key, render_pattern, standard_digest, unit_label)
 
 KIND = {"unit": "unit", "event": "unitevt", "key": "unitkey", "standard": "buildstd", "effectivity": "uniteff",
-        "compliance": "unitcmp", "numbering": "unitseq"}
+        "compliance": "unitcmp", "numbering": "unitseq", "deviation": "unitdev", "devunit": "unitdvu"}
 for _kind in KIND.values():
     register_kind(_kind)
 
@@ -444,7 +444,7 @@ class UnitService:
         for rid in replay:
             if is_id("standard", rid):
                 continue                                # a standard's id comes from the txid; its content was checked
-            kind = next((k for k in ("effectivity", "compliance", "numbering") if is_id(k, rid)), "")
+            kind = next((k for k in ("effectivity", "compliance", "numbering", "deviation", "devunit") if is_id(k, rid)), "")
             if kind:
                 rec = self.ws.get(KIND[kind], rid) or {}
                 mine = [rec] if rec.get("txid") == txid else [s for s in rec.get("steps", ()) if s.get("txid") == txid]

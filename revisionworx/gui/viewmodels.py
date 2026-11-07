@@ -1153,12 +1153,20 @@ def unit_sections(d: dict) -> list[tuple[str, list[str]]]:
     head += [f"{name.capitalize()}: {m['date'] or 'date unknown'}" for name, m in d["milestones"].items()]
     due = [c for c in d.get("changes", []) if c["outstanding"]]
     flagged = [r for r in d["documents"] if r["flags"]]
+    late = [x for x in d.get("deviations", []) if x["overdue"]]
+    allowed = [x for x in d.get("deviations", []) if x["in_effect"]]
     if due:
         sentence = f"{len(due)} required engineering change{'s' if len(due) != 1 else ''} not finished on this unit."
+    elif late:
+        sentence = (f"{len(late)} temporary deviation{'s' if len(late) != 1 else ''} past {'its' if len(late) == 1 else 'their'}"
+                    f" end date on this unit: {', '.join(x['number'] for x in late)}.")
     elif flagged:
         sentence = f"Up to date with its changes; {len(flagged)} drawing{'s' if len(flagged) != 1 else ''} flagged below."
     else:
         sentence = "Nothing is due on this unit."
+    if allowed and not late:
+        sentence += (f" It differs from its drawings where {', '.join(x['number'] for x in allowed)} "
+                     f"allow{'s' if len(allowed) == 1 else ''} it.")
     sections: list[tuple[str, list[str]]] = [(f"{d['label']}  {d['name']}".strip(), head), ("", [sentence])]
     std = d.get("standard")
     docs = [f"Build standard: {std['number']} {std['title']}".strip()] if std else []
@@ -1186,6 +1194,18 @@ def unit_sections(d: dict) -> list[tuple[str, list[str]]]:
             lines.append(f"{c['number']} {c['title']}: {c['state'].replace('-', ' ')}"
                          + (" (outstanding)" if c["outstanding"] else "") + (f"; {moves}" if moves else ""))
         sections.append(("Engineering changes", lines))
+    if d.get("deviations"):
+        lines = []
+        for x in d["deviations"]:
+            if x["state"] == "in-effect":
+                when = ("temporary" + (f", until {x['until']}" if x["until"] else "")) if x["temporary"] else "permanent"
+                state = f"in effect ({when})" + (" — PAST ITS END DATE" if x["overdue"] else "")
+            else:
+                state = x["state"].replace("-", " ") + f" {x['since']}"
+            docs = ", ".join(f"{r['number']} rev {r['label']}" for r in x["documents"])
+            lines.append(f"{x['number']} {x['kind']}: {x['title']}: {state}" + (f"; from {docs}" if docs else "")
+                         + f". {x['departure']}")
+        sections.append(("Deviations and concessions", lines))
     if d["components"]:
         sections.append(("Fitted", [f"{c['position']}: {c['label'] or c['number'] or c['part']}"
                                     + "".join(f" {k} {c[k]}" for k in ("serial", "lot") if c[k]) for c in d["components"]]))
