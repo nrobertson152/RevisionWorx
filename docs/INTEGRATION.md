@@ -11,7 +11,8 @@ kind)` with a message written for your user.
 
 **Version:** `API_VERSION = 1` (`revisionworx link version`). It increments only on incompatible changes. New
 fields may be added to answers at any time, so ignore fields you do not know. Commands added since API 1 are named in
-`version`'s `features` (today `["units", "unit-changes", "pdf-derivatives", "unit-records"]`): check for one before using it.
+`version`'s `features` (today `["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations"]`): check for one
+before using it.
 
 ## Safety
 
