@@ -37,6 +37,7 @@ Ctrl+K\tCheck out the selected document
 Ctrl+Shift+K\tCheck in the selected document
 Ctrl+Shift+C\tCopy the selected document's file path
 Ctrl+Shift+M\tMy checkouts
+Ctrl+Shift+U\tUnits: what was built, what's due on it
 Enter / double-click\tOpen project folder or document file
 Right-click a document\tEverything you can do with it
 F1\tThis list"""
@@ -346,6 +347,10 @@ class MainWindow(QMainWindow):
         mine.setShortcut(QKeySequence("Ctrl+Shift+M"))
         mine.triggered.connect(lambda *_: self.show_my_checkouts())
         view.addAction(mine)
+        units_act = QAction("Units…", self)
+        units_act.setShortcut(QKeySequence("Ctrl+Shift+U"))
+        units_act.triggered.connect(lambda *_: self.show_units())
+        view.addAction(units_act)
         view.addSeparator()
         theme_menu = view.addMenu("Colour theme")
         self.theme_actions = QActionGroup(self)
@@ -635,9 +640,27 @@ class MainWindow(QMainWindow):
         self._team_probe = threading.Thread(target=look, name="revisionworx-team-watch", daemon=True)
         self._team_probe.start()
 
+    def show_units(self):
+        """The Units window for the open workspace (one at a time; it is read-only)."""
+        from .units import UnitsWindow
+        if self.ctl.location is None:
+            return None
+        win = getattr(self, "units_window", None)
+        if win is None or not win.isVisible():
+            win = self.units_window = UnitsWindow(self.ctl, self)
+        else:
+            win.refresh()
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        return win
+
     def close_workspace_windows(self) -> None:
         """Dialogs that are not modal belong to the workspace they were opened for. Left open, their
         next action would write to whichever workspace is open by then."""
+        if getattr(self, "units_window", None) is not None:
+            self.units_window.reject()
+            self.units_window = None
         windows = [*self.adopt_dialogs, *self.documents_tab.dialogs]
         self.adopt_dialogs.clear()
         self.documents_tab.dialogs.clear()
@@ -847,6 +870,7 @@ class MainWindow(QMainWindow):
             ("Open the selected document's file", "launch cad", tab.open_file, lambda: p.can_open_file),
             ("Show the selected document in its folder", "explorer finder", tab.open_folder, lambda: bool(p.detail)),
             ("My checkouts…", "mine checked out", self.show_my_checkouts, has_ws),
+            ("Units…", "serial machine as built configuration compliance eco", self.show_units, has_ws),
             ("New project…", "create", self.new_project, lambda: has_ws() and not self.ctl.read_only),
             ("Adopt an existing project…", "register folder", self.adopt, lambda: has_ws() and not self.ctl.read_only),
             ("Open the project folder", "explorer", self.open_folder, lambda: self.detail_vm.can_open_folder),

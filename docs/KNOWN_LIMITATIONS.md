@@ -63,8 +63,9 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
 
 ## The unit register (new, docs/UNITS.md)
 
-- **Command line only.** There's no Units screen in the desktop window yet: `revisionworx unit`, and `revisionworx link units` for
-  other programs.
+- **The Units window only reads.** It finds units and shows their drawings, changes due and history; registering units,
+  recording changes and deciding effectivity are done with `revisionworx unit` (and `revisionworx link units` for other
+  programs).
 - **An engineering change reaches units through a decision someone records** (`unit change decide`), once the ECO is
   implemented. The candidates are worked out from each unit's recorded configuration; a unit whose configuration isn't recorded
   has to be named. A retrofit's document revisions move automatically; parts it changes are recorded with `unit fit` and
