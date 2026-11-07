@@ -20,6 +20,9 @@ The first release. Everything below is new.
 - **Serial numbering.** `revisionworx unit numbering new NH --pattern "NH-{yy}-{seq:4}"`, then `unit new --serial-from NH`:
   the next serial of the unit's year (or month) is issued and claimed in the same step as the registration, so two people never
   get the same one, and a serial already in use is skipped.
+- **Units window.** View → Units… (Ctrl+Shift+U) finds a unit by serial, tag, model, customer or site, and shows the drawings
+  that apply to it (flagged when a later revision is released), the engineering changes due on it, what's fitted and its
+  history. It only reads.
 - **Engineering changes reach units.** Beside an implemented ECO, record once which units it reaches: future production only,
   a required or optional retrofit, one unit's own modification, or a documentation correction. Candidates are the units that
   still have the revision it replaces; a scope picks them by customer, serial range, build standard or by name. Each unit in a

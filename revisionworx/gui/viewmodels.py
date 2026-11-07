@@ -1116,3 +1116,80 @@ class CommandPalette(Observable):
             item = self.items[row]
             return item["kind"], item["payload"]
         return None
+
+
+# ------------------------------------------------------------------------------------------------ units (ADR-025)
+UNIT_COLUMNS = (Column("label", "Unit", 120), Column("status", "Status", 96), Column("model", "Model", 90),
+                Column("customer", "Customer", 160, stretch=True), Column("outstanding", "Changes due", 92))
+_SCHEME_WORDS = {"serial": "Serial", "tag": "Tag", "other": "Code", "fieldworx": "FieldWorx id"}
+
+_FLAG_WORDS = {"newer-released": "a later revision is released, not applied to this unit",
+               "not-released": "not released", "obsolete": "obsolete", "missing": "missing: this reference is damaged"}
+_BASIS_WORDS = {"reported": "reported", "declared": "", "legacy": "from old records", "verified": "verified"}
+
+
+def unit_row(u: dict) -> dict:
+    """One row of the Units window's list."""
+    return {"id": u["id"], "label": u["label"], "status": u["status"].replace("-", " "),
+            "model": (u.get("model") or {}).get("number", ""), "customer": u.get("customer", ""),
+            "outstanding": str(u["outstanding"]) if u.get("outstanding") else ""}
+
+
+def unit_sections(d: dict) -> list[tuple[str, list[str]]]:
+    """A unit's detail as headed sections of plain lines, in the order a person reads it: what it is and where, the
+    sentence that says whether anything is due, its drawings (the revisions that apply to *this* unit, never a newer one in
+    their place), engineering changes, what is fitted, and its history."""
+    head = [f"Status: {d['status'].replace('-', ' ')}" + (f" · Model: {d['model']['number']}" if d["model"]["number"] else "")]
+    for i in d["identifiers"]:
+        issuer = f" ({i['issuer']})" if i["issuer"] else ""
+        word = _SCHEME_WORDS.get(i["scheme"], i["scheme"])
+        head.append(f"{'Former ' + word.lower() if not i['active'] else word}: {i['value']}{issuer}")
+    where = [f"{k.capitalize()}: {d[k]}" for k in ("customer", "site", "location") if d[k]]
+    if d.get("project"):
+        where.insert(0, f"Project: {d['project']['number'] or d['project']['name']}")
+    head += [" · ".join(where)] if where else []
+    if d.get("parent"):
+        head.append(f"Fitted in {d['parent']['label']} at {d['parent']['position']}")
+    head += [f"{name.capitalize()}: {m['date'] or 'date unknown'}" for name, m in d["milestones"].items()]
+    due = [c for c in d.get("changes", []) if c["outstanding"]]
+    flagged = [r for r in d["documents"] if r["flags"]]
+    if due:
+        sentence = f"{len(due)} required engineering change{'s' if len(due) != 1 else ''} not finished on this unit."
+    elif flagged:
+        sentence = f"Up to date with its changes; {len(flagged)} drawing{'s' if len(flagged) != 1 else ''} flagged below."
+    else:
+        sentence = "Nothing is due on this unit."
+    sections: list[tuple[str, list[str]]] = [(f"{d['label']}  {d['name']}".strip(), head), ("", [sentence])]
+    std = d.get("standard")
+    docs = [f"Build standard: {std['number']} {std['title']}".strip()] if std else []
+    if not d["configuration_recorded"]:
+        docs.append("Configuration not recorded.")
+    for r in d["documents"]:
+        name = r["document"]["number"] or r["document"]["id"]
+        if not r["applies"]:
+            what = "doesn't apply to this unit"
+        elif r["revision"] is None:
+            what = "?"
+        else:
+            what = f"rev {r['revision']['label']} ({r['revision']['state_name']})"
+        notes = [w for w in (_BASIS_WORDS.get(r["basis"], ""),) if w and r["basis"] != "verified"]
+        if r["source"] == "unit" and std:
+            notes.append("this unit only")
+        notes += [_FLAG_WORDS[f] + (f" (rev {r['released']['label']})" if f == "newer-released" and r["released"] else "")
+                  for f in r["flags"]]
+        docs.append(f"{name}: {what}" + (f"  [{'; '.join(notes)}]" if notes else ""))
+    sections.append(("Drawings", docs or ["None recorded."]))
+    if d.get("changes"):
+        lines = []
+        for c in d["changes"]:
+            moves = ", ".join(f"{x['number']} rev {x['from_label']} to {x['to_label']}" for x in c["documents"])
+            lines.append(f"{c['number']} {c['title']}: {c['state'].replace('-', ' ')}"
+                         + (" (outstanding)" if c["outstanding"] else "") + (f"; {moves}" if moves else ""))
+        sections.append(("Engineering changes", lines))
+    if d["components"]:
+        sections.append(("Fitted", [f"{c['position']}: {c['label'] or c['number'] or c['part']}"
+                                    + "".join(f" {k} {c[k]}" for k in ("serial", "lot") if c[k]) for c in d["components"]]))
+    if d.get("history"):
+        sections.append(("History", [f"{e['n']}. {e['time'][:10]} {e['summary']}" + (" (void)" if e["voided"] else "")
+                                     for e in reversed(d["history"])]))
+    return sections

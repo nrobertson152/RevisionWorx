@@ -125,7 +125,9 @@ no PDF yet. `revisionworx doc verify` checks the stored PDFs as well as the revi
 
 A **unit** is one physical thing with a serial number: a machine you built, a pump fitted in it, a gauge you test it with.
 RevisionWorx records which revisions describe each unit from the day it was built, without copying a single drawing
-(`docs/UNITS.md` has the details). There's no Units screen in the window yet; use the command line.
+(`docs/UNITS.md` has the details). In the window, **View → Units…** (Ctrl+Shift+U) finds a unit by serial, tag, model,
+customer or site and shows what it is built to, what's due on it and its history; it only reads. Units are recorded from
+the command line.
 
 **Build standards.** Most units are built to the same drawings. Name that set once:
 `revisionworx unit standard new HPU-75-A --title "HPU-75 standard A" --from-project J-2001` takes the released revision of every

@@ -51,10 +51,28 @@ def build(tmp: Path):
             rev = documents.history(ws, made[number]["id"])[-1]
             for s in states:
                 documents.transition(ws, rev["id"], s, comment="")
+        _units(ws, made)
     ctl.checkout(made["MA-1042"]["id"])
     ctl.working_file(made["MA-1042"]["id"]).write_bytes(b"assembly edited")
     ctl.working_file(made["MB-1042-03"]["id"]).unlink()
     return ctl, p, made
+
+
+def _units(ws, made):
+    """Three manifolds built to standard MB-A (the block's first released revision); one has its own drawing revision."""
+    from revisionworx import documents, units
+    svc = units.service_for(ws)
+    block = documents.history(ws, made["MB-1042-01"]["id"])
+    drawing = documents.history(ws, made["DW-1042-01"]["id"])
+    std = svc.create_standard("MB-A", "Manifold, first build", {made["MB-1042-01"]["id"]: block[-1]["id"],
+                                                                made["DW-1042-01"]["id"]: drawing[0]["id"]},
+                              allow_unreleased=True)
+    for serial, customer, site in (("HM-26-0001", "Acme Hydraulics", "Plant 2"), ("HM-26-0002", "Acme Hydraulics", "Plant 2"),
+                                   ("HM-26-0003", "Bolt Marine", "Dock 4")):
+        u = svc.register(identifiers=[{"scheme": "serial", "value": serial, "issuer": ""}], standard=std["id"],
+                         customer=customer, site=site, status="in-service", model={"part": "", "number": "P-1042"},
+                         milestones={"built": "2026-09-14"}, name="Hydraulic manifold")
+    svc.set_document(u["id"], made["DW-1042-01"]["id"], drawing[-1]["id"], reason="customer special", basis="verified")
 
 
 def main(out: Path) -> int:
@@ -104,6 +122,10 @@ def main(out: Path) -> int:
     pal.search.setText("manifold")
     shot(pal, "palette")
     pal.close()
+    units_win = w.show_units()
+    units_win.select_unit("HM-26-0003")
+    shot(units_win, "units")
+    units_win.close()
     w.close_ws()
     shot(w, "start")
     print("\n".join(str(s) for s in shots))

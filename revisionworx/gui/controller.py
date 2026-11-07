@@ -508,6 +508,29 @@ class Controller:
                     "latest": latest,
                     "transitions": allowed_targets(lc, latest["state"]) if latest else []}
 
+    # ------------------------------------------------------------------------------------------- units (ADR-025)
+    def units_page(self, text: str = "", outstanding_only: bool = False) -> list[dict]:
+        """The unit register for the Units window: summaries, each with how many required engineering changes it hasn't
+        finished (docs/UNITS.md section 10). Read-only."""
+        from ..units import effect, query, service_for
+        with self._read() as ws:
+            svc = service_for(ws)
+            index = effect.ChangeIndex(svc)
+            out = []
+            for u in query.search(svc, text):
+                n = sum(1 for r in index.by_unit.get(u["id"], []) if effect.outstanding(r))
+                if outstanding_only and not n:
+                    continue
+                out.append({**query.unit_summary(u), "outstanding": n})
+            return out
+
+    def unit_detail(self, unit_id: str) -> dict:
+        """Everything about one unit, as ``revisionworx link unit`` answers it. Read-only."""
+        from ..units import query, service_for
+        with self._read() as ws:
+            svc = service_for(ws)
+            return query.unit_detail(svc, svc.unit(unit_id))
+
     def state_names(self) -> dict[str, str]:
         """Lifecycle state id -> display name (the workspace's lifecycle)."""
         with self._read() as ws:
