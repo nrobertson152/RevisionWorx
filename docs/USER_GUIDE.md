@@ -181,6 +181,21 @@ beside the ECO, which itself doesn't change:
   missing a required change (and exits 1 if there is one, for scripts); `unit compliance NH-26-0007` lists one unit's changes.
   A unit found later joins with `unit change add ECO-0042 NH-26-0099`.
 
+**Deviations and concessions.** When named units are to be built or repaired differently from their drawings, without changing the
+drawings, record the approval once:
+
+- `revisionworx unit deviation new --kind deviation --title "PMP-11 for PMP-10 at P1" --departure "P1 is a PMP-11 pump, not the
+  PMP-10 the BOM calls for" --reason "PMP-10 out of stock; same flow and mounting" --unit NH-26-0007 --unit NH-26-0008
+  --doc BOM-75@B --temporary --until 2027-03-31` gets the next number, DEV-0001. A **concession** (`--kind concession`, numbered
+  CON-0001 …) accepts units already made that differ: a weld out of tolerance that passed its load test. Without `--temporary`
+  it is permanent.
+- What was actually fitted is recorded as usual, citing it: `unit fit NH-26-0007 P1 --part-number PMP-11 --replace
+  --evidence deviation:DEV-0001`. When the right part goes back in, `unit deviation clear NH-26-0007 DEV-0001 --event 12`
+  (the event that fitted it). A unit that didn't need it after all: `unit deviation not-used NH-26-0008 DEV-0001 --reason ...`.
+- `unit deviation show DEV-0001` lists each unit and where it stands; `unit deviation list` lists them all; `unit deviation
+  overdue` lists units with a temporary one past its end date (and exits 1 if there is one). One more unit:
+  `unit deviation add DEV-0001 NH-26-0009 --reason ...`. `unit show` and the Units window list a unit's deviations.
+
 ## Troubleshooting
 
 | You see | What it means | What to do |

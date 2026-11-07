@@ -1,7 +1,8 @@
 # RevisionWorx units: serial-numbered units, their identifiers and configuration (ADR-025)
 
 **Status:** implemented and tested (`tests/test_units_*.py`) on local disks, single-writer and team workspaces, through the same
-contract as change control. The desktop window has no Units screen yet; use `revisionworx unit` and `revisionworx link units`.
+contract as change control. The desktop window shows units read-only (View → Units…); they are recorded with `revisionworx unit`,
+and other programs read and record through `revisionworx link` (`docs/INTEGRATION.md`).
 **Package:** `revisionworx/units/` (standard library only). **No core file is changed**: it persists through CORE_API §8, like
 `changes/` and `bom/`.
 
@@ -20,8 +21,8 @@ day it was built through decades of repairs and modifications, without copying a
 - **No silent substitution.** A unit's drawings are what its history says. A newer released revision is shown *beside* it, flagged,
   never in its place.
 
-What it doesn't do yet (each is planned; see `docs/ARCHITECTURE.md` ADR-025): ECO effectivity and per-unit compliance, accepting
-FieldWorx records into a unit's history, serial numbering rules, transfer of a unit between workspaces, a desktop screen.
+What it doesn't do yet (planned; see `docs/ARCHITECTURE.md` ADR-025): transfer of a unit between workspaces, and merging two
+records that turn out to be one machine.
 
 ## 2. Words
 
@@ -100,7 +101,8 @@ case-folded, with runs of white space made one space and the ends stripped: `nh-
 Removing an identifier entered by mistake releases its claim whatever the scheme; the history still shows it.
 
 Section 10 adds two kinds for engineering changes: `uniteff` (an order's effectivity decision) and `unitcmp` (one unit's compliance
-with one order). Section 11 adds `unitseq`, a numbering that issues serials.
+with one order). Section 11 adds `unitseq`, a numbering that issues serials. Section 12 adds `unitdev` (a deviation or concession)
+and `unitdvu` (whether it is in effect on one unit).
 
 ### 3.4 `buildstd` (`bst_` + 32 hex): written once, never changed
 
@@ -343,11 +345,68 @@ the same entry as the registration, and the numbering record is written at the r
 the same number (one conflicts and is retried). A number whose serial is already claimed (a unit imported earlier, say) is skipped.
 Numbers are never reused: a unit, once registered, keeps its serial. Changing a pattern is a new numbering.
 
-## 12. Not done, and costs
+## 12. Deviations and concessions
+
+A **deviation** is permission, given before the work, to build or repair named units differently from their documents: a PMP-11
+pump at P1 while the PMP-10 the BOM calls for is out of stock, say. A **concession** accepts named units already made that differ
+from them: a weld undercut found after the load test passed. Neither changes a document. A change for every future unit is an
+engineering change (section 10); a deviation is for the units it names.
+
+### 12.1 `unitdev` (`udv_` + first 32 hex of `SHA-256("revisionworx/units/deviation-id/v1\0" + norm(number))`): written once
+
+`{"schema", "id", "number", "kind", "title", "departure", "documents": [{"document", "revision"}], "units": [ids], "temporary",
+"until", "reason", "approved", "approved_by", "txid", "input", "digest"}`. Its id comes from its number, so two can't share one.
+
+| Field | Value |
+|---|---|
+| `number` | ≤ 64; by default the next `DEV-nnnn` (a deviation) or `CON-nnnn` (a concession) |
+| `kind` | `deviation` or `concession` |
+| `title`, `departure` | what it is (≤ 200), and what differs from the documents, in words (≤ 4000, multi-line) |
+| `documents` | the revisions it departs from, each document once (may be empty) |
+| `units` | the units it was approved for, each once, none scrapped |
+| `temporary`, `until` | `true` when the unit is to conform again (the departure is then cleared on each unit), with an optional end date `YYYY-MM-DD`; a permanent one has no end date |
+| `reason` | why it is acceptable (required) |
+| `approved`, `approved_by` | when it was recorded and by whom (in a team workspace the signed-in account): recording it is approving it |
+
+`digest` covers every other field (`revisionworx/units/deviation/v1`); `verify` recomputes it, and nothing is carried out from, or
+shown from, a deviation whose digest doesn't match.
+
+### 12.2 `unitdvu` (`udu_` + first 32 hex of `SHA-256("revisionworx/units/deviation-unit/v1\0" + deviation id + "\0" + unit id)`)
+
+`{"schema", "id", "deviation", "unit", "state", "steps", "created", "updated"}`, with the same steps as compliance (section 10.2),
+only ever appended. Approving writes one per unit, in effect, in the same entry; a unit added later gets its own (with a reason) and
+the deviation stays as it was.
+
+| From | To |
+|---|---|
+| `in-effect` | `cleared` (a temporary one: the unit conforms again; the step can name the unit's events that restored it), `not-used` (the unit was made or repaired without it; needs a reason) |
+| `cleared`, `not-used` | nothing: they are ends |
+
+**Past its end date:** a temporary one still in effect on a unit after its `until` date (the date recorded times use, UTC).
+Approving or clearing writes no event on the unit: what was fitted is recorded the usual way (`unit fit`), and may cite the
+deviation as evidence (`--evidence deviation:DEV-0007`).
+
+### 12.3 Refusals, checks and other programs
+
+Refused, with nothing written: a number already used; no unit, a scrapped or unknown unit; a document named twice or a revision
+that doesn't exist; an end date on a permanent one; a missing title, departure or reason; clearing a permanent one; a step the table
+doesn't allow; event numbers that aren't on the unit or were voided. A `txid` makes a retry write nothing; a retry of an approval
+numbered automatically answers the number the first attempt took. Two approvals of one number at once: one conflicts.
+
+`unit verify` adds `deviation-altered` (the digest or number doesn't match), `deviation-invalid` (a unit record whose steps aren't
+allowed, a cleared permanent one, step events that aren't on the unit, a unit approved with no record of it) and
+`dangling-reference`.
+
+`revisionworx unit deviation new|list|show|add|clear|not-used|overdue` (`docs/USER_GUIDE.md`). `link unit` and `link units
+--detail` give each unit's `deviations` (feature `unit-deviations`; `docs/INTEGRATION.md`), in effect first. The Units window
+shows them and says when one is past its end date.
+
+## 13. Not done, and costs
 
 - Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
-- No desktop screen yet; field-record acceptance, deviations and transfers are later phases (ADR-025).
+- Transfers between workspaces and merged identities are a later phase (ADR-025).
+- Approval of a deviation is recording it; there is no review workflow for deviations like change control's for ECOs.
 - Effectivity rows cover documents only; parts a retrofit changes are recorded by hand, citing the change.
 - Candidates read every unit's configuration: fine for thousands of units.
 - Nothing here is verified between real computers, which RevisionWorx as a whole hasn't been (`docs/KNOWN_LIMITATIONS.md`).

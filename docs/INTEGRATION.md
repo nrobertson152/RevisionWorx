@@ -75,7 +75,10 @@ The revision is always the one recorded for this unit; a newer released one is o
 `{n, type, summary, effective, time, actor, basis, evidence, reason, change, voided}`. A unit answered for now (not `--at` or
 `--on`) also has `changes` (feature `unit-changes`): each engineering change that reaches it (docs/UNITS.md section 10), outstanding ones first, as
 `{change, number, title, kind, required, state, outstanding, since, documents: [{document, number, from, from_label, to,
-to_label}]}`. A summary (`units` without `--detail`) is
+to_label}]}`, and `deviations` (feature `unit-deviations`): each deviation or concession that covers it (docs/UNITS.md section 12),
+in effect first, as `{deviation, number, kind ("deviation" | "concession"), title, departure, temporary, until, state ("in-effect" |
+"cleared" | "not-used"), in_effect, overdue, since, documents: [{document, number, revision, label}]}`. A unit that differs from its
+drawings where one in effect allows it is not a mistake in the record. A summary (`units` without `--detail`) is
 `{id, label, class, name, model, status, project, customer, site, location, identifiers, standard, parent, events, rev}`.
 
 **`file.state`:**

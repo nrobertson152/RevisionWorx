@@ -34,6 +34,12 @@ The first release. Everything below is new.
   replacement or a change made on site once someone accepts it. Each is one entry or nothing, in the logged-in person's name in a
   team workspace, with evidence saying where it came from. A txid makes a retry safe, and `--if-events` refuses to act on a unit
   that changed since someone decided.
+- **Deviations and concessions.** Record once, with the units it covers, an approved departure from the drawings that isn't an
+  engineering change: a deviation before the work (a substitute pump while the right one is out of stock), a concession for units
+  already made (a weld out of tolerance that passed its load test). Numbered DEV-0001 and CON-0001 by default, permanent or
+  temporary with an end date. Each unit has its own record: in effect, cleared once it conforms again, or not used.
+  `revisionworx unit deviation ...`; `unit deviation overdue` lists temporary ones past their end date; `unit show`, the Units
+  window and `deviations` on each unit for other programs show them.
 
 ### Working as a team
 - A workspace can be set up for a team working from one shared network folder, with no server. An administrator account is created on

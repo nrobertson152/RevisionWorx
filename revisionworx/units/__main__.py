@@ -19,6 +19,10 @@
     change candidates|status ECO          change decide ECO --kind K [--standard STD] [--scope RULE --value V | --unit REF]
     change add ECO REF                    change set REF ECO STATE      change install|verify|reverse REF ECO
     compliance [REF]                      (no REF: every unit out of compliance with a required change; exit 1 if any)
+    deviation new --kind deviation|concession --title T --departure TEXT --reason R --unit REF ... [--doc DOC@REV ...]
+        [--temporary [--until DATE]] [--number N]                    deviation list | deviation show DEV
+    deviation add DEV REF --reason R      deviation clear REF DEV [--event N ...]      deviation not-used REF DEV --reason R
+    deviation overdue                     (every unit with a temporary deviation past its end date; exit 1 if any)
 
 Recording actions also take --effective DATE, --basis verified|reported|declared|legacy, --reason TEXT, --change ECO and
 --evidence KIND:REF[=LABEL] (repeatable). ``REF`` is a unit id or a serial, tag or other code. Exit codes: 0 ok, 1 problems
@@ -33,13 +37,14 @@ from pathlib import Path
 from typing import Any
 
 from ..workspace import CommittedNotApplied, Workspace, WorkspaceError
-from . import csvio, effect, query
-from .model import (BASES, CLASSES, DISPOSITIONS, EFFECTIVITY_KINDS, MILESTONES, SCHEMES, SCOPE_RULES, STATUSES, UnitError,
-                    ValidationError, parse_evidence, unit_label)
+from . import csvio, deviation, effect, query
+from .model import (BASES, CLASSES, DEVIATION_KINDS, DISPOSITIONS, EFFECTIVITY_KINDS, MILESTONES, SCHEMES, SCOPE_RULES,
+                    STATUSES, UnitError, ValidationError, parse_evidence, unit_label)
 from .service import UnitService, service_for
 
 READS = {"list", "show", "history", "where-used", "verify", "export", "compliance"}
 CHANGE_READS = {"candidates", "status"}
+DEVIATION_READS = {"list", "show", "overdue"}
 
 
 def _common(s: argparse.ArgumentParser) -> None:
@@ -183,6 +188,36 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s.add_argument("--effective", default=""); s.add_argument("--evidence", action="append", default=[], metavar="KIND:REF[=LABEL]")
     s = sub.add_parser("compliance", help="the changes that reach a unit, or every unit out of compliance")
     s.add_argument("ref", nargs="?", default=""); s.add_argument("--json", action="store_true")
+
+    dv = sub.add_parser("deviation", help="approved departures from the documents for named units: a deviation before the "
+                        "work, a concession for units already made").add_subparsers(dest="sub", required=True)
+    s = dv.add_parser("new", help="record an approved deviation or concession and the units it covers (written once)")
+    s.add_argument("--kind", required=True, choices=DEVIATION_KINDS)
+    s.add_argument("--title", required=True); s.add_argument("--departure", required=True,
+                                                             help="what differs from the documents, in words")
+    s.add_argument("--reason", required=True, help="why it is acceptable")
+    s.add_argument("--unit", action="append", default=[], required=True, help="a unit it covers (repeatable)")
+    s.add_argument("--doc", action="append", default=[], metavar="DOC@REV", help="a revision it departs from (repeatable)")
+    s.add_argument("--temporary", action="store_true", help="until the unit conforms again (cleared on each unit)")
+    s.add_argument("--until", default="", metavar="DATE", help="a temporary one's end date")
+    s.add_argument("--number", default="", help="its number (default: the next DEV-nnnn or CON-nnnn)")
+    s.add_argument("--json", action="store_true")
+    s = dv.add_parser("list", help="every deviation and concession"); s.add_argument("--json", action="store_true")
+    s = dv.add_parser("show", help="one, and where it stands on each unit it covers")
+    s.add_argument("deviation"); s.add_argument("--json", action="store_true")
+    s = dv.add_parser("add", help="approve the same departure for one more unit")
+    s.add_argument("deviation"); s.add_argument("ref"); s.add_argument("--reason", required=True)
+    s = dv.add_parser("clear", help="a temporary departure has ended: the unit conforms again")
+    s.add_argument("ref"); s.add_argument("deviation")
+    s.add_argument("--event", action="append", type=int, default=[], metavar="N",
+                   help="the unit's event that restored it, e.g. the right part fitted (repeatable)")
+    s.add_argument("--basis", default="declared", choices=BASES); s.add_argument("--effective", default="")
+    s.add_argument("--reason", default="")
+    s = dv.add_parser("not-used", help="the unit was made or repaired without it after all")
+    s.add_argument("ref"); s.add_argument("deviation"); s.add_argument("--reason", required=True)
+    s.add_argument("--effective", default="")
+    s = dv.add_parser("overdue", help="every unit with a temporary deviation past its end date (exit 1 if any)")
+    s.add_argument("--json", action="store_true")
     return p
 
 
@@ -252,6 +287,12 @@ def _print_unit(out, svc: UnitService, detail: dict) -> None:
         for c in detail["changes"]:
             out.write(f"    {c['number']:<12} {c['kind']:<18} {c['state']:<15} since {c['since']}"
                       f"{'   OUTSTANDING' if c['outstanding'] else ''}\n")
+    if detail.get("deviations"):
+        out.write("  deviations and concessions:\n")
+        for x in detail["deviations"]:
+            when = ("temporary" + (f" until {x['until']}" if x["until"] else "")) if x["temporary"] else "permanent"
+            out.write(f"    {x['number']:<12} {x['kind']:<11} {x['state']:<10} {when:<26} since {x['since']}"
+                      f"{'   PAST ITS END DATE' if x['overdue'] else ''}  {x['title']}\n")
     if detail["components"]:
         out.write("  components:\n")
         for c in detail["components"]:
@@ -277,7 +318,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     out = sys.stdout
     sub = getattr(a, "sub", None)
     writable = a.cmd not in READS and not (a.cmd in ("standard", "numbering") and sub in ("list", "show", "next")) and \
-        not (a.cmd == "import" and a.dry_run) and not (a.cmd == "change" and sub in CHANGE_READS)
+        not (a.cmd == "import" and a.dry_run) and not (a.cmd == "change" and sub in CHANGE_READS) and \
+        not (a.cmd == "deviation" and sub in DEVIATION_READS)
     try:
         with Workspace.open(Path(a.workspace), writable=writable) as ws:
             svc = service_for(ws)
@@ -358,6 +400,8 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
         return 0
     if cmd == "compliance":
         return _compliance(a, svc, out)
+    if cmd == "deviation":
+        return _deviation(a, svc, out)
     if cmd == "import":
         text = Path(a.file).read_text(encoding="utf-8-sig")
         if a.dry_run:
@@ -531,6 +575,62 @@ def _compliance(a: argparse.Namespace, svc: UnitService, out) -> int:
         out.write(f"{r['label']:<20} " + ", ".join(f"{c['number']} {c['state']}" for c in r["changes"]) + "\n")
     out.write(f"{len(rows)} unit(s) out of compliance with a required change\n")
     return 1 if rows else 0
+
+
+def _deviation(a: argparse.Namespace, svc: UnitService, out) -> int:
+    def dump(value: Any) -> int:
+        out.write(json.dumps(value, indent=1, ensure_ascii=False) + "\n")
+        return 0
+
+    if a.sub == "list":
+        rows = deviation.listing(svc)
+        if a.json:
+            return dump({"deviations": rows})
+        for d in rows:
+            when = ("temporary" + (f" until {d['until']}" if d["until"] else "")) if d["temporary"] else "permanent"
+            late = f", {d['overdue']} past its end date" if d["overdue"] else ""
+            out.write(f"{d['number']:<12} {d['kind']:<11} {when:<26} in effect on {d['in_effect']} of {d['units']}{late}"
+                      f"  {d['title']}\n")
+        out.write(f"{len(rows)} deviation(s) and concession(s)\n")
+        return 0
+    if a.sub == "show":
+        st = deviation.status(svc, a.deviation)
+        if a.json:
+            return dump(st)
+        when = ("temporary" + (f", until {st['until']}" if st["until"] else "")) if st["temporary"] else "permanent"
+        out.write(f"{st['number']}  {st['kind']}, {when}: {st['title']}\n  approved {st['approved'][:10]} by "
+                  f"{st['approved_by'].get('name') or st['approved_by'].get('account') or st['approved_by'].get('user', '?')}\n"
+                  f"  departure: {st['departure']}\n  reason: {st['reason']}\n")
+        for r in st["documents"]:
+            out.write(f"  departs from {r['number']} rev {r['label']}\n")
+        for u in st["covered"]:
+            out.write(f"    {u['label']:<20} {u['state']:<10} since {u['since']}{'   PAST ITS END DATE' if u['overdue'] else ''}"
+                      f"{'  - ' + u['reason'] if u['reason'] else ''}\n")
+        return 0
+    if a.sub == "overdue":
+        rows = deviation.overdue_units(svc)
+        if a.json:
+            dump({"overdue": rows})
+            return 1 if rows else 0
+        for r in rows:
+            out.write(f"{r['label']:<20} " + ", ".join(f"{d['number']} (until {d['until']})" for d in r["deviations"]) + "\n")
+        out.write(f"{len(rows)} unit(s) with a temporary deviation past its end date\n")
+        return 1 if rows else 0
+    if a.sub == "new":
+        dev = deviation.approve(svc, a.kind, title=a.title, departure=a.departure, reason=a.reason, units=a.unit,
+                                documents=a.doc, temporary=a.temporary, until=a.until, number=a.number)
+        if a.json:
+            return dump({k: v for k, v in dev.items() if k != "_rev"})
+        out.write(f"recorded: {dev['number']} ({dev['kind']}) for {len(dev['units'])} unit(s)\n")
+        return 0
+    if a.sub == "add":
+        rec = deviation.add(svc, a.deviation, a.ref, reason=a.reason)
+    elif a.sub == "clear":
+        rec = deviation.clear(svc, a.ref, a.deviation, events=a.event, basis=a.basis, effective=a.effective, reason=a.reason)
+    else:
+        rec = deviation.not_used(svc, a.ref, a.deviation, reason=a.reason, effective=a.effective)
+    out.write(f"{a.deviation} on {a.ref}: {rec['state'].replace('-', ' ')}\n")
+    return 0
 
 
 def _standard(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:

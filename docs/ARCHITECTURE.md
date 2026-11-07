@@ -851,11 +851,13 @@ and absent from service companies that never use it. A separate database would b
 **Phases.** 1: the register, standards, differences, components, history, verify, command line, `link units`, import (done). 2: ECO
 effectivity and per-unit compliance (`docs/UNITS.md` section 10: change orders are unchanged; an effectivity record beside the
 order, written once, and a compliance record per unit and order); a PDF derivative tied to each native revision; numbering rules; a Units screen (done). 3:
-other programs recording on units (ADR-027, done), accepting FieldWorx records into unit histories; deviations and concessions. 4: transfer between
+other programs recording on units (ADR-027, done), accepting FieldWorx records into unit histories (done, through FieldWorx's bridge);
+deviations and concessions (`docs/UNITS.md` section 12: written once with the units they cover, a record per unit, done). 4: transfer between
 workspaces, merged identities, journal checkpoints.
 
 **Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
-`unit verify` detects but the journal rules don't refuse; making these kinds write-once in `shared.judge` needs a new format version and
+`unit verify` detects but the journal rules don't refuse (the same holds for deviations, whose digest `verify` checks); making these
+kinds write-once in `shared.judge` needs a new format version and
 is planned. Not verified between real computers, like the rest of team use.
 
 ### ADR-026 A PDF tied to the exact native revision it prints — IMPLEMENTED
