@@ -100,7 +100,7 @@ case-folded, with runs of white space made one space and the ends stripped: `nh-
 Removing an identifier entered by mistake releases its claim whatever the scheme; the history still shows it.
 
 Section 10 adds two kinds for engineering changes: `uniteff` (an order's effectivity decision) and `unitcmp` (one unit's compliance
-with one order).
+with one order). Section 11 adds `unitseq`, a numbering that issues serials.
 
 ### 3.4 `buildstd` (`bst_` + 32 hex): written once, never changed
 
@@ -307,7 +307,26 @@ decision) and `dangling-reference` (a change, unit or standard that doesn't exis
 section of `docs/USER_GUIDE.md`). `link unit` and `link units --detail` give each unit's `changes`: change id and number, title, kind, required,
 state, the date of the last step, and the rows. FieldWorx shows them on the phone.
 
-## 11. Not done, and costs
+## 11. Serial numbering
+
+A **numbering** issues serial numbers for new units, so two people registering units at once never get the same one.
+
+`unitseq` (`usq_` + first 32 hex of `SHA-256("revisionworx/units/numbering/v1\0" + norm(name))`): `{"schema", "id", "name",
+"pattern", "issuer", "start", "counters": {period: last number issued}, "created", "created_by"}`. Its id comes from its name, so
+two numberings can't share one.
+
+A **pattern** is text with exactly one `{seq}` or `{seq:N}` (the number, zero-padded to N digits, N 1 to 12) and any of `{yyyy}`,
+`{yy}` and `{mm}`, filled from the unit's effective date, else its built date, else the day it is registered. Any other `{` or `}` is
+refused, and so is a pattern that could give more than 100 characters. Numbers run separately for each *period*: each year when the
+pattern has a year, each month when it has a month too, otherwise one run. `NH-{yy}-{seq:4}` gives NH-26-0001, NH-26-0002 … and
+NH-27-0001 in 2027.
+
+**Issuing.** A unit registered with `serial_from` gets the next number in its period: the counter moves and the serial is claimed in
+the same entry as the registration, and the numbering record is written at the revision read, so two registrations at once can't take
+the same number (one conflicts and is retried). A number whose serial is already claimed (a unit imported earlier, say) is skipped.
+Numbers are never reused: a unit, once registered, keeps its serial. Changing a pattern is a new numbering.
+
+## 12. Not done, and costs
 
 - Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
