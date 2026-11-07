@@ -90,3 +90,26 @@ def test_a_document_someone_else_has_is_refused_with_their_name(team, capsys, mo
     assert code == 2 and refused["kind"] == "checked-out" and "alice" in refused["error"]
     code, doc = link(capsys, *w, "link", "document", "CALC-1")
     assert doc["document"]["checkout"]["user"] == "alice" and doc["document"]["checkout"]["mine"] is False
+
+
+def test_recording_on_units_from_another_program_is_in_the_logged_in_persons_name(team, capsys):
+    """Feature unit-records: a unit registered or a field replacement accepted through `link` is signed by the person logged in
+    on this computer; without a login it is refused and nothing is written."""
+    folder, w, tmp = team
+    code, made = link(capsys, *w, "link", "unit-register", "--txid", "a1" * 16, "--serial", "NH-1", "--model", "HPU-75",
+                      "--evidence", "work-order:WO-00012")
+    assert code == 0 and made["result"] == "recorded", made
+    code, fitted = link(capsys, *w, "link", "unit-fit", "NH-1", "P1", "--part-number", "PMP-10", "--basis", "reported",
+                        "--txid", "b2" * 16, "--evidence", "fieldworx-event:" + "e" * 64)
+    assert code == 0 and fitted["unit"]["history"][-1]["actor"]["account"] == "boss", fitted
+    with Workspace.open(folder) as ws:
+        assert ws.read_entry(ws.head_seq())["signer"] == "boss"
+        n = len(ws.journal_seqs())
+    assert cli.main([*w, "logout"]) == 0
+    capsys.readouterr()
+    code, refused = link(capsys, *w, "link", "unit-note", "NH-1", "seen on site", "--txid", "c3" * 16)
+    assert code == 2 and refused["ok"] is False and "Log in" in refused["error"]
+    with Workspace.open(folder) as ws:
+        assert len(ws.journal_seqs()) == n
+    code, read = link(capsys, *w, "link", "unit", "NH-1")
+    assert code == 0 and read["unit"]["components"][0]["number"] == "PMP-10"

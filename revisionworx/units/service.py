@@ -11,13 +11,14 @@ Reads work on a read-only handle; actions need a writable one.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable
+from contextlib import contextmanager
+from typing import Any, Callable, Iterable, Iterator
 
 from .. import documents as D
 from ..workspace import RecordCheck, RecordDelete, RecordPut, Workspace, new_id, now_iso, register_kind
 from . import history as H
 from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_SCHEMES, STANDARD_SCHEME, STATUSES, UPDATABLE,
-                    VOIDABLE, Ambiguous, DuplicateIdentifier, MalformedUnitRecord, NotFound, ReplayRefused, ValidationError,
+                    VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord, NotFound, ReplayRefused, ValidationError,
                     actor_record, check_choice, check_date, check_evidence, check_id, check_identifier, check_model,
                     check_pattern, check_position, check_txid, clean, day_of, derived_id, digest, event_id, is_id, key_id,
                     load_event, load_key, load_numbering, load_standard, load_unit, norm, numbering_id, pattern_period,
@@ -65,6 +66,11 @@ class _Tx:
             if H.reduce(history) != (state, []):     # fail closed: nothing is added on top of a damaged record
                 raise MalformedUnitRecord(f"unit {unit_label(state)}: its record doesn't match its history, so nothing "
                                           "was changed; run 'revisionworx unit verify'")
+            expected = self.svc.expected.get(unit_id)
+            if expected is not None and state["events"]["count"] != expected:
+                raise Changed(f"{unit_label(state)} has {state['events']['count']} events in its history, not the {expected} it "
+                              "had when this was decided: something was recorded on it since. Nothing was changed; look at it "
+                              "again")
             self.revs[unit_id] = int(rec.get("_rev", 0))
             self.states[unit_id] = state
             self.order.append(unit_id)
@@ -184,6 +190,7 @@ class UnitService:
         self.actor = actor or ws.actor
         self.clock = clock or now_iso
         self.last_replayed = False
+        self.expected: dict[str, int] = {}            # unit id -> its event count when the caller decided (``expecting``)
 
     # ================================================================================================ reading
     def unit(self, unit_id: str) -> dict:
@@ -411,8 +418,27 @@ class UnitService:
                 return None
         tx = _Tx(self, txid, inp, meta)
         result = build(tx)
+        unread = sorted(uid for uid in self.expected if tx.states.get(uid) is None)
+        if unread:                                   # fail closed: an expectation this action never checked is a mistake
+            raise ValidationError(f"unit {unread[0]} was named as unchanged, but this action doesn't concern it")
         self.ws.commit(op, tx.ops(), txid=txid)
         return result
+
+    @contextmanager
+    def expecting(self, counts: dict[str, int]) -> Iterator[None]:
+        """Act only if each named unit still has the number of events it had when the caller decided: otherwise ``Changed``,
+        and nothing is written. The count is compared when the action reads the unit, at the revision its commit insists on, so
+        nothing recorded in between can slip past. A retry of an attempt already recorded (same ``txid``) isn't checked: it
+        answers what was recorded."""
+        for uid, n in counts.items():
+            check_id("unit", uid, "unit")
+            if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+                raise ValidationError("an expected event count is a whole number from 1")
+        before, self.expected = self.expected, dict(counts)
+        try:
+            yield
+        finally:
+            self.expected = before
 
     def _check_replay(self, txid: str, inp: str, replay: list[str]) -> None:
         for rid in replay:

@@ -204,6 +204,23 @@ Problems are reported, never repaired: the journal holds every entry, and a pers
 `REF` is a unit id, a FieldWorx `ast_` id, or an identifier's value. FieldWorx packs units from these; nothing reads unit records
 directly.
 
+Other programs **record** through `link unit-register`, `unit-fit`, `unit-remove`, `unit-note`, `unit-milestone` and
+`unit-change-install` (feature `unit-records`): the actions of section 6 and 10.2, one entry each, through the same writer as the
+desktop window, so in a team workspace they are signed by the person logged in on that computer. Nothing writes unit records
+directly. Three rules make a program's write safe to repeat and safe to decide on:
+
+- **A txid is required.** The program derives it from its own record (a work order, a field event) and sends it with every
+  attempt, so a lost answer is retried without recording twice (section 6, *Retries*).
+- **Evidence and basis say where a fact came from.** A field report is `reported`, with `fieldworx-event:<event id>` as evidence;
+  a unit a work order built is `declared`, with `work-order:<number>`. The actor is the person who recorded it here, never the
+  device or the technician: who did the work is in the evidence's label.
+- **`--if-events N` acts only on what was decided on.** When a person accepts a field record against the unit as they saw it,
+  the action is refused (`Changed`, nothing written) if anything was recorded on the unit since. The count is compared when the
+  action reads the unit, at the revision its commit insists on (`UnitService.expecting`).
+
+The Director decided (2026-11-07) that OpenMeridian may register the units its own work orders build, and nothing else; FieldWorx
+records only what someone in the office accepts. Proposals from phones are never applied by themselves.
+
 ## 9. Failure modes
 
 | What happens | What follows |

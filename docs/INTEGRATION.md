@@ -11,7 +11,7 @@ kind)` with a message written for your user.
 
 **Version:** `API_VERSION = 1` (`revisionworx link version`). It increments only on incompatible changes. New
 fields may be added to answers at any time, so ignore fields you do not know. Commands added since API 1 are named in
-`version`'s `features` (today `["units", "unit-changes", "pdf-derivatives"]`): check for one before using it.
+`version`'s `features` (today `["units", "unit-changes", "pdf-derivatives", "unit-records"]`): check for one before using it.
 
 ## Safety
 
@@ -44,6 +44,7 @@ folder above it that holds `.revisionworx`, then the workspaces recently opened 
 | `open [--document REF \| --file FILE]` | show it in the desktop window | `launched`, `command` |
 | `units [--project P] [--text T] [--detail]` | the unit register (feature `units`): summaries, or with `--detail` each `unit` object below | `units: [summary \| unit]` |
 | `unit REF [--at N \| --on DATE]` | one unit, now, after its event N, or as known now on a date | `unit` |
+| `unit-register`, `unit-fit`, `unit-remove`, `unit-note`, `unit-milestone`, `unit-change-install` | record a fact on units (feature `unit-records`, below) | `result`, `unit` and `events`, or `units` |
 
 `REF` is a document id or document number. `P` is a project id, number or name.
 
@@ -88,7 +89,45 @@ to_label}]}`. A summary (`units` without `--detail`) is
 **Error `kind`:**
 - `not-found`, `ambiguous`, `checked-out`, `busy` (another session is writing; retry), `no-workspace`,
   `bad-input`, `error`.
+- Recording on units adds `duplicate` (a serial or tag another unit holds; the message names it), `changed` (the unit changed
+  since you read it: `--if-events`), `txid-used` (that txid was used for something else) and `conflict` (someone changed a
+  record at the same moment; nothing was written, try again with the same txid).
 - The client adds `unavailable` (RevisionWorx not installed).
+
+## Recording on units (feature `unit-records`)
+
+Other programs record facts on units through these commands, never by writing files: OpenMeridian registering the units its own
+work orders built, FieldWorx's office bridge recording what someone in the office accepted from the field. Each is the same action
+as the `revisionworx unit` command of the same name (docs/UNITS.md section 6), with the same refusals, and is **one journal entry
+or nothing**. In a team workspace it is in the name of the person logged in on this computer, and refused without a login.
+
+| Command | Records |
+|---|---|
+| `unit-register (--serial S ... [--issuer I] \| --serial-from NUMBERING [--count N] \| --tag T [--tag-issuer I] \| --other X) [--name] [--model] [--class] [--status] [--project P] [--customer] [--site] [--location] [--standard STD] [--doc DOC@REV ...] [--built\|--shipped\|--installed\|--commissioned\|--decommissioned DATE] [--notes]` | new units, all or none: one per `--serial`, or `--count` units (1 to 1000) each issued the next serial of a numbering, or one unit known by a tag or other code. Answer: `units` |
+| `unit-fit REF POSITION (--part-number PN [--serial S] [--lot L] \| --component REF) [--replace [--disposition D]]` | something fitted; an occupied position is refused without `--replace` |
+| `unit-remove REF POSITION [--disposition D]` | something taken out; an empty position is refused |
+| `unit-note REF TEXT` | a note in the unit's history |
+| `unit-milestone REF built\|shipped\|installed\|commissioned\|decommissioned [--on DATE]` | a milestone (no date when it isn't known) |
+| `unit-change-install REF ECO` | an engineering change made on the unit: its drawings move to the change's new revisions in the same entry, `reported` unless `--basis verified` (docs/UNITS.md section 10.2). Also answers `compliance` |
+
+Every one also takes:
+
+- **`--txid HEX`, required:** 32 lowercase hex characters that you choose for this action, keep, and send again with every attempt
+  at it. If an earlier attempt was recorded (its answer was lost, say), the same command answers `"result": "already-recorded"` and
+  writes nothing; the same txid with different input is refused (`txid-used`). Derive it from your own record so it survives your
+  program restarting: for example the first 32 hex digits of SHA-256 of `"yourprogram/accept/v1\0" + your record's id`.
+- `--effective DATE` (when it happened, if not today; `unit-milestone` uses `--on`), `--basis verified|reported|declared|legacy`
+  (how well it is known: `declared` by default, `reported` for `unit-change-install`; a field report is `reported`), `--reason`,
+  `--change ECO` (the change it carries out) and `--evidence KIND:REF[=LABEL]` (repeatable): what the fact rests on, kept in the
+  history, such as `work-order:WO-00012` or `fieldworx-event:<event id>=replaced on site by J. Smith`. KIND is lowercase letters,
+  digits and `-`.
+- **`--if-events N`** (not `unit-register`): act only if the unit still has N events, its `events.count` when your program or its
+  user decided. If anything was recorded on it since, the answer is `changed` and nothing is written: look again. It is compared
+  when the action reads the unit, at the revision its entry insists on. A retry of an attempt already recorded isn't checked.
+
+**Answer:** `result` (`recorded` or `already-recorded`), `unit` (as `unit` answers it, after the action) and `events` (the numbers
+of the events this attempt wrote on it); `unit-register` answers `units` instead. `warning` when it was saved but finishing was
+delayed (the workspace completes it when next opened for writing): it is recorded, so don't record it again.
 
 ## Example
 
@@ -106,7 +145,8 @@ if rwx.available():
         show_message(str(exc))      # e.g. "DWG-1 is checked out by alex on SHOP-PC; ask them to check it in first"
 ```
 
-Programs that use this: Caldera (publishes calculation reports), DraftWorx (a drawing's revision status in its window,
+Programs that use this: Caldera (publishes calculation reports), FieldWorx (the bridge reads projects, documents and units to pack
+for phones), DraftWorx (a drawing's revision status in its window,
 check-in, adding drawings to projects, and parts lists as BOMs next to them; it checks out with `revisionworx --json doc checkout`),
 Ledgerbook (RevisionWorx document fields), OpenSchematix Viewer (revision status and opening controlled revisions), TraceMarx (reads
 the schematic, publishes wire lists and labels).

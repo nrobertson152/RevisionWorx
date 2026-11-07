@@ -475,3 +475,52 @@ def test_reconstruction_through_the_detail(svc, eng, std_a):
     assert first["standard"] is None and first["as_of"] == {"event": 1}
     with pytest.raises(NotFound):
         query.unit_detail(svc, now, at=99)
+
+
+# --------------------------------------------------------------------------------------- acting on what was read
+def test_expecting_refuses_a_unit_that_changed_since_the_caller_decided(ws, svc):
+    """Another program decides on a unit as it read it ('NH-26-0001 has 1 event, nothing at P1'), and asks to act only on that.
+    Something recorded in between makes the action fail closed (docs/UNITS.md section 8)."""
+    u = unit(svc)
+    with svc.expecting({u["id"]: 1}):
+        svc.install(u["id"], "P1", number="PMP-10", serial="111", txid=TX1)
+    n = entries(ws)
+    with svc.expecting({u["id"]: 1}):                              # it has 2 events now
+        with pytest.raises(units.Changed, match="2 events in its history, not the 1"):
+            svc.install(u["id"], "P1", number="PMP-11", serial="222", replace=True)
+    assert entries(ws) == n and svc.unit(u["id"])["components"]["p1"]["serial"] == "111"
+    with svc.expecting({u["id"]: 1}):                              # a retry of what was recorded answers it, unchecked
+        svc.install(u["id"], "P1", number="PMP-10", serial="111", txid=TX1)
+    assert svc.last_replayed and entries(ws) == n
+    assert svc.expected == {}                                       # the expectation ends with its block
+
+
+def test_an_expectation_the_action_never_checks_is_refused(ws, svc):
+    a, b = unit(svc, "NH-1"), unit(svc, "NH-2")
+    n = entries(ws)
+    with svc.expecting({b["id"]: 1}):
+        with pytest.raises(ValidationError, match="doesn't concern it"):
+            svc.note(a["id"], "about NH-1")
+    assert entries(ws) == n
+    for bad in ({"NH-1": 1}, {a["id"]: 0}, {a["id"]: True}, {a["id"]: "1"}):
+        with pytest.raises(ValidationError):
+            with svc.expecting(bad):
+                pass
+
+
+def test_an_expectation_is_checked_at_the_revision_the_commit_insists_on(ws, svc, monkeypatch):
+    """The count is compared when the action reads the unit; a change landing after that read is the commit's conflict."""
+    u = unit(svc)
+    real_commit = ws.commit
+    other = units.service_for(ws)
+
+    def racing_commit(op, ops, *args, **kwargs):
+        monkeypatch.setattr(ws, "commit", real_commit)
+        other.note(u["id"], "recorded in between")
+        return real_commit(op, ops, *args, **kwargs)
+
+    monkeypatch.setattr(ws, "commit", racing_commit)
+    with svc.expecting({u["id"]: 1}):
+        with pytest.raises(ConflictError):
+            svc.install(u["id"], "P1", number="PMP-10")
+    assert [e["type"] for e in svc.events(u["id"])] == ["unit.registered", "note"]

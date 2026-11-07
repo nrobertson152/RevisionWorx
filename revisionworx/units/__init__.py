@@ -13,9 +13,9 @@ Reads work on a read-only handle; actions need a writable one. Every action is o
 """
 from __future__ import annotations
 
-from .model import (Ambiguous, DuplicateIdentifier, ImportProblems, MalformedUnitRecord, NotFound, ReplayRefused, UnitError,
-                    ValidationError, fieldworx_asset_id, unit_label)
+from .model import (Ambiguous, Changed, DuplicateIdentifier, ImportProblems, MalformedUnitRecord, NotFound, ReplayRefused,
+                    UnitError, ValidationError, fieldworx_asset_id, unit_label)
 from .service import KIND, UnitService, service_for
 
-__all__ = ["Ambiguous", "DuplicateIdentifier", "ImportProblems", "KIND", "MalformedUnitRecord", "NotFound", "ReplayRefused",
-           "UnitError", "UnitService", "ValidationError", "fieldworx_asset_id", "service_for", "unit_label"]
+__all__ = ["Ambiguous", "Changed", "DuplicateIdentifier", "ImportProblems", "KIND", "MalformedUnitRecord", "NotFound",
+           "ReplayRefused", "UnitError", "UnitService", "ValidationError", "fieldworx_asset_id", "service_for", "unit_label"]

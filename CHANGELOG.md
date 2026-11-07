@@ -29,6 +29,11 @@ The first release. Everything below is new.
   retrofit has its own compliance record (pending, scheduled, deferred, installed, verified, not applicable, reversed...), and
   its drawings move only when its own history records the installation, flagged *reported* until verified. `revisionworx unit
   change ...`, `unit compliance` for every unit still missing a required change, and `changes` on each unit for other programs.
+- **Other programs record on units.** `revisionworx link unit-register`, `unit-fit`, `unit-remove`, `unit-note`, `unit-milestone`
+  and `unit-change-install`: OpenMeridian registering the units its work orders built, FieldWorx's office bridge recording a
+  replacement or a change made on site once someone accepts it. Each is one entry or nothing, in the logged-in person's name in a
+  team workspace, with evidence saying where it came from. A txid makes a retry safe, and `--if-events` refuses to act on a unit
+  that changed since someone decided.
 
 ### Working as a team
 - A workspace can be set up for a team working from one shared network folder, with no server. An administrator account is created on
