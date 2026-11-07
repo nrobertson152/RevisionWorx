@@ -12,7 +12,7 @@ import json
 import re
 import unicodedata
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterable
 
 SCHEMA = 1
 
@@ -106,6 +106,10 @@ class MalformedUnitRecord(UnitError):
 
 class ReplayRefused(UnitError):
     pass
+
+
+class Changed(UnitError):
+    """Something was recorded on the unit since the caller read it, and the caller asked to act only on what it read."""
 
 
 class ImportProblems(UnitError):
@@ -302,6 +306,19 @@ def check_position(value: Any) -> str:
 
 def position_key(position: str) -> str:
     return norm(position)
+
+
+def parse_evidence(items: Iterable[str]) -> list[dict]:
+    """``KIND:REF[=LABEL]`` as typed on a command line (``inspection:ins_...``, ``work-order:WO-00012=first article``) as
+    evidence items; ``check_evidence`` then checks them."""
+    evidence = []
+    for e in items:
+        kind, sep, rest = e.partition(":")
+        if not sep:
+            raise ValidationError(f"evidence {e!r} should look like KIND:REF, e.g. inspection:ins_...")
+        ref, _, label = rest.partition("=")
+        evidence.append({"kind": kind.strip(), "ref": ref.strip(), "label": label.strip()})
+    return evidence
 
 
 def check_evidence(items: Any) -> list[dict]:

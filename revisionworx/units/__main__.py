@@ -35,7 +35,7 @@ from typing import Any
 from ..workspace import CommittedNotApplied, Workspace, WorkspaceError
 from . import csvio, effect, query
 from .model import (BASES, CLASSES, DISPOSITIONS, EFFECTIVITY_KINDS, MILESTONES, SCHEMES, SCOPE_RULES, STATUSES, UnitError,
-                    ValidationError, unit_label)
+                    ValidationError, parse_evidence, unit_label)
 from .service import UnitService, service_for
 
 READS = {"list", "show", "history", "where-used", "verify", "export", "compliance"}
@@ -202,19 +202,8 @@ def _change_id(ws: Workspace, ref: str) -> str:
     return found.id
 
 
-def _meta_evidence(items: list[str]) -> list[dict]:
-    evidence = []
-    for e in items:
-        kind, sep, rest = e.partition(":")
-        if not sep:
-            raise ValidationError(f"evidence {e!r} should look like KIND:REF, e.g. inspection:ins_...")
-        ref, _, label = rest.partition("=")
-        evidence.append({"kind": kind.strip(), "ref": ref.strip(), "label": label.strip()})
-    return evidence
-
-
 def _meta(ws: Workspace, a: argparse.Namespace) -> dict:
-    evidence = _meta_evidence(a.evidence)
+    evidence = parse_evidence(a.evidence)
     return {"effective": a.effective, "basis": a.basis, "reason": a.reason, "change": _change_id(ws, a.change),
             "evidence": evidence}
 
@@ -510,12 +499,12 @@ def _change(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
         rec = effect.set_state(svc, a.ref, a.change, a.state, reason=a.reason, effective=a.effective)
     elif a.sub == "install":
         rec = effect.install(svc, a.ref, a.change, basis=a.basis, effective=a.effective, reason=a.reason,
-                             evidence=_meta_evidence(a.evidence))
+                             evidence=parse_evidence(a.evidence))
     elif a.sub == "verify":
-        rec = effect.verify(svc, a.ref, a.change, effective=a.effective, reason=a.reason, evidence=_meta_evidence(a.evidence))
+        rec = effect.verify(svc, a.ref, a.change, effective=a.effective, reason=a.reason, evidence=parse_evidence(a.evidence))
     elif a.sub == "reverse":
         rec = effect.reverse(svc, a.ref, a.change, reason=a.reason, effective=a.effective,
-                             evidence=_meta_evidence(a.evidence))
+                             evidence=parse_evidence(a.evidence))
     else:  # pragma: no cover
         raise ValidationError(f"unknown command change {a.sub}")
     out.write(f"{unit_label(svc.unit(rec['unit']))}: {a.change} {rec['state']}\n")

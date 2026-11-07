@@ -665,8 +665,8 @@ def build_parser() -> argparse.ArgumentParser:
                    "import-csv (run 'revisionworx change -h')", add_help=False)
     sub.add_parser("unit", help="the unit register: serial numbers, build standards, configuration and history "
                    "(run 'revisionworx unit -h')", add_help=False)
-    sub.add_parser("link", help="JSON commands for other programs: status, publish, fetch, open "
-                   "(see docs/INTEGRATION.md)", add_help=False)
+    sub.add_parser("link", help="JSON commands for other programs: status, publish, fetch, open, units, and recording on "
+                   "units (see docs/INTEGRATION.md)", add_help=False)
 
     s = sub.add_parser("init", help="create a new workspace")
     s.add_argument("location"); s.add_argument("--name", required=True); s.set_defaults(fn=cmd_init)

@@ -827,7 +827,7 @@ cursor with different entries, and the cache kept serving records that exist in 
 
 **Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed before every file change, simulated client caches. `.github/workflows/shares.yml` runs the same races against real file servers on one hosted machine: Windows SMB 3.1.1 (client and server, by three server names, which makes three connections), the Linux kernel's SMB client against Samba (two mounts), and NFS 4.2 and 3 (two kernel clients). That found behaviour no simulation had, which the design now handles: a Linux SMB client answering EBUSY or EIO for a moment about a file that's fine, a client told a folder exists and then that it doesn't, and NFS taking seconds to show a change. Two NFS 4 mounts, being one client to the server, never heard about each other's changes at all, which is why that job mixes versions. **None of that is evidence across computers:** it's one machine and one network path, with no cable pulled and no server rebooted. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
 
-### ADR-025 Units: serial-numbered units and their configuration live in this journal — IMPLEMENTED (phase 1 of 4; phase 2 in progress)
+### ADR-025 Units: serial-numbered units and their configuration live in this journal — IMPLEMENTED (phases 1 and 2 of 4; phase 3 in progress)
 
 **Decision (2026-11-06).** Every physical unit a company builds, sells or looks after gets one permanent identity and one append-only
 configuration history in the workspace journal, as a subsystem (`revisionworx/units/`, design and data contract in `docs/UNITS.md`)
@@ -850,8 +850,9 @@ and absent from service companies that never use it. A separate database would b
 
 **Phases.** 1: the register, standards, differences, components, history, verify, command line, `link units`, import (done). 2: ECO
 effectivity and per-unit compliance (`docs/UNITS.md` section 10: change orders are unchanged; an effectivity record beside the
-order, written once, and a compliance record per unit and order); a PDF derivative tied to each native revision; numbering rules; a Units screen. 3: accepting
-FieldWorx records into unit histories; deviations and concessions. 4: transfer between workspaces, merged identities, journal checkpoints.
+order, written once, and a compliance record per unit and order); a PDF derivative tied to each native revision; numbering rules; a Units screen (done). 3:
+other programs recording on units (ADR-027, done), accepting FieldWorx records into unit histories; deviations and concessions. 4: transfer between
+workspaces, merged identities, journal checkpoints.
 
 **Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
 `unit verify` detects but the journal rules don't refuse; making these kinds write-once in `shared.judge` needs a new format version and
@@ -883,6 +884,29 @@ announced by the `pdf-derivatives` feature. `revisionworx doc verify` re-hashes 
 
 **Not done.** Making the PDF: RevisionWorx doesn't drive CAD programs. DXF and DWG derivatives. Detecting a PDF exported from the
 wrong native file: the person attaching it says which revision it prints, and that is what is recorded.
+
+### ADR-027 Other programs record on units through `link`, with a txid — IMPLEMENTED
+
+**Decision (2026-11-07).** OpenMeridian registers the units its work orders build, and FieldWorx's office bridge records what someone
+accepts from the field (a replacement, a change made on site, a note), through `revisionworx link unit-register | unit-fit |
+unit-remove | unit-note | unit-milestone | unit-change-install` (feature `unit-records`; `docs/INTEGRATION.md`). The Director
+allowed OpenMeridian this one narrow write (gate 2): registering what its own work orders built.
+
+**Why through `link`.** The unit register is the one place a unit's configuration lives (ADR-025). A program writing its own copy,
+or writing unit files, would be a second register, and would skip what every entry gets here: fencing, signatures in a team
+workspace, crash recovery and `verify`. Each command is the same action as `revisionworx unit`, through the desktop window's writer.
+
+**Shape.**
+- **A txid is required** and comes from the caller's own record, so a retry after a lost answer is recognised (`already-recorded`),
+  and the same txid with other input is refused. New units take ids derived from it (ADR-021), so a retry finds them.
+- **Basis and evidence** record where a fact came from (`reported` with `fieldworx-event:<id>`; `declared` with
+  `work-order:<number>`). The actor is the person recording here.
+- **`--if-events N`**: act only if the unit still has the N events the person deciding saw. `UnitService.expecting` compares it
+  when the action reads the unit, at the revision its commit insists on, so a fact recorded meanwhile can't be overwritten by a
+  decision made without it. An expectation the action never checks is refused, rather than ignored.
+
+**Not done.** Accepting a field record is still a person's act in the bridge; nothing on a phone is applied by itself. A program
+can't void what it recorded (a person does, with `unit void`).
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

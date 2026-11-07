@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 from . import __version__, documents, paths, projects
 from .workspace import Workspace, WorkspaceError
@@ -180,7 +180,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------------------------- commands
-FEATURES = ["units", "unit-changes", "pdf-derivatives"]                       # additive commands since API 1: ask before relying on one
+FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records"]       # additive commands since API 1: ask before relying on one
 
 
 def version() -> dict:
@@ -431,9 +431,10 @@ def _unit_service(ws: Workspace):
 
 
 def _unit_error(exc: Exception) -> LinkError:
-    from .units import Ambiguous, MalformedUnitRecord, NotFound
+    from .units import Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord, NotFound, ReplayRefused
     kind = "not-found" if isinstance(exc, NotFound) else "ambiguous" if isinstance(exc, Ambiguous) else \
-        "error" if isinstance(exc, MalformedUnitRecord) else "bad-input"
+        "error" if isinstance(exc, MalformedUnitRecord) else "duplicate" if isinstance(exc, DuplicateIdentifier) else \
+        "changed" if isinstance(exc, Changed) else "txid-used" if isinstance(exc, ReplayRefused) else "bad-input"
     return LinkError(str(exc), kind)
 
 
@@ -471,6 +472,237 @@ def unit(ref: str, workspace: Path | None = None, at: int | None = None, on: str
             return {"workspace": _ws_summary(ws, loc), "unit": query.unit_detail(svc, u, at=at, on=on)}
         except UnitError as exc:
             raise _unit_error(exc) from None
+
+
+# ------------------------------------------------------------------------- recording facts on units (feature "unit-records")
+MAX_UNITS_PER_CALL = 1000
+
+
+def _record(workspace: Path | None, txid: str, act: Callable[[Any], list[str]], *, cfg_dir: Path | None = None,
+            cache_dir: Path | None = None, state_dir: Path | None = None) -> tuple[dict, list[str], Path]:
+    """Run one unit action through the writer the desktop window uses: one journal entry, in the logged-in person's name in a
+    team workspace. ``act(svc)`` resolves its references, acts with ``txid`` and returns the ids of the units to answer with.
+
+    A ``txid`` already recorded with the same input answers ``already-recorded`` and writes nothing; with different input it is
+    refused (``txid-used``)."""
+    from .gui.controller import SavedWithWarning
+    from .units import UnitError
+    from .units.model import check_txid
+    from .workspace import CommittedNotApplied, ConflictError
+    try:
+        check_txid(txid)
+    except UnitError as exc:
+        raise LinkError(str(exc), "bad-input") from None
+    if not txid:
+        raise LinkError("give a --txid: 32 lowercase hex characters, the same for every attempt at one action", "bad-input")
+    loc = _one_workspace(workspace, cfg_dir)
+    ctl = _controller(loc, cfg_dir=cfg_dir, cache_dir=cache_dir, state_dir=state_dir)
+    warning = None
+    ids: list[str] = []
+    replayed = False
+    try:
+        with ctl._write() as ws:
+            svc = _unit_service(ws)
+            ids = act(svc)
+            replayed = svc.last_replayed
+    except UnitError as exc:
+        raise _unit_error(exc) from None
+    except ConflictError as exc:
+        raise LinkError(f"{exc}; nothing was written. Try again with the same txid", "conflict") from None
+    except CommittedNotApplied:
+        warning = "saved; the workspace finishes recording it when it is next opened for writing"
+    except SavedWithWarning as w:
+        warning = w.warning
+    out = {"result": "already-recorded" if replayed else "recorded"}
+    if warning:
+        out["warning"] = warning
+    return out, ids, loc
+
+
+def _answer_units(loc: Path, txid: str, ids: list[str], one: bool) -> dict:
+    """The units as they stand after the action, and the numbers of the events this attempt wrote on each."""
+    from .units import NotFound, query
+    with Workspace.open(loc) as ws:
+        svc = _unit_service(ws)
+        rows, events = [], []
+        for uid in ids:
+            try:
+                u = svc.unit(uid)
+            except NotFound:                         # saved, finishing delayed: the next writable open completes it
+                continue
+            rows.append(query.unit_detail(svc, u))
+            events.append([e["n"] for e in svc.events(uid) if e["txid"] == txid])
+        out: dict = {"workspace": _ws_summary(ws, loc)}
+    if one:
+        out["unit"] = rows[0] if rows else None
+        out["events"] = events[0] if events else []
+    else:
+        out["units"] = rows
+    return out
+
+
+def _meta_args(svc, effective: str, basis: str, evidence: Iterable[str], reason: str, change: str) -> dict:
+    from .units import effect
+    from .units.model import parse_evidence
+    return {"effective": effective, "basis": basis, "evidence": parse_evidence(evidence), "reason": reason,
+            "change": effect.order(svc, change).id if change else ""}
+
+
+def unit_register(*, txid: str, serials: Iterable[str] = (), issuer: str = "", serial_from: str = "", count: int = 1,
+                  tag: str = "", tag_issuer: str = "", other: str = "", name: str = "", model: str = "", cls: str = "product",
+                  status: str = "planned", project: str = "", customer: str = "", site: str = "", location: str = "",
+                  standard: str = "", docs: Iterable[str] = (), milestones: dict[str, str] | None = None, notes: str = "",
+                  effective: str = "", basis: str = "declared", evidence: Iterable[str] = (), reason: str = "",
+                  change: str = "", workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
+                  state_dir: Path | None = None) -> dict:
+    """Register units, all of them or none, in one entry. One unit per serial given; or ``count`` units each issued the next
+    serial of ``serial_from``; or one unit known by a tag or other code. The ids come from the txid, so a retry finds them."""
+    serials = [s for s in serials]
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_UNITS_PER_CALL:
+        raise LinkError(f"--count is a whole number from 1 to {MAX_UNITS_PER_CALL}", "bad-input")
+    if serials and serial_from:
+        raise LinkError("give serials or a numbering to issue them from, not both", "bad-input")
+    if serials and count != 1:
+        raise LinkError("--count is for --serial-from: with --serial, each serial is one unit", "bad-input")
+    if len(serials) > MAX_UNITS_PER_CALL:
+        raise LinkError(f"at most {MAX_UNITS_PER_CALL} units at once", "bad-input")
+    n = len(serials) or count
+    if n > 1 and (tag or other):
+        raise LinkError("a tag or other code belongs to one unit: register several units without one", "bad-input")
+    if not (serials or serial_from or tag or other):
+        raise LinkError("give each unit a --serial (or --serial-from a numbering), --tag or --other code, so it can be found",
+                        "bad-input")
+    from .units.model import derived_id
+
+    def act(svc) -> list[str]:
+        documents_ = {}
+        for ref in docs:
+            did, rid = svc.doc_rev(ref)
+            documents_[did] = rid
+        base = {"class": cls, "name": name, "model": {"part": "", "number": model}, "status": status,
+                "project": svc.project_id(project) if project else "", "customer": customer, "site": site,
+                "location": location, "notes": notes, "standard": svc.resolve_standard(standard)["id"] if standard else "",
+                "documents": documents_, "milestones": dict(milestones or {}), "serial_from": serial_from}
+        specs = []
+        for i in range(n):
+            idents = []
+            if serials:
+                idents.append({"scheme": "serial", "value": serials[i], "issuer": issuer})
+            if tag:
+                idents.append({"scheme": "tag", "value": tag, "issuer": tag_issuer})
+            if other:
+                idents.append({"scheme": "other", "value": other, "issuer": ""})
+            specs.append({**base, "identifiers": idents})
+        units = svc.register_many(specs, txid=txid, **_meta_args(svc, effective, basis, evidence, reason, change))
+        return [u["id"] for u in units]
+
+    out, ids, loc = _record(workspace, txid, act, cfg_dir=cfg_dir, cache_dir=cache_dir, state_dir=state_dir)
+    ids = ids or [derived_id("unt", txid, f"unit:{i}") for i in range(n)]
+    return {**out, **_answer_units(loc, txid, ids, one=False)}
+
+
+def _one_unit_action(ref: str, txid: str, if_events: int | None, do: Callable[[Any, dict], None], *,
+                     workspace: Path | None, cfg_dir: Path | None, cache_dir: Path | None, state_dir: Path | None,
+                     extra: Callable[[Any, str], dict] | None = None) -> dict:
+    """Resolve ``ref`` to one unit, then ``do(svc, unit)`` with the txid; answer the unit and the events written on it."""
+    found: dict = {}
+
+    def act(svc) -> list[str]:
+        u = svc.resolve(ref)
+        found["id"] = u["id"]
+        if if_events is None:
+            do(svc, u)
+        else:
+            with svc.expecting({u["id"]: if_events}):
+                do(svc, u)
+        return [u["id"]]
+
+    out, ids, loc = _record(workspace, txid, act, cfg_dir=cfg_dir, cache_dir=cache_dir, state_dir=state_dir)
+    ids = ids or ([found["id"]] if "id" in found else [])
+    answer = {**out, **_answer_units(loc, txid, ids, one=True)}
+    if extra is not None and ids:
+        with Workspace.open(loc) as ws:
+            answer.update(extra(_unit_service(ws), ids[0]))
+    return answer
+
+
+def unit_fit(ref: str, position: str, *, txid: str, component: str = "", part_number: str = "", serial: str = "",
+             lot: str = "", replace: bool = False, disposition: str = "unknown", if_events: int | None = None,
+             effective: str = "", basis: str = "declared", evidence: Iterable[str] = (), reason: str = "", change: str = "",
+             workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
+             state_dir: Path | None = None) -> dict:
+    """Fit something at a position: a part number (with its serial or lot), or a component unit. ``replace`` takes out what is
+    there first (``disposition``); without it an occupied position is refused."""
+    def do(svc, u: dict) -> None:
+        comp = svc.resolve(component)["id"] if component else ""
+        svc.install(u["id"], position, number=part_number, component=comp, serial=serial, lot=lot, replace=replace,
+                    disposition=disposition, txid=txid, **_meta_args(svc, effective, basis, evidence, reason, change))
+
+    return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
+                            state_dir=state_dir)
+
+
+def unit_remove(ref: str, position: str, *, txid: str, disposition: str = "unknown", if_events: int | None = None,
+                effective: str = "", basis: str = "declared", evidence: Iterable[str] = (), reason: str = "", change: str = "",
+                workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
+                state_dir: Path | None = None) -> dict:
+    """Take out what is fitted at a position (refused when it's empty)."""
+    def do(svc, u: dict) -> None:
+        svc.remove(u["id"], position, disposition=disposition, txid=txid,
+                   **_meta_args(svc, effective, basis, evidence, reason, change))
+
+    return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
+                            state_dir=state_dir)
+
+
+def unit_note(ref: str, text: str, *, txid: str, if_events: int | None = None, effective: str = "", basis: str = "declared",
+              evidence: Iterable[str] = (), reason: str = "", change: str = "", workspace: Path | None = None,
+              cfg_dir: Path | None = None, cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
+    """Add a note to a unit's history: something found that the register doesn't settle on its own."""
+    def do(svc, u: dict) -> None:
+        svc.note(u["id"], text, txid=txid, **_meta_args(svc, effective, basis, evidence, reason, change))
+
+    return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
+                            state_dir=state_dir)
+
+
+def unit_milestone(ref: str, milestone: str, *, txid: str, on: str = "", if_events: int | None = None,
+                   basis: str = "declared", evidence: Iterable[str] = (), reason: str = "", change: str = "",
+                   workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
+                   state_dir: Path | None = None) -> dict:
+    """Built, shipped, installed, commissioned or decommissioned, on a date (``""`` when it isn't known)."""
+    def do(svc, u: dict) -> None:
+        meta = _meta_args(svc, "", basis, evidence, reason, change)
+        meta.pop("effective")
+        svc.milestone(u["id"], milestone, on, txid=txid, **meta)
+
+    return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
+                            state_dir=state_dir)
+
+
+def unit_change_install(ref: str, change: str, *, txid: str, basis: str = "reported", if_events: int | None = None,
+                        effective: str = "", evidence: Iterable[str] = (), reason: str = "", workspace: Path | None = None,
+                        cfg_dir: Path | None = None, cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
+    """An engineering change made on a unit: its documents move to the change's new revisions in the same entry, ``installed``
+    (``reported`` by default) or ``verified`` when the basis is ``verified`` (docs/UNITS.md section 10.2)."""
+    from .units import effect
+    from .units.model import parse_evidence
+    found: dict = {}
+
+    def do(svc, u: dict) -> None:
+        found["change"] = effect.order(svc, change).id
+        effect.install(svc, u["id"], found["change"], basis=basis, effective=effective, evidence=parse_evidence(evidence),
+                       reason=reason, txid=txid)
+
+    def extra(svc, unit_id: str) -> dict:
+        rec = effect.compliance(svc, found["change"], unit_id) if "change" in found else None
+        if rec is None:
+            return {"compliance": None}
+        rec.pop("_rev", None)
+        return {"compliance": rec}
+
+    return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
+                            state_dir=state_dir, extra=extra)
 
 
 def open_in_gui(ref: str | None = None, file: Path | None = None, workspace: Path | None = None,
@@ -520,6 +752,32 @@ def _one_workspace(workspace: Path | None, cfg_dir: Path | None, near: Path | No
 
 
 # ------------------------------------------------------------------------------------------ command line
+def _record_command(a, ws: Path | None) -> dict:
+    common = {"txid": a.txid, "basis": a.basis, "evidence": a.evidence, "reason": a.reason, "workspace": ws}
+    guard = {"if_events": a.if_events} if hasattr(a, "if_events") else {}
+    if hasattr(a, "change") and a.cmd != "unit-change-install":
+        common["change"] = a.change
+    if a.cmd == "unit-register":
+        from .units.model import MILESTONES
+        milestones = {m: getattr(a, m) for m in MILESTONES if getattr(a, m) is not None}
+        return unit_register(serials=a.serial, issuer=a.issuer, serial_from=a.serial_from, count=a.count, tag=a.tag,
+                             tag_issuer=a.tag_issuer, other=a.other, name=a.name, model=a.model, cls=a.cls, status=a.status,
+                             project=a.project, customer=a.customer, site=a.site, location=a.location, standard=a.standard,
+                             docs=a.doc, milestones=milestones, notes=a.notes, effective=a.effective, **common)
+    if a.cmd == "unit-fit":
+        return unit_fit(a.ref, a.position, component=a.component, part_number=a.part_number, serial=a.serial, lot=a.lot,
+                        replace=a.replace, disposition=a.disposition, effective=a.effective, **guard, **common)
+    if a.cmd == "unit-remove":
+        return unit_remove(a.ref, a.position, disposition=a.disposition, effective=a.effective, **guard, **common)
+    if a.cmd == "unit-note":
+        return unit_note(a.ref, a.text, effective=a.effective, **guard, **common)
+    if a.cmd == "unit-milestone":
+        return unit_milestone(a.ref, a.milestone, on=a.on, **guard, **common)
+    if a.cmd == "unit-change-install":
+        return unit_change_install(a.ref, a.change, effective=a.effective, **guard, **common)
+    raise LinkError(f"unknown command {a.cmd}", "bad-input")  # pragma: no cover - the parser knows every command
+
+
 def main(argv: list[str], workspace: str | None = None) -> int:
     import argparse
     import json
@@ -544,6 +802,42 @@ def main(argv: list[str], workspace: str | None = None) -> int:
     s.add_argument("--detail", action="store_true")
     s = sub.add_parser("unit"); s.add_argument("ref"); g = s.add_mutually_exclusive_group()
     g.add_argument("--at", type=int); g.add_argument("--on", default="")
+    from .units.model import BASES, CLASSES, DISPOSITIONS, MILESTONES, STATUSES
+
+    def recording(s, *, basis: str = "declared", effective: bool = True, change: bool = True, guard: bool = True) -> None:
+        s.add_argument("--txid", required=True, help="32 lowercase hex, the same for every attempt at this action")
+        if guard:
+            s.add_argument("--if-events", type=int, default=None, help="only if the unit still has this many events")
+        if effective:
+            s.add_argument("--effective", default="")
+        s.add_argument("--basis", default=basis, choices=BASES); s.add_argument("--reason", default="")
+        if change:
+            s.add_argument("--change", default="")
+        s.add_argument("--evidence", action="append", default=[], metavar="KIND:REF[=LABEL]")
+
+    s = sub.add_parser("unit-register")
+    s.add_argument("--serial", action="append", default=[]); s.add_argument("--issuer", default="")
+    s.add_argument("--serial-from", default=""); s.add_argument("--count", type=int, default=1)
+    s.add_argument("--tag", default=""); s.add_argument("--tag-issuer", default=""); s.add_argument("--other", default="")
+    s.add_argument("--name", default=""); s.add_argument("--model", default="")
+    s.add_argument("--class", dest="cls", default="product", choices=CLASSES)
+    s.add_argument("--status", default="planned", choices=STATUSES); s.add_argument("--project", default="")
+    s.add_argument("--customer", default=""); s.add_argument("--site", default=""); s.add_argument("--location", default="")
+    s.add_argument("--standard", default=""); s.add_argument("--doc", action="append", default=[], metavar="DOC@REV")
+    for m in MILESTONES:
+        s.add_argument(f"--{m}", default=None, metavar="DATE")
+    s.add_argument("--notes", default=""); recording(s, guard=False)
+    s = sub.add_parser("unit-fit"); s.add_argument("ref"); s.add_argument("position")
+    s.add_argument("--component", default=""); s.add_argument("--part-number", default="")
+    s.add_argument("--serial", default=""); s.add_argument("--lot", default=""); s.add_argument("--replace", action="store_true")
+    s.add_argument("--disposition", default="unknown", choices=DISPOSITIONS); recording(s)
+    s = sub.add_parser("unit-remove"); s.add_argument("ref"); s.add_argument("position")
+    s.add_argument("--disposition", default="unknown", choices=DISPOSITIONS); recording(s)
+    s = sub.add_parser("unit-note"); s.add_argument("ref"); s.add_argument("text"); recording(s)
+    s = sub.add_parser("unit-milestone"); s.add_argument("ref"); s.add_argument("milestone", choices=MILESTONES)
+    s.add_argument("--on", default="", help="the date (empty when unknown)"); recording(s, effective=False)
+    s = sub.add_parser("unit-change-install"); s.add_argument("ref"); s.add_argument("change")
+    recording(s, basis="reported", change=False)
     try:
         a = p.parse_args(argv)
     except SystemExit as exc:
@@ -574,6 +868,8 @@ def main(argv: list[str], workspace: str | None = None) -> int:
             out = list_units(ws, a.project, a.text, a.detail)
         elif a.cmd == "unit":
             out = unit(a.ref, ws, a.at, a.on)
+        elif a.cmd.startswith("unit-"):
+            out = _record_command(a, ws)
         else:
             out = open_in_gui(a.document, Path(a.file) if a.file else None, ws)
     except LinkError as exc:

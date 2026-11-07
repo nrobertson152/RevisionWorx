@@ -155,6 +155,10 @@ unit and where that came from. When engineering releases a newer revision, the u
 one place at a time, and `unit where-used --component SERIAL --history` says everywhere it has been. A replacement is
 `unit fit ... --replace --disposition repair`.
 
+**From other programs.** Programs record on units through `revisionworx link` (`docs/INTEGRATION.md`): the units a work order
+built, or what someone in the office accepted from the field. Each fact says where it came from (a work order, a field record)
+and how well it's known (*reported* until someone verifies it), and in a team workspace it's in the name of whoever is logged in.
+
 **Mistakes** are never edited away: `unit void NH-26-0001 7 --reason "recorded on the wrong unit"` keeps the event in the history
 and computes the unit without it. `unit history` shows everything; `unit show --on 2027-05-01` shows the unit as known now on
 that date; `unit verify` checks every history and reference, and changes nothing.
