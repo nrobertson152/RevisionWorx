@@ -557,12 +557,44 @@ def cmd_rev_compare(args):
 
 
 def cmd_doc_verify(args):
+    from . import derivatives
     with _open(args, False) as ws:
         problems = documents.verify_revisions(ws, args.id)
-        _emit(args, problems, "\n".join(f"{p['document_id']} rev {p['label']}: {p['problem']}" for p in problems)
-              or "All stored revision content verified (SHA-256).")
-        if problems:
+        pdfs = [p for p in derivatives.verify(ws)
+                if not args.id or (ws.get(derivatives.KIND, p["id"]) or {}).get("document") == args.id]
+        _emit(args, problems + pdfs, "\n".join([f"{p['document_id']} rev {p['label']}: {p['problem']}" for p in problems]
+                                               + [f"PDF {p['id']}: {p['problem']} ({p['detail']})" for p in pdfs])
+              or "All stored revision content and PDFs verified (SHA-256).")
+        if problems or pdfs:
             raise SystemExit(1)
+
+
+def cmd_doc_pdf(args):
+    from . import derivatives
+    with _open(args, True) as ws:
+        rev = derivatives.find_revision(ws, args.revision)
+        d = derivatives.attach(ws, rev["id"], Path(args.file), tool=args.tool, replace=args.replace, reason=args.reason)
+        doc = ws.get("document", rev["document_id"]) or {}
+        _emit(args, d, f"{doc.get('number') or doc.get('id')} rev {rev['label']}: PDF {d['sha256'][:12]} attached"
+                       + (f" in place of {len(d['replaced'])} earlier one(s)" if d["replaced"] else ""))
+
+
+def cmd_doc_pdfs(args):
+    from . import derivatives
+    with _open(args, False) as ws:
+        if args.missing:
+            rows = derivatives.missing(ws, args.project)
+            _emit(args, rows, "\n".join(f"{r['number'] or r['document']} rev {r['label']}: released, no PDF" for r in rows)
+                  + f"\n{len(rows)} released revision(s) without a PDF")
+            return
+        rows = []
+        for doc in documents.list_documents(ws, args.project):
+            for rev_id, d in derivatives.of_document(ws, doc["id"]).items():
+                rev = ws.get("revision", rev_id) or {}
+                rows.append({"document": doc["id"], "number": doc.get("number", ""), "label": rev.get("label", ""),
+                             "sha256": d["sha256"], "size": d["size"], "tool": d["tool"], "replaced": len(d["replaced"])})
+        _emit(args, rows, "\n".join(f"{r['number'] or r['document']} rev {r['label']}: {r['size']} bytes"
+                                     f"{', ' + r['tool'] if r['tool'] else ''}" for r in rows) + f"\n{len(rows)} PDF(s)")
 
 
 def cmd_doc_gc(args):
@@ -718,7 +750,14 @@ def build_parser() -> argparse.ArgumentParser:
     s = doc.add_parser("release-checkout", help="administrative release of an abandoned checkout")
     s.add_argument("id"); s.add_argument("--token", required=True, help="token shown by checkout-info")
     s.add_argument("--reason", required=True); s.set_defaults(fn=cmd_doc_release_checkout)
-    s = doc.add_parser("verify", help="re-hash stored revision content"); s.add_argument("--id")
+    s = doc.add_parser("pdf", help="attach the PDF of one revision (a CAD export), tied to that revision (ADR-026)")
+    s.add_argument("revision", metavar="DOC@REV"); s.add_argument("file")
+    s.add_argument("--tool", default="", help="how it was made, e.g. 'Inventor 2025 export'")
+    s.add_argument("--replace", action="store_true", help="put a corrected PDF in place of the current one")
+    s.add_argument("--reason", default=""); s.set_defaults(fn=cmd_doc_pdf)
+    s = doc.add_parser("pdfs", help="revisions' PDFs, or with --missing the released revisions without one")
+    s.add_argument("--project"); s.add_argument("--missing", action="store_true"); s.set_defaults(fn=cmd_doc_pdfs)
+    s = doc.add_parser("verify", help="re-hash stored revision content and PDFs"); s.add_argument("--id")
     s.set_defaults(fn=cmd_doc_verify)
     s = doc.add_parser("gc", help="find/remove content objects no revision references (admin)")
     s.add_argument("--apply", action="store_true"); s.add_argument("--min-age-hours", type=float, default=1.0)

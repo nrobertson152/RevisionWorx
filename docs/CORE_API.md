@@ -234,6 +234,7 @@ starting with `_`.
 | `part`, `partnum`, `bomline`, `bomstruct`, `partseq`, `partrule` | BOM, Claude C (PR #21) |
 | `changereq`, `changeord`, `changeevt`, `changenum`, `changecfg` | change control, Claude D (PR #20) |
 | `unit`, `unitevt`, `unitkey`, `buildstd`, `uniteff`, `unitcmp`, `unitseq` | units (ADR-025, `docs/UNITS.md`) |
+| `derivative` | PDF derivatives of revisions (ADR-026, `derivatives.py`) |
 
 A new kind is added to this table and to the collision test on PR #7 before use.
 

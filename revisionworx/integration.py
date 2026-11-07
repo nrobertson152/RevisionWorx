@@ -93,10 +93,16 @@ def _rev_summary(ws: Workspace, rev: dict | None) -> dict | None:
         return None
     lc = documents.get_lifecycle(ws)
     names = {s["id"]: s["name"] for s in lc["states"]}
+    from . import derivatives
+    try:
+        pdf = derivatives.get(ws, rev["id"])
+    except derivatives.MalformedDerivative:
+        pdf = None                                  # a damaged record is reported by 'doc verify', never used
     return {"id": rev["id"], "label": rev["label"], "state": rev["state"],
             "state_name": names.get(rev["state"], rev["state"]), "sha256": rev["sha256"], "size": rev["size"],
             "created": rev.get("created"), "author": (rev.get("author") or {}).get("user", ""),
-            "description": rev.get("description", "")}
+            "description": rev.get("description", ""),
+            "pdf": None if pdf is None else {"sha256": pdf["sha256"], "size": pdf["size"], "tool": pdf["tool"]}}
 
 
 def _doc_summary(ws: Workspace, doc: dict, tokens=None) -> dict:
@@ -174,7 +180,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------------------------- commands
-FEATURES = ["units", "unit-changes"]                       # additive commands since API 1: ask before relying on one
+FEATURES = ["units", "unit-changes", "pdf-derivatives"]                       # additive commands since API 1: ask before relying on one
 
 
 def version() -> dict:
@@ -266,9 +272,10 @@ def document(ref: str, workspace: Path | None = None, project: str | None = None
 
 
 def fetch(ref: str, dest_dir: Path, revision: str | None = None, workspace: Path | None = None,
-          project: str | None = None, released: bool = False, cfg_dir: Path | None = None) -> dict:
+          project: str | None = None, released: bool = False, cfg_dir: Path | None = None, pdf: bool = False) -> dict:
     """Copy one revision's verified content to ``dest_dir`` (read-only use: viewing, printing, analysis).
-    Default: the latest revision; ``released``: the latest Released one; ``revision``: that label."""
+    Default: the latest revision; ``released``: the latest Released one; ``revision``: that label. ``pdf``: the PDF tied to
+    that revision (ADR-026) instead of its content; a revision without one is ``not-found``, never another revision's."""
     loc = _one_workspace(workspace, cfg_dir)
     ctl = _controller(loc, cfg_dir=cfg_dir)
     with Workspace.open(loc) as ws:
@@ -296,6 +303,13 @@ def fetch(ref: str, dest_dir: Path, revision: str | None = None, workspace: Path
         stem, suffix = os.path.splitext(name)
         summary = _rev_summary(ws, rev)
         ws_summary = _ws_summary(ws, loc)
+        if pdf:
+            from . import derivatives
+            if summary["pdf"] is None:
+                raise LinkError(f"{doc.get('number') or doc['id']} rev {rev['label']} has no PDF", "not-found")
+            Path(dest_dir).mkdir(parents=True, exist_ok=True)
+            out = derivatives.export(ws, rev["id"], Path(dest_dir) / f"{stem} (rev {rev['label']}).pdf", overwrite=True)
+            return {"workspace": ws_summary, "document_id": doc["id"], "revision": summary, "path": str(out), "pdf": True}
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     target = dest_dir / f"{stem} (rev {rev['label']}){suffix}"
@@ -521,6 +535,7 @@ def main(argv: list[str], workspace: str | None = None) -> int:
     s = sub.add_parser("document"); s.add_argument("ref"); s.add_argument("--project")
     s = sub.add_parser("fetch"); s.add_argument("ref"); s.add_argument("--to", required=True)
     s.add_argument("--revision"); s.add_argument("--released", action="store_true"); s.add_argument("--project")
+    s.add_argument("--pdf", action="store_true", help="the PDF tied to that revision, not its content")
     s = sub.add_parser("publish"); s.add_argument("file"); s.add_argument("--project"); s.add_argument("--document")
     s.add_argument("--number", default=""); s.add_argument("--title", default=""); s.add_argument("--folder", default="")
     s.add_argument("-m", "--message", default="")
@@ -551,7 +566,7 @@ def main(argv: list[str], workspace: str | None = None) -> int:
         elif a.cmd == "document":
             out = document(a.ref, ws, a.project)
         elif a.cmd == "fetch":
-            out = fetch(a.ref, Path(a.to), a.revision, ws, a.project, a.released)
+            out = fetch(a.ref, Path(a.to), a.revision, ws, a.project, a.released, pdf=a.pdf)
         elif a.cmd == "publish":
             out = publish(Path(a.file), workspace=ws, project=a.project, document_ref=a.document, number=a.number,
                           title=a.title, folder=a.folder, message=a.message)

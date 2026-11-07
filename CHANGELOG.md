@@ -14,6 +14,9 @@ The first release. Everything below is new.
   a time, and its own history says where it has been. `revisionworx unit ...`; `revisionworx link units` and `link unit` for
   other programs; existing registers and FieldWorx asset registers import all at once or not at all. See
   [docs/UNITS.md](docs/UNITS.md).
+- **PDFs tied to revisions.** `revisionworx doc pdf FRM-200@B export.pdf` attaches the PDF of a CAD drawing to exactly that
+  revision; a newer revision has no PDF until one is attached, never the older one's. `doc pdfs --missing` lists released
+  revisions without one. Other programs see each revision's PDF and fetch it with `link fetch --pdf`.
 - **Serial numbering.** `revisionworx unit numbering new NH --pattern "NH-{yy}-{seq:4}"`, then `unit new --serial-from NH`:
   the next serial of the unit's year (or month) is issued and claimed in the same step as the registration, so two people never
   get the same one, and a serial already in use is skipped.

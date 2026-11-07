@@ -857,6 +857,33 @@ FieldWorx records into unit histories; deviations and concessions. 4: transfer b
 `unit verify` detects but the journal rules don't refuse; making these kinds write-once in `shared.judge` needs a new format version and
 is planned. Not verified between real computers, like the rest of team use.
 
+### ADR-026 A PDF tied to the exact native revision it prints — IMPLEMENTED
+
+**Decision (2026-11-07).** A PDF made from a native drawing (an Inventor or SolidWorks export, a print to PDF) is recorded as a
+**derivative** of one revision: `revisionworx/derivatives.py`, record kind `derivative`. REQUIREMENTS.md asks for "explicit
+association of native source drawings with PDF derivatives, including revision consistency, missing and potentially stale export
+warnings; filename similarity is not proof of identity". ADR-025 needs it so a phone shows the drawing of the revision a unit
+uses, and nothing else.
+
+**Shape.** `derivative` (`drv_` + first 32 hex of `SHA-256("revisionworx/derivative/v1\0" + revision id + "\0" + format)`):
+`{"schema", "id", "revision", "document", "format": "pdf", "sha256", "size", "name", "tool", "source_sha256", "created",
+"created_by", "replaced": [{"sha256", "size", "name", "tool", "created", "created_by", "reason"}]}`. Its id comes from the
+revision's, so a revision has one current PDF. Its content is stored like revision content (`ContentStore`, by SHA-256) and is never
+changed; `source_sha256` is the native revision's SHA-256 when the PDF was attached, so a PDF can't be moved to other content.
+Replacing a wrong PDF needs a reason; the earlier one stays listed under `replaced`, and its content stays stored.
+
+**Rules.** Only a real PDF (`%PDF-` header) is accepted, and only for a revision whose own content isn't a PDF. A revision's PDF is
+shown for that revision only: a newer revision without one has *no PDF*, never the older one. `missing` lists released revisions of
+documents that aren't PDFs and have no PDF: the "missing export" warning. Content clean-up (`doc gc`) keeps every object a
+derivative names, current or replaced.
+
+**Interfaces.** `revisionworx doc pdf DOC@REV FILE [--tool T] [--replace --reason R]`, `revisionworx doc pdfs [--project P]
+[--missing]`; `link` revision objects carry `pdf` (`null` or `{sha256, size, tool}`) and `link fetch ... --pdf` copies it, both
+announced by the `pdf-derivatives` feature. `revisionworx doc verify` re-hashes derivative content too.
+
+**Not done.** Making the PDF: RevisionWorx doesn't drive CAD programs. DXF and DWG derivatives. Detecting a PDF exported from the
+wrong native file: the person attaching it says which revision it prints, and that is what is recorded.
+
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).

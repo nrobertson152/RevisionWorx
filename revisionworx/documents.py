@@ -761,7 +761,7 @@ def drawing_register_csv(rows: list[dict]) -> str:
 
 # ---------------------------------------------------------------------------- content GC
 def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600.0) -> dict:
-    """Find (and with ``apply`` remove) content objects no revision references.
+    """Find (and with ``apply`` remove) content objects no revision or PDF derivative (ADR-026) references.
 
     Orphans arise when a check-in stored content but failed before its journal entry. Safety:
     requires the writer lock (no check-in can be storing concurrently); every revision record,
@@ -769,7 +769,8 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
     kept; dry-run by default; removals are recorded in the journal as an audit record."""
     ws._require_writable()
     store = ContentStore(ws)
-    referenced = {r["sha256"] for r in _all(ws, "revision").values()}
+    from .derivatives import referenced as derivative_content
+    referenced = {r["sha256"] for r in _all(ws, "revision").values()} | derivative_content(ws)
     now = time.time()
     orphans, unrecognised, kept_young = [], [], 0
     if store.root.is_dir():
