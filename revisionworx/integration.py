@@ -174,7 +174,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------------------------- commands
-FEATURES = ["units"]                       # additive commands since API 1: ask before relying on one
+FEATURES = ["units", "unit-changes"]                       # additive commands since API 1: ask before relying on one
 
 
 def version() -> dict:
@@ -434,7 +434,12 @@ def list_units(workspace: Path | None = None, project: str | None = None, text: 
         try:
             pid = _find_project(ws, project)["id"] if project else ""
             units = query.search(svc, text, pid)
-            rows = [query.unit_detail(svc, u) if detail else query.unit_summary(u) for u in units]
+            if detail:
+                from .units.effect import ChangeIndex
+                index = ChangeIndex(svc)
+                rows = [query.unit_detail(svc, u, changes=index) for u in units]
+            else:
+                rows = [query.unit_summary(u) for u in units]
         except UnitError as exc:
             raise _unit_error(exc) from None
         return {"workspace": _ws_summary(ws, loc), "units": rows}

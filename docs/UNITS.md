@@ -303,8 +303,8 @@ decision) and `dangling-reference` (a change, unit or standard that doesn't exis
 
 ### 10.4 Commands and other programs
 
-`revisionworx unit change candidates|decide|status|add|set|install|verify|reverse` and `revisionworx unit compliance` (section 8 of
-`docs/USER_GUIDE.md`). `link unit` and `link units --detail` give each unit's `changes`: change id and number, title, kind, required,
+`revisionworx unit change candidates|decide|status|add|set|install|verify|reverse` and `revisionworx unit compliance` (the units
+section of `docs/USER_GUIDE.md`). `link unit` and `link units --detail` give each unit's `changes`: change id and number, title, kind, required,
 state, the date of the last step, and the rows. FieldWorx shows them on the phone.
 
 ## 11. Not done, and costs

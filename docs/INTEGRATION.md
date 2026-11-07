@@ -11,7 +11,7 @@ kind)` with a message written for your user.
 
 **Version:** `API_VERSION = 1` (`revisionworx link version`). It increments only on incompatible changes. New
 fields may be added to answers at any time, so ignore fields you do not know. Commands added since API 1 are named in
-`version`'s `features` (today `["units"]`): check for one before using it.
+`version`'s `features` (today `["units", "unit-changes"]`): check for one before using it.
 
 ## Safety
 
@@ -69,7 +69,10 @@ events {count, head}, created, updated, rev, history`, and `as_of` when `--at`/`
 "unit"), event, basis, released {id, label} | null, flags}`; `flags` among `newer-released`, `not-released`, `obsolete`, `missing`.
 The revision is always the one recorded for this unit; a newer released one is only ever named in `released`. Each of
 `components` is `{position, part, number, unit, label, serial, lot, since, event, basis}`; each of `history` is
-`{n, type, summary, effective, time, actor, basis, evidence, reason, change, voided}`. A summary (`units` without `--detail`) is
+`{n, type, summary, effective, time, actor, basis, evidence, reason, change, voided}`. A unit answered for now (not `--at` or
+`--on`) also has `changes` (feature `unit-changes`): each engineering change that reaches it (docs/UNITS.md section 10), outstanding ones first, as
+`{change, number, title, kind, required, state, outstanding, since, documents: [{document, number, from, from_label, to,
+to_label}]}`. A summary (`units` without `--detail`) is
 `{id, label, class, name, model, status, project, customer, site, location, identifiers, standard, parent, events, rev}`.
 
 **`file.state`:**
