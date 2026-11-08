@@ -97,6 +97,9 @@ The first release. Everything below is new.
 - Reads on an open workspace don't list the journal or read its last entry again when nothing has changed, so they
   stay quick however long the journal grows and after a large change. Before, importing a register of 2,000 units took
   97 s and checking it 181 s; now 3.8 s and 0.6 s. Commits still look at the whole journal before deciding.
+- Each computer keeps a checked summary of a workspace's journal, so a command, or another program asking through the
+  command line, reads only what is new since: 14 ms instead of 154 ms at 5,000 entries. It is used only when it
+  describes the journal exactly, never for a change, and is safe to delete.
 
 ### Projects and documents
 - Engineering roots with per-platform paths; folder templates; new projects; opt-in **Adopt existing project**

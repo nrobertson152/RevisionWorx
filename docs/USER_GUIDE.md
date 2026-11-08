@@ -69,6 +69,7 @@ Local, per-user files (safe to delete; they are rebuilt or only hold preferences
 | Preferences, recent workspaces | `%APPDATA%\RevisionWorx` | `~/.config/revisionworx` |
 | Search cache | `%LOCALAPPDATA%\RevisionWorx\cache` | `~/.cache/revisionworx` |
 | Checkout tokens | `%LOCALAPPDATA%\RevisionWorx\state` | `~/.local/state/revisionworx` |
+| This computer's checked summary of each workspace's journal, so commands start quickly | `%LOCALAPPDATA%\RevisionWorx\state\views` | `~/.local/state/revisionworx/views` |
 | Team workspace: this computer's copy of the journal, your login, an administrator's computer secret | `%LOCALAPPDATA%\RevisionWorx\state\shared` | `~/.local/state/revisionworx/shared` |
 
 Do not delete the checkout tokens while you have documents checked out: without them this session can no

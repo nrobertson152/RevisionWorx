@@ -351,7 +351,7 @@ class Controller:
 
     def _team_options(self, writing: bool = False) -> dict:
         if not self.team_mode:
-            return {}
+            return {"state_dir": self.state_dir}     # where this computer keeps its journal checkpoint (ADR-029)
         options = {"state_dir": self.state_dir, "session": self.session}
         if writing:                                  # waiting for someone's turn to end mustn't freeze the window for long
             options["wait"] = 3.0 if threading.current_thread() is threading.main_thread() else 60.0
