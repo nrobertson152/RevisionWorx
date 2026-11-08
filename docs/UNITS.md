@@ -129,11 +129,14 @@ superseded need an explicit choice (`allow_unreleased`), as an unreleased BOM do
 | `note` | `text` | none: it is history |
 | `verified` | `events: [n, …]` | the facts those events recorded (documents, components, the standard) now have basis `verified`; written when a reported change is confirmed (section 10), so nothing moves twice |
 | `void` | `events: [n, …]` | the listed events are ignored from then on; the reason is required |
+| `pack.issued` | `pack` (its number: 1, 2, 3 for the unit), `sums` (SHA-256 of its `SHA256SUMS`), `as_of` (`""`, or the day it shows the unit on), `key` (`""`, or the fingerprint of the key that signed it) | none: it is the register of the packs the workspace issued (section 13) |
+| `pack.withdrawn` | `pack` | none: that pack isn't to be relied on now; the reason is required |
 
 **Voiding** corrects a record, it doesn't undo a physical change. It applies to `unit.updated`, `milestone`, `standard.set`,
 `document.*`, `note`, `verified` and `component.*`. Voiding a component event also voids the matching `parent.set` on the component unit in the same
 entry, and is refused if a later event on either unit touches that position or that component (record the correction by hand then).
-Identifiers are corrected with `identifier.removed`; a status is corrected by setting it again. A void can't be voided.
+Identifiers are corrected with `identifier.removed`; a status is corrected by setting it again. A void can't be voided. A pack
+that was issued stays issued: `pack.*` events are never voided, and a pack is withdrawn instead.
 
 **A replacement** is `component.removed` and `component.installed` in one entry. A component that is a unit in its own right gets
 `parent.set` in the same entry, written at the revision the writer read, so one component can't be fitted in two places, and a unit
@@ -181,6 +184,8 @@ checked by `revisionworx verify`, exactly as the core guarantees for any entry.
 | `install` | the position is occupied (use `replace`); the component unit is fitted elsewhere, is this unit, or contains it |
 | `remove` | the position is empty |
 | `void` | an event can't be voided, is already void or doesn't exist; a later event depends on it (section 4) |
+| `issue_pack` | the number isn't the unit's next; something was recorded on the unit since the pack was put together (section 13) |
+| `withdraw_pack` | no reason; the unit has no pack with that number; it is already withdrawn |
 
 **Retries.** Every action takes a `txid` (32 lowercase hex, one per user action). If the outcome of an earlier attempt is unknown, the
 same call with the same txid returns the result without writing again; a txid used for different input raises `ReplayRefused`, and so
@@ -199,6 +204,7 @@ does one whose attempt was fenced (start again with a new txid). New units take 
 | `standard-altered` | a build standard's digest doesn't match |
 | `signature-invalid` | an event's field signature (section 8) is malformed, isn't one signature and one signer, has a basis other than `verified`, cites another field record, or doesn't hold with the key the signer's account enrolled for that phone |
 | `signature-reused` | one signed field record is cited by more than one action (txid) |
+| `pack-register` | packs aren't numbered 1, 2, 3 in the order issued, a withdrawal names a pack that isn't issued and in effect, or a void names a `pack.*` event |
 
 Problems are reported, never repaired: the journal holds every entry, and a person decides.
 
@@ -426,27 +432,45 @@ window's **Handover pack…**) writes it into a new folder:
 
 | File | What it is |
 |---|---|
-| `index.html` | The page to read and print: identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
+| `index.html` | The page to read and print: the pack's number, identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
 | `documents/<number> rev <label>.pdf` | The PDF of each revision that applies: the revision's own PDF (ADR-026), or the revision itself when it is a PDF. Never another revision's: one without a PDF is listed on the page as not included, with why |
-| `unit.json` | The record, as `revisionworx link unit` answers it but without computer names, with `format` `revisionworx-unit-pack`, `version` 1 and the PDFs included or not |
+| `unit.json` | The record, as `revisionworx link unit` answers it but without computer names, with `format` `revisionworx-unit-pack`, `version` 2, the pack's number (`pack`), who made it (`made_by`, without the computer) and the PDFs included or not |
 | `SHA256SUMS` | The SHA-256 of every other file, in the format `sha256sum -c SHA256SUMS` reads |
 
-- **Made from what a read-only handle sees.** Nothing is written to the workspace. The pack is put together beside the folder
-  and moved into place at the end, so a failure leaves nothing; a folder that exists and isn't empty is refused.
+**The workspace records every pack it issues** (ADR-030, the Director's decision at gate 4). Packs of a unit are numbered 1, 2,
+3, and each is a `pack.issued` event in the unit's history (section 4) with its number, the date it shows the unit on, and the
+SHA-256 of its `SHA256SUMS`, which holds the SHA-256 of every other file, so the one digest stands for the whole pack.
+
+- **Put together, recorded, then moved into place.** The pack is put together beside its folder from what a read-only handle
+  sees (exporting PDFs can take a while, and nobody need wait for the writer lock meanwhile), then recorded on a writable handle,
+  then moved into the folder. It is recorded only if nothing was recorded on the unit since it was put together, so a pack
+  always shows the unit as it stood when it was issued and two people can't issue the same number: otherwise nothing is
+  recorded and the folder isn't made. A folder that exists and isn't empty is refused, before anything is recorded.
+- **What can go wrong.** If recording fails, nothing is left. If the pack is recorded but can't be moved into place (the
+  folder was taken at that moment), it is complete in the hidden folder beside it, and the message says so: rename that
+  folder. A computer that stops between the two leaves a pack recorded that nobody received; withdraw it.
 - **`--on DATE`** makes the pack of the unit as known on that date (section 4), so the revisions are the ones that applied then.
 - **The computer's name stays behind.** History entries keep who recorded each event (a quality record says who verified it),
   but not the computer they used.
-- **`revisionworx unit check-pack FOLDER`** checks a pack anywhere, with no workspace. Every file listed has that SHA-256, nothing
-  else is there, and the record is one this version can read. Exit 1 if not.
-- **Not signed.** A pack shows that it is whole, not who made it, and its first page says so. Who vouches for a pack (a
-  company key, or the issuing person's account) is the Director's decision (gate 4); a signature would be added beside
-  `SHA256SUMS`.
+- **`revisionworx unit check-pack FOLDER`** checks a pack anywhere, with no workspace: every file listed has that SHA-256,
+  nothing else is there, and the record is one this version can read. Exit 1 if not.
+- **`revisionworx -w WORKSPACE unit check-pack FOLDER`** also asks the workspace's register, and the register decides; the
+  pack's own record only says which unit to look at. It answers *issued* (by whom and when, and whether a newer pack has been
+  issued since), *withdrawn* (when, by whom and why), or *not issued*: the workspace has no such unit, none of the unit's packs
+  has this `SHA256SUMS`, or the pack was made before packs were recorded (version 1). Anything but *issued* exits 1. A pack
+  someone changed and made whole again, by writing `SHA256SUMS` afresh, is whole but not issued.
+- **`unit packs NH-26-0001`** lists a unit's packs; **`unit withdraw-pack NH-26-0001 2 --reason ...`** records that pack 2 isn't
+  to be relied on now (sent to the wrong customer, or replaced by a corrected pack 3). A withdrawn pack stays in the register,
+  and checking it says it was withdrawn. A pack event is never voided: a pack that left the company was issued.
+- **Not signed.** The register lets the company confirm a pack it issued, for anyone who asks; it doesn't let someone without
+  the workspace confirm it alone. Signing with a company key comes next, as an option that is off by default (ADR-030): the
+  signature goes beside `SHA256SUMS`, and the key's fingerprint in `pack.issued`.
 
 ## 14. Not done, and costs
 
 - Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
-- Transfers between workspaces and merged identities are a later phase (ADR-025). Handover packs aren't signed yet (section 13).
+- Transfers between workspaces and merged identities are a later phase (ADR-025). Packs are recorded but not signed (section 13).
 - Approval of a deviation is recording it; there is no review workflow for deviations like change control's for ECOs.
 - Effectivity rows cover documents only; parts a retrofit changes are recorded by hand, citing the change.
 - Candidates read every unit's configuration: fine for thousands of units.

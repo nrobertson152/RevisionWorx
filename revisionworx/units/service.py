@@ -17,8 +17,9 @@ from typing import Any, Callable, Iterable, Iterator
 from .. import documents as D
 from ..workspace import RecordCheck, RecordDelete, RecordPut, Workspace, new_id, now_iso, register_kind
 from . import history as H
-from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_SCHEMES, SIGNED_EVIDENCE, STANDARD_SCHEME,
-                    STATUSES, UPDATABLE, VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord, NotFound,
+from .model import (BASES, CLASSES, DISPOSITIONS, KEY_FINGERPRINT_RE, LIMITS, MILESTONES, PERMANENT_SCHEMES, SIGNED_EVIDENCE,
+                    STANDARD_SCHEME, STATUSES, UPDATABLE, VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord,
+                    NotFound,
                     ReplayRefused, ValidationError, actor_record, check_choice, check_date, check_evidence, check_id,
                     check_identifier, check_model, check_pattern, check_position, check_txid, clean, day_of, derived_id, digest,
                     event_id, is_id, key_id, load_event, load_key, load_numbering, load_standard, load_unit, norm, numbering_id,
@@ -694,6 +695,62 @@ class UnitService:
         self._run("unit.note", txid, {"unit": unit_id, "text": text, "meta": meta}, [unit_id], build, meta)
         return self.unit(unit_id)
 
+    # ---------------------------------------------------------------------------------------- handover packs
+    def packs(self, unit_id: str) -> list[dict]:
+        """The handover packs issued for a unit, in the order issued (docs/UNITS.md section 13)."""
+        return H.packs_in(self.events(unit_id))
+
+    def issue_pack(self, unit_id: str, number: int, sums: str, *, as_of: str = "", key: str = "",
+                   txid: str | None = None) -> dict:
+        """Record that handover pack ``number`` of a unit was issued: ``sums`` is the SHA-256 of its SHA256SUMS, ``as_of`` the
+        date it shows the unit on (``""``: as the unit stood when it was made) and ``key`` the fingerprint of the key that
+        signed it (``""``: not signed). ``number`` must be the unit's next. ``pack.issue`` calls this inside ``expecting``
+        the event count the pack was made from, so a pack is recorded only if it shows the unit as it still stands."""
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            raise ValidationError("a handover pack's number is a whole number from 1")
+        if not isinstance(sums, str) or len(sums) != 64 or any(ch not in "0123456789abcdef" for ch in sums):
+            raise ValidationError("a handover pack is recorded by the SHA-256 of its SHA256SUMS (64 lowercase hex)")
+        as_of = check_date(as_of, "the date the pack shows the unit on")
+        if as_of and len(as_of) != 10:
+            raise ValidationError("the date a pack shows the unit on is a day, such as 2026-11-08")
+        if key and not KEY_FINGERPRINT_RE.match(key):
+            raise ValidationError(f"{key!r} isn't a key fingerprint (SHA256: and 43 characters, as ssh-keygen -l shows it)")
+        meta = self._meta()
+
+        def build(tx: _Tx) -> None:
+            unit = tx.unit(unit_id)
+            following = len(H.packs_in(self.events(unit_id))) + 1
+            if number != following:
+                raise Changed(f"the next handover pack of {unit_label(unit)} is {following}, not {number}: another was "
+                              "issued since. Nothing was recorded; make the pack again")
+            tx.emit(unit_id, "pack.issued", {"pack": number, "sums": sums, "as_of": as_of, "key": key})
+
+        self._run("unit.pack.issue", txid, {"unit": unit_id, "pack": number, "sums": sums, "as_of": as_of, "key": key,
+                                            "meta": meta}, [unit_id], build, meta)
+        return self.unit(unit_id)
+
+    def withdraw_pack(self, unit_id: str, number: int, reason: str, txid: str | None = None, **meta_args: Any) -> dict:
+        """Record that handover pack ``number`` is withdrawn: it was issued, and is not to be relied on now. A reason is
+        required. The pack stays in the register; checking it says it was withdrawn, when, by whom and why."""
+        meta_args["reason"] = reason
+        meta = self._meta(**meta_args)
+        if not meta["reason"]:
+            raise ValidationError("say why the pack is withdrawn (a reason is required)")
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            raise ValidationError("name the handover pack by its number")
+
+        def build(tx: _Tx) -> None:
+            unit = tx.unit(unit_id)
+            mine = [p for p in H.packs_in(self.events(unit_id)) if p["pack"] == number]
+            if not mine:
+                raise ValidationError(f"{unit_label(unit)} has no handover pack {number}")
+            if mine[-1]["withdrawn"] is not None:
+                raise ValidationError(f"handover pack {number} of {unit_label(unit)} is already withdrawn")
+            tx.emit(unit_id, "pack.withdrawn", {"pack": number})
+
+        self._run("unit.pack.withdraw", txid, {"unit": unit_id, "pack": number, "meta": meta}, [unit_id], build, meta)
+        return self.unit(unit_id)
+
     # ---------------------------------------------------------------------------------------- build standards
     def create_numbering(self, name: str, pattern: str, *, issuer: str = "", start: int = 1, txid: str | None = None) -> dict:
         """A numbering that issues serials (docs/UNITS.md section 11). Its name is unique."""
@@ -950,7 +1007,8 @@ class UnitService:
                 if ev["type"] not in VOIDABLE:
                     raise ValidationError(f"event {n} ({ev['type']}) can't be voided; "
                                           + ("remove the identifier instead" if ev["type"].startswith("identifier.")
-                                             else "record what is right instead"))
+                                             else "withdraw the pack instead ('revisionworx unit withdraw-pack')"
+                                             if ev["type"] == "pack.issued" else "record what is right instead"))
                 if n in already:
                     raise ValidationError(f"event {n} is already void")
                 if ev["type"].startswith("component."):
