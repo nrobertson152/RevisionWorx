@@ -338,8 +338,8 @@ def test_exploration_finds_missing_fencing_when_it_is_removed(tmp_path, monkeypa
     monkeypatch.setattr(Workspace, "is_fenced", lambda self, entry: False)
     real = Workspace._journal_view
 
-    def no_revocations(self):
-        view = real(self)
+    def no_revocations(self, *args, **kwargs):          # look= and strict= pass through
+        view = real(self, *args, **kwargs)
         view["revoked"] = set()
         view["revocations"] = []
         return view

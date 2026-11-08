@@ -767,6 +767,45 @@ Its txid index and head probe still apply on top of this and would need redoing 
 it and `verify --repair` restores it. Outside actors are out of scope for Tier 1 (ADR-019), and comparing bytes
 on every read would make the files pointless.
 
+**Revision (2026-11-08): a read costs nothing when nothing has changed.** Measured on the unit register: every `get`
+listed the journal and read its last entry again, to check it hadn't been restored. After one large entry, each read
+cost as much as reading that entry. A unit register import of 2,000 units is one entry of 6,000 records, so the import
+took 97 s and `unit verify` 181 s, against 1.3 s and 1.9 s for 200 units; 20,000, the import's limit, would have
+taken hours. The listing added 3.3 ms to every read at 5,000 entries, growing with each one. Now:
+- **Reads walk forward by name**, as the team replica's sync already did (ADR-024). The view keeps the last entry's
+  size, modification time and file id, taken before it was read. A read looks up two names: the entry after the view
+  (anything new is published there, whole, by `publish_exclusive`) and the last one. If nothing is new and the last
+  entry is the same file, the view stands; nothing is listed and nothing is read. Otherwise the journal is listed, and
+  the last entry is read and checked again only if its file changed.
+- **A reader that finds a record newer than its view lists the journal**, as before (`look`).
+- **Commits don't take the shortcut.** Before deciding anything, `commit` lists the journal, refuses a gap and reads
+  the last entry again whatever its file says (`strict`). So writes are decided as before, at the cost of one
+  read of the last entry per commit.
+- **Gaps and damage further back** are found where the journal is listed: opening, every commit, `health`, `verify` and
+  `doctor`. A reader keeps the view it checked meanwhile, which is what a damaged journal's readers get anyway
+  (CORE_API: recovery-blocked means read-only).
+
+Cost (Linux, Python 3.13.18, local disk, one run each; the command line, so each command is a fresh process):
+
+| | before | after |
+|---|---|---|
+| `unit import`, 200 units / 2,000 units | 1.3 s / 97.2 s | 0.4 s / 3.8 s |
+| `unit verify`, 200 units / 2,000 units | 1.9 s / 181.3 s | 0.13 s / 0.59 s |
+| `unit import` and `unit verify`, 20,000 units (the import's limit) | not run | 33.4 s and 5.6 s |
+| one read on an open handle: 5,000 entries / after an entry of 6,000 records | 3.34 ms / 12.89 ms | 0.027 ms / 0.029 ms |
+
+With 20,000 units imported, any command takes 1.3 to 1.7 s, almost all of it reading that one entry when it starts.
+
+**Limitation:** a restore noticed by file attributes alone can be missed if it puts a different entry in the last
+entry's place with the same size, the same file id and a modification time in the same clock tick. Restoring a
+backup by hand doesn't do that in practice; a script restoring within milliseconds of the last commit might. A commit reads
+the entry again, so a write never decides on such a view, and `verify` and `doctor` read everything. Network
+shares cache attributes and negative lookups for a few seconds, as they cache listings, so a reader there can be
+that much behind, as before.
+
+**Still O(n):** the first read on a fresh handle reads every entry once, so each command line call does.
+Checkpoints that let a fresh handle start from a checked summary are the next step for very long journals.
+
 **Not claimed:** power loss, SMB/NFS, or outside actors. Independent QA and Distributed Systems review is pending.
 
 ### ADR-023 The local index proves which journal it describes, and disposes of itself — IMPLEMENTED; awaiting review
@@ -1001,8 +1040,9 @@ Distinguish a part *identity* from a document file and from a specific revision.
 - Exact B-tree lookups and FTS5: IMPLEMENTED for projects and baseline files.
 - Dependency graph (forward/reverse edges, revision-specific references, cycle-safe traversal,
   coverage and verification states): PROPOSED (Phase 4).
-- Journal compaction/segmentation for very long journals: PROPOSED. Phase 1 lists the journal
-  directory on each sync, which is adequate for thousands of entries, not millions.
+- Journal compaction/segmentation for very long journals: PROPOSED. An open handle no longer lists the journal on
+  each read (ADR-022, revision of 2026-11-08), but opening still lists it and a fresh handle reads every entry once,
+  which is adequate for thousands of entries, not millions.
 
 ## CAD compatibility
 Recognition by extension only (`capability: recognized-only`). No Inventor/SolidWorks reference

@@ -13,7 +13,7 @@ import pytest
 
 from revisionworx import atomicio
 from revisionworx.workspace import (REV_FIELD, CommittedNotApplied, ConflictError, LockLostError, RecordDelete,
-                                    RecordPut, Workspace, WorkspaceCorruptError)
+                                    RecordPut, Workspace, WorkspaceCorruptError, entry_digest)
 
 RID = "root_" + "a" * 32
 OTHER = "root_" + "b" * 32
@@ -181,6 +181,108 @@ def test_each_new_entry_is_read_once_on_a_long_lived_handle(root, monkeypatch):
         w.get("root", RID)
         w.get("root", RID)
         assert len(reads) <= 2                   # at most the anchor check for each call
+
+
+def _counting(monkeypatch, ws):
+    """Count what reads cost: listings of the journal, and entries read."""
+    calls = {"listed": 0, "read": []}
+    real_seqs, real_read = ws.journal_seqs, ws.read_entry
+
+    def seqs():
+        calls["listed"] += 1
+        return real_seqs()
+    monkeypatch.setattr(ws, "journal_seqs", seqs)
+    monkeypatch.setattr(ws, "read_entry", lambda s: (calls["read"].append(s), real_read(s))[1])
+    return calls
+
+
+def test_reads_on_an_open_handle_neither_list_the_journal_nor_read_its_last_entry_again(root, monkeypatch):
+    """Was: every get() listed the journal and read its last entry again to check it hadn't been restored. After one large
+    entry (an import of 2,000 units is one entry of 6,000 records), each read cost as much as reading that entry, so
+    `unit import` of 2,000 units took 97 s and `unit verify` 181 s, against 1.3 s and 1.9 s for 200; a listing per read
+    also grew with every entry. Nothing has changed, so nothing needs reading."""
+    with Workspace.open(root, writable=True) as w:
+        for i in range(30):
+            w.commit("t.a", [RecordPut("root", "root_" + f"{i:032x}", {"name": str(i)}, expect_rev=0)])
+        w.commit("t.big", [RecordPut("root", "root_" + f"{10**6 + i:032x}", {"name": "x" * 40}, expect_rev=0)
+                           for i in range(2000)])
+        with Workspace.open(root) as reader:
+            assert reader.get("root", "root_" + f"{3:032x}")["name"] == "3"   # the view is built once
+            calls = _counting(monkeypatch, reader)
+            for _ in range(50):
+                assert reader.get("root", "root_" + f"{3:032x}")["name"] == "3"
+            assert len(reader.list("root")) == 2030
+            assert reader.transaction_outcome("no-such-txid") == {"state": "not-found"}
+            assert calls == {"listed": 0, "read": []}
+
+
+def test_an_open_handle_still_sees_each_commit_by_another_handle(root, monkeypatch):
+    """What is published after the view is read is still found, by name, and read once."""
+    with Workspace.open(root) as reader, Workspace.open(root, writable=True) as w:
+        w.commit("t.a", [RecordPut("root", RID, {"name": "A"}, expect_rev=0)])
+        assert reader.get("root", RID)["name"] == "A"
+        calls = _counting(monkeypatch, reader)
+        seq = w.commit("t.a", [RecordPut("root", RID, {"name": "B"}, expect_rev=seq_of(reader, RID)),
+                               RecordPut("root", OTHER, {"name": "O"}, expect_rev=0)])
+        assert reader.get("root", RID)["name"] == "B"
+        assert reader.get("root", OTHER)["name"] == "O"
+        assert set(reader.list("root")) == {RID, OTHER}
+        assert calls["read"] == [seq]            # the new entry, once; the one before it isn't read again
+        w.commit("t.d", [RecordDelete("root", OTHER, expect_rev=seq)])
+        assert reader.get("root", OTHER) is None
+        assert set(reader.list("root")) == {RID}
+
+
+def seq_of(ws, rid):
+    return ws.get("root", rid)[REV_FIELD]
+
+
+def test_an_open_handle_notices_its_last_entry_replaced_by_a_restore(root, tmp_path):
+    """A restore that puts a different entry where the view's last one was: the view is thrown away, as before, without
+    the journal getting any longer."""
+    import shutil
+    with Workspace.open(root, writable=True) as w:
+        w.commit("t.a", [RecordPut("root", RID, {"name": "A"}, expect_rev=0)])
+    backup = tmp_path / "backup"
+    shutil.copytree(root / ".revisionworx", backup)
+    with Workspace.open(root, writable=True) as w:
+        w.commit("t.a", [RecordPut("root", RID, {"name": "B"}, expect_rev=seq_of(w, RID))])
+    with Workspace.open(root) as reader:
+        assert reader.get("root", RID)["name"] == "B"
+        head = reader.head_seq()
+        shutil.rmtree(root / ".revisionworx")
+        shutil.copytree(backup, root / ".revisionworx")
+        with Workspace.open(root, writable=True) as w:
+            w.commit("t.restored", [RecordPut("root", RID, {"name": "C, after the restore"}, expect_rev=seq_of(w, RID))])
+            assert w.head_seq() == head          # the same length: only the last entry tells them apart
+        assert reader.get("root", RID)["name"] == "C, after the restore"
+
+
+def test_a_commit_reads_the_last_entry_again_whatever_its_file_says(root, monkeypatch):
+    """Reads trust an unchanged file; a write doesn't. Before deciding anything, commit lists the journal and reads the
+    last entry again, so a gap or damage stops it as before."""
+    with Workspace.open(root, writable=True) as w:
+        w.commit("t.a", [RecordPut("root", RID, {"name": "A"}, expect_rev=0)])
+        w.get("root", RID)
+        calls = _counting(monkeypatch, w)
+        seq = w.commit("t.a", [RecordPut("root", OTHER, {"name": "O"}, expect_rev=0)])
+        assert calls["listed"] >= 1 and seq - 1 in calls["read"]
+
+
+def test_a_gap_after_the_view_stops_the_next_commit(root):
+    """Reads walk forward by name, so they don't list the journal; the next commit does, and refuses to write past a gap."""
+    with Workspace.open(root, writable=True) as w:
+        w.commit("t.a", [RecordPut("root", RID, {"name": "A"}, expect_rev=0)])
+        assert w.get("root", RID)["name"] == "A"
+        head = w.head_seq()
+        journal = root / ".revisionworx" / "journal"
+        gap = atomicio.read_json(journal / f"{head:020d}.json")
+        gap["seq"] = head + 2
+        gap["digest"] = entry_digest({k: v for k, v in gap.items() if k != "digest"})   # whole and valid, past a gap
+        atomicio.atomic_write_json(journal / f"{head + 2:020d}.json", gap)
+        with pytest.raises(WorkspaceCorruptError, match="gaps"):
+            w.commit("t.a", [RecordPut("root", OTHER, {"name": "O"}, expect_rev=0)])
+        assert not (journal / f"{head + 3:020d}.json").exists()
 
 
 def _tamper_last_entry(root):

@@ -90,6 +90,9 @@ The first release. Everything below is new.
   guess.
 - `revisionworx doctor` (read-only whole-workspace integrity check) and `revisionworx verify [--repair]`.
 - Disposable local SQLite search index, rebuilt from the journal; never treated as authoritative.
+- Reads on an open workspace don't list the journal or read its last entry again when nothing has changed, so they
+  stay quick however long the journal grows and after a large change. Before, importing a register of 2,000 units took
+  97 s and checking it 181 s; now 3.8 s and 0.6 s. Commits still look at the whole journal before deciding.
 
 ### Projects and documents
 - Engineering roots with per-platform paths; folder templates; new projects; opt-in **Adopt existing project**
