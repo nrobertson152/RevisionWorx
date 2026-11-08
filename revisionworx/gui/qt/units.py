@@ -154,6 +154,15 @@ class UnitsWindow(QDialog):
         if unit_id is None:
             return
         label = next((r["label"] for r in self.rows if r["id"] == unit_id), unit_id)
+        try:
+            policy = self.ctl.unit_pack_signing()
+        except Exception as exc:  # noqa: BLE001 - shown, never raised into Qt
+            self.status.setText(describe_error(exc))
+            return
+        if policy["enabled"]:
+            self.status.setText(f"This workspace signs its handover packs with the key {policy['fingerprint']}, which needs the "
+                                f"key itself: make this one with 'revisionworx unit pack {label} FOLDER --sign-with KEYFILE'.")
+            return
         where = QFileDialog.getExistingDirectory(self, f"Where should the handover pack of {label} go?")
         if not where:
             return

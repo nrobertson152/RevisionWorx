@@ -434,8 +434,9 @@ window's **Handover pack…**) writes it into a new folder:
 |---|---|
 | `index.html` | The page to read and print: the pack's number, identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
 | `documents/<number> rev <label>.pdf` | The PDF of each revision that applies: the revision's own PDF (ADR-026), or the revision itself when it is a PDF. Never another revision's: one without a PDF is listed on the page as not included, with why |
-| `unit.json` | The record, as `revisionworx link unit` answers it but without computer names, with `format` `revisionworx-unit-pack`, `version` 2, the pack's number (`pack`), who made it (`made_by`, without the computer) and the PDFs included or not |
+| `unit.json` | The record, as `revisionworx link unit` answers it but without computer names, with `format` `revisionworx-unit-pack`, `version` 2, the pack's number (`pack`), who made it (`made_by`, without the computer), the PDFs included or not, and `signed`: `false`, or the key that signs it (`key`, its fingerprint; `type`; `namespace`) |
 | `SHA256SUMS` | The SHA-256 of every other file, in the format `sha256sum -c SHA256SUMS` reads |
+| `SHA256SUMS.sig` | Only where packs are signed: the signature of `SHA256SUMS`, as `ssh-keygen -Y sign` writes it |
 
 **The workspace records every pack it issues** (ADR-030, the Director's decision at gate 4). Packs of a unit are numbered 1, 2,
 3, and each is a `pack.issued` event in the unit's history (section 4) with its number, the date it shows the unit on, and the
@@ -462,15 +463,53 @@ SHA-256 of its `SHA256SUMS`, which holds the SHA-256 of every other file, so the
 - **`unit packs NH-26-0001`** lists a unit's packs; **`unit withdraw-pack NH-26-0001 2 --reason ...`** records that pack 2 isn't
   to be relied on now (sent to the wrong customer, or replaced by a corrected pack 3). A withdrawn pack stays in the register,
   and checking it says it was withdrawn. A pack event is never voided: a pack that left the company was issued.
-- **Not signed.** The register lets the company confirm a pack it issued, for anyone who asks; it doesn't let someone without
-  the workspace confirm it alone. Signing with a company key comes next, as an option that is off by default (ADR-030): the
-  signature goes beside `SHA256SUMS`, and the key's fingerprint in `pack.issued`.
+
+### 13.1 Signing packs (optional, off by default)
+
+The register lets the company confirm a pack it issued, for anyone who asks. A company that wants its customers to check a pack
+without asking signs its packs (ADR-030). Signing is off unless an administrator turns it on, and nothing about it appears
+while it is off.
+
+- **Turning it on.** `revisionworx unit pack-signing on --key COMPANY.pub`, with the public half of an Ed25519 key: `ssh-ed25519`,
+  or `sk-ssh-ed25519@openssh.com` on a security key such as a YubiKey. In a team workspace only an administrator can, and the
+  journal's rules refuse anyone else's change (`shared.judge`: settings are an administrator's). `pack-signing` shows the
+  fingerprint and the line to give customers; `pack-signing off` stops.
+- **Signing.** Then every pack is signed: `unit pack NH-26-0001 FOLDER --sign-with KEYFILE`, where `KEYFILE` is what
+  `ssh-keygen -Y sign -f` takes (a private key, or a security key's handle). RevisionWorx runs `ssh-keygen -Y sign -n
+  revisionworx-handover-pack` on `SHA256SUMS` while the pack is put together, before anything is recorded; ssh-keygen asks for
+  the touch, the PIN or the passphrase itself. The signature is then checked here: it must hold, be by the workspace's key, and,
+  on a security key, say that the key was touched. Otherwise nothing is recorded and nothing is left. A pack without a key, or a
+  key where packs aren't signed, is refused. The key's fingerprint is recorded in `pack.issued`.
+- **A YubiKey** (firmware 5.2.3 or later, for Ed25519): `ssh-keygen -t ed25519-sk -O resident -O verify-required -C "Acme
+  handover packs" -f acme-packs` makes `acme-packs` (a handle, useless without the YubiKey) and `acme-packs.pub`. `-O resident`
+  keeps the key on the YubiKey, so `ssh-keygen -K` gets the handle back on another computer; `-O verify-required` makes
+  ssh-keygen ask for its PIN at every signature. Signing then needs the YubiKey and a touch. RevisionWorx requires the touch;
+  it doesn't check that the PIN was given (`ssh-keygen -Y verify` in OpenSSH 9.6 checks neither).
+- **Checking a signed pack**, with RevisionWorx: `unit check-pack FOLDER --key COMPANY.pub` (or `--fingerprint SHA256:...`).
+  Without a key it says which key signed and that anyone can make a key: the customer compares the fingerprint with the one the
+  company gave them. With OpenSSH alone: `ssh-keygen -Y check-novalidate -n revisionworx-handover-pack -s SHA256SUMS.sig <
+  SHA256SUMS` names the key, or `ssh-keygen -Y verify -f allowed_signers -I supplier -n revisionworx-handover-pack -s
+  SHA256SUMS.sig < SHA256SUMS` checks it against the line `pack-signing` prints. A signature that doesn't hold, one that is
+  missing from a pack that says it is signed, one added to a pack that says it isn't, or one by another key than the pack names,
+  is a problem. Checked against the workspace (`-w`), the signature must also be by the key recorded when the pack was issued,
+  or absent if it was issued unsigned.
+- **A key that is lost or stolen.** There is nothing online to revoke it. Turn signing on with a new key, and tell customers
+  not to trust the old fingerprint for packs dated after the loss. The register still decides: every pack the company issued is
+  in it, so a pack signed with a stolen key is *not issued* when checked against the workspace.
+- **Only from the command line.** Signing needs the key and, on a security key, someone at the computer to touch it; the Units
+  window says so and leaves signed packs to `revisionworx unit pack`.
+- **Ed25519 only.** RSA and ECDSA keys (including `ecdsa-sk` on older YubiKeys) are refused when signing is turned on; the
+  signature is checked in pure Python (`revisionworx/sshsig.py`), and the standard library has no RSA or ECDSA.
+- **Not verified with real hardware.** Security-key signatures are checked against ones built to OpenSSH's PROTOCOL.u2f, which
+  `ssh-keygen -Y verify` accepts in the tests; signing with a real YubiKey, and on Windows, hasn't been tried.
+
 
 ## 14. Not done, and costs
 
 - Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
-- Transfers between workspaces and merged identities are a later phase (ADR-025). Packs are recorded but not signed (section 13).
+- Transfers between workspaces and merged identities are a later phase (ADR-025). Signing packs is optional and off by default
+  (section 13.1).
 - Approval of a deviation is recording it; there is no review workflow for deviations like change control's for ECOs.
 - Effectivity rows cover documents only; parts a retrofit changes are recorded by hand, citing the change.
 - Candidates read every unit's configuration: fine for thousands of units.
