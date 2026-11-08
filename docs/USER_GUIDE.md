@@ -225,7 +225,12 @@ that date. A revision with no PDF attached is listed as not included, never repl
   is.
 - **Withdrawing a pack.** `unit withdraw-pack NH-26-0001 2 --reason "sent to the wrong customer"`. The pack stays recorded,
   and checking it says it was withdrawn, when, by whom and why.
-- Packs aren't signed: someone outside the company confirms one by asking you.
+- **Signing packs (optional).** Off unless an administrator turns it on, with the public half of an Ed25519 key, which can
+  live on a YubiKey: `revisionworx unit pack-signing on --key acme-packs.pub`. Then every pack is made with `--sign-with
+  acme-packs` (touch the YubiKey when it blinks), and your customers can check a pack without asking you:
+  `revisionworx unit check-pack FOLDER --key acme-packs.pub`, or with OpenSSH alone, as the pack's first page says. Give them
+  the fingerprint `pack-signing` shows, in a way that doesn't travel with the packs. Making the key, and what to do if it is
+  lost: docs/UNITS.md section 13.1. Without signing, someone outside the company confirms a pack by asking you.
 
 ## Troubleshooting
 

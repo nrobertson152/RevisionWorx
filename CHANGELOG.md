@@ -51,7 +51,9 @@ The first release. Everything below is new.
   revision's), the record as JSON and `SHA256SUMS`. `unit check-pack FOLDER` checks one anywhere, with no workspace. Each pack
   is numbered and recorded in the unit's history as issued, so `revisionworx -w WORKSPACE unit check-pack FOLDER` confirms
   that the workspace issued it and that it is still in effect; `unit withdraw-pack` withdraws one and `unit packs` lists them.
-  Packs aren't signed.
+  Signing packs is optional and off by default: an administrator turns it on with the company's Ed25519 key (`unit
+  pack-signing on --key COMPANY.pub`), which can live on a YubiKey; packs are then signed with OpenSSH's ssh-keygen
+  (`--sign-with`), and anyone can check one with `unit check-pack --key` or with OpenSSH alone.
 - **Where used, for other programs.** `revisionworx link where-used` answers what `unit where-used` does: which units use a
   revision or a document, or hold a part number, serial, lot or component, now or ever. Each answer has the unit's status,
   customer, site and location, so a recall put together elsewhere (OpenMeridian tracing a lot, say) knows where every unit is.

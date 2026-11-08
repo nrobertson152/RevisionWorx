@@ -542,6 +542,14 @@ class Controller:
             with self._write() as ws:
                 return pack.issue(service_for(ws), draft)
 
+    def unit_pack_signing(self) -> dict:
+        """Whether this workspace signs its handover packs (ADR-030): ``{"enabled", "fingerprint"}``. Read-only. Signing needs
+        the key itself, and a security key asks to be touched, so signed packs are made with ``revisionworx unit pack``."""
+        from ..units import pack
+        with self._read() as ws:
+            state = pack.signing(ws)
+        return {"enabled": state["enabled"], "fingerprint": state["fingerprint"]}
+
     def state_names(self) -> dict[str, str]:
         """Lifecycle state id -> display name (the workspace's lifecycle)."""
         with self._read() as ws:
