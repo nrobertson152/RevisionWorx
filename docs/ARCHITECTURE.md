@@ -898,7 +898,10 @@ signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: 
 signing packs, optional and off by default (ADR-030, done); merged identities (`docs/UNITS.md` section 15, done); transfer
 between workspaces (not started).
 
-**Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
+**Costs and limits.** Queries read every unit (no index yet): finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000
+(Linux, local disk, a handle after the first, 2026-11-08), most of it reading each unit's record file. An index of identifiers kept
+with each computer's checkpoint (ADR-029) would make that constant; it isn't built, because it changes how every read is built and
+no workspace is that big yet. A modified program in a team workspace can overwrite a unit event, which
 `unit verify` detects but the journal rules don't refuse (the same holds for deviations, whose digest `verify` checks); making these
 kinds write-once in `shared.judge` needs a new format version and
 is planned. Not verified between real computers, like the rest of team use.

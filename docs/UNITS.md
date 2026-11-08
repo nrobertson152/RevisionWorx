@@ -513,7 +513,8 @@ while it is off.
 
 ## 14. Not done, and costs
 
-- Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
+- Queries read every unit (`ws.list`): finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000 (ADR-025). No index
+  yet; the local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
 - Transfers between workspaces are a later phase (ADR-025). Signing packs is optional and off by default (section 13.1).
 - A merge (section 15) moves identifiers only: the duplicate's documents, milestones and notes stay in its own history, and are
