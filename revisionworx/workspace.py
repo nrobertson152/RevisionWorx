@@ -1189,35 +1189,84 @@ class Workspace:
             raise WorkspaceCorruptError(f"journal entry {seq} is malformed: {problem}")
         return entry
 
-    def _journal_view(self) -> dict:
+    def _entry_stat(self, seq: int) -> tuple | None:
+        """What the file system says about entry ``seq``'s file, or None if there is no such file. Size, modification
+        time and file id: publishing an entry, or a restore putting another one in its place, changes at least one of them.
+        Other errors propagate."""
+        try:
+            st = os.stat(self._journal_dir() / f"{seq:020d}.json")
+        except FileNotFoundError:
+            return None
+        return (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev)
+
+    def _nothing_new(self, view: dict) -> bool:
+        """True when the journal is exactly as the view last found it: nothing published after it, and its last entry is the
+        very file that was checked. Two lookups by name, however long the journal or large that entry. Entries are
+        published whole, one after another (``publish_exclusive``), so anything new starts at ``seen + 1``. Like the
+        team replica's sync, this doesn't list the folder; a gap or damage further back is found where the journal is
+        listed: opening, every commit, ``health``, ``verify`` and ``doctor``."""
+        if view.get("anchor_stat") is None:
+            return False
+        try:
+            return (self._entry_stat(view["seen"] + 1) is None
+                    and self._entry_stat(view["seen"]) == view["anchor_stat"])
+        except OSError:
+            return False
+
+    def _anchor_holds(self, view: dict, strict: bool = False) -> bool:
+        """The last entry the view read is still there, unchanged. Read and checked again only when its file isn't the one
+        checked before, or always when ``strict``; the file is looked at first, so one replaced after that is read again
+        next time."""
+        stat = self._entry_stat(view["seen"])
+        if stat is None:
+            return False
+        if stat == view.get("anchor_stat") and not strict:
+            return True
+        if self.read_entry(view["seen"]).get("digest") != view["anchor"]:
+            return False
+        view["anchor_stat"] = stat
+        return True
+
+    def _journal_view(self, look: bool = False, strict: bool = False) -> dict:
         """What the journal says, extended to the current head (ADR-022). Per handle, in memory, built
         only from digest-verified entries, and only ever read forward: entries are immutable, so each
         one is read once. The view is thrown away if the journal is shorter than what was seen or the
         last entry seen has changed (a restored journal).
+
+        When nothing has changed (:meth:`_nothing_new`), the view is returned without listing the journal or reading
+        its last entry again, so a read costs the same with ten entries or a hundred thousand, and after a large one
+        as after a small one. ``look`` lists it anyway: a reader that has seen a record newer than the view asks
+        that way, so a listing is still what decides. ``strict`` also reads the last entry again whatever its file
+        says: :meth:`commit` starts that way, so a write is decided on the journal exactly as it is.
 
         ``latest`` maps (kind, id) to (seq, deleted) of the last *effective* write. Going forward in
         journal order, an entry is fenced exactly when its token is already in ``revoked``. ``attempts``
         maps a txid to its first effective entry and its last fenced one: a hung attempt can land after its
         own successful retry, and the one that took effect is the answer."""
         with self._view_lock:
+            view = self._view
+            if not (look or strict) and view is not None and view["seen"] and self._nothing_new(view):
+                return view
             seqs = self.journal_seqs()
             if seqs and seqs[-1] != len(seqs):   # sorted, unique, starting at 1 or more: contiguous exactly then
                 self._check_journal()
-            view = self._view
             if view is not None and view["seen"]:
                 try:
-                    anchored = (seqs and seqs[-1] >= view["seen"]
-                                and self.read_entry(view["seen"]).get("digest") == view["anchor"])
+                    anchored = bool(seqs) and seqs[-1] >= view["seen"] and self._anchor_holds(view, strict)
                 except (FileNotFoundError, WorkspaceCorruptError):
                     anchored = False
                 if not anchored:
                     view = None
             if view is None:
-                view = {"seen": 0, "anchor": None, "revocations": [], "revoked": set(), "latest": {},
-                        "attempts": {}}
+                view = {"seen": 0, "anchor": None, "anchor_stat": None, "revocations": [], "revoked": set(),
+                        "latest": {}, "attempts": {}}
             for s in seqs:
                 if s <= view["seen"]:
                     continue
+                try:   # looked at before it is read, as in _anchor_holds
+                    stat = self._entry_stat(s) if s == seqs[-1] else None
+                except OSError:
+                    stat = None
                 entry = self.read_entry(s)
                 if entry.get("op") == "shared.enable":
                     # Without this, changing workspace.json by hand would switch off every signature check (ADR-024).
@@ -1240,7 +1289,7 @@ class Workspace:
                         if revoked:
                             view["revocations"].append((s, revoked))
                             view["revoked"].add(revoked)
-                view["seen"], view["anchor"] = s, entry.get("digest")
+                view["seen"], view["anchor"], view["anchor_stat"] = s, entry.get("digest"), stat
             self._view = view
             return view
 
@@ -1355,6 +1404,7 @@ class Workspace:
         self._check_lock_still_held()  # before recover: a writer that lost its lock writes nothing
         if self.applied_seq() != self.head_seq():
             self.recover()
+        self._journal_view(strict=True)  # listed, gaps refused and the last entry read again: what follows decides on it
         checks = [{"kind": c.kind, "id": c.id, "expect_rev": c.expect_rev}
                   for c in ops if isinstance(c, RecordCheck)]
         identity = request_identity(op, ops, blob_refs)  # also rejects non-finite numbers up front
@@ -1612,7 +1662,7 @@ class Workspace:
         latest = writes.get(key)
         rev = None if on_disk is None else on_disk.get(REV_FIELD, 0)
         if rev is not None and (latest is None or rev > latest[0]):
-            latest = self._journal_view()["latest"].get(key)  # committed since the view was read, or bogus
+            latest = self._journal_view(look=True)["latest"].get(key)  # committed since the view was read, or bogus
         if latest is None:
             return None
         seq, deleted = latest
@@ -1656,7 +1706,7 @@ class Workspace:
                 return {rid: v for (k, rid), v in self._view["latest"].items() if k == kind}
         latest = of_kind()
         if any(rid not in latest or data.get(REV_FIELD, 0) > latest[rid][0] for rid, data in on_disk.items()):
-            self._journal_view()                     # committed since the view was read, or bogus
+            self._journal_view(look=True)            # committed since the view was read, or bogus
             latest = of_kind()
         out: dict[str, dict] = {}
         for rid, (seq, deleted) in latest.items():
