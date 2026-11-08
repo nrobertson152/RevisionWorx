@@ -113,9 +113,9 @@ record on it can be accepted as *verified* in their name, rather than just *repo
    3F2A-91C0-77B1-04DE --name "Riley's phone"`, typing the fingerprint **from the phone's screen**. If it isn't the one in the field log, nothing is enrolled: you have
    the wrong phone's log, or someone else's.
 
-`revisionworx user device list` shows every phone and whose it is. If a phone is lost, stolen or handed to someone else,
-`revisionworx user device revoke riley dev_… --reason "lost on site"`: its signatures aren't accepted from then on, and what was
-accepted before stands. A phone that's been revoked can't be enrolled again; reinstalling FieldWorx gives it a new identity to
+**Team › Accounts…** shows how many phones each person has; **Phones…** lists them with their fingerprints, and **Revoke…**
+refuses a lost, stolen or handed-on phone's signatures from then on, with your reason. What was accepted before stands. From the
+command line: `revisionworx user device list`, and `revisionworx user device revoke riley dev_… --reason "lost on site"`. A phone that's been revoked can't be enrolled again; reinstalling FieldWorx gives it a new identity to
 enrol. Disabling someone's account stops their phone being trusted too.
 
 | You see | What it means | What to do |
