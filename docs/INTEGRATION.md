@@ -45,6 +45,7 @@ folder above it that holds `.revisionworx`, then the workspaces recently opened 
 | `open [--document REF \| --file FILE]` | show it in the desktop window | `launched`, `command` |
 | `units [--project P] [--text T] [--detail]` | the unit register (feature `units`): summaries, or with `--detail` each `unit` object below | `units: [summary \| unit]` |
 | `unit REF [--at N \| --on DATE]` | one unit, now, after its event N, or as known now on a date | `unit` |
+| `where-used (--revision DOC@REV \| --document D \| [--part-number PN] [--serial S] [--lot L] [--component REF]) [--history]` | units that use a revision or document, or hold what is fitted (feature `unit-where-used`, below) | `rows`, `coverage` |
 | `unit-register`, `unit-fit`, `unit-remove`, `unit-note`, `unit-milestone`, `unit-change-install` | record a fact on units (feature `unit-records`, below) | `result`, `unit` and `events`, or `units` |
 | `devices` | phones enrolled to accounts (feature `field-signatures`, below) | `team`, `devices: [device]` |
 | `device-enrol --account A --device D --key K --fingerprint F [--name N]` | enrol a phone to an account (below) | `result`, `device` |
@@ -101,6 +102,25 @@ drawings where one in effect allows it is not a mistake in the record. A summary
 - `--field-signature` adds `signature`: the signature can't be trusted (below); nothing was written. `device-enrol` answers
   `refused` when the phone can't be enrolled that way.
 - The client adds `unavailable` (RevisionWorx not installed).
+
+## Where used (feature `unit-where-used`)
+
+`where-used` answers what `revisionworx unit where-used` answers, read-only, for a program putting together a recall or
+a where-used report. Give one of:
+
+- `--revision DOC@REV`: units whose configuration uses that revision, through their build standard or their own
+  difference. Each row has `unit`, `source`, `event` and `basis`.
+- `--document D`: units whose configuration names that document, and which revision each uses. Each row has `unit`,
+  `revision`, `applies`, `source` and `flags`.
+- What is fitted: `--part-number`, `--serial`, `--lot` and `--component` in any combination, all of which must hold. A lot
+  belongs to a part, so `--lot` needs `--part-number`. Each row has `unit`, `position`, `fitted` (the event), `removed`,
+  `current`, `serial` and `lot`. With `--history`, it is wherever that has ever been fitted, and a removed row adds
+  `fitted_on`, `removed_on` and `disposition`.
+
+Matching ignores case. Every `unit` is the unit's summary, the same as `units` returns: label, status, customer, site,
+location, identifiers and project. So the caller knows where each one is without asking again. `coverage` says what was
+searched: the units registered in this workspace. A unit recorded nowhere else can't be found, and a lot fitted without
+being recorded on a unit isn't there to find.
 
 ## Recording on units (feature `unit-records`)
 
