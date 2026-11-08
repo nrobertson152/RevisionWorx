@@ -293,3 +293,14 @@ def test_integrity_checks_build_their_view_from_the_journal(root, state, monkeyp
             assert ws._checkpoint is None, name
             assert set(ws.list(UNIT_KIND)) == {u["id"] for u in made}, name
             assert ws.get("root", rid(1))["name"] == "1", name
+
+
+def test_the_window_keeps_its_checkpoints_in_its_own_state_folder(root, tmp_path, monkeypatch):
+    """GUI_LAUNCH_CONTRACT: the per-user folders can be given to the Controller, and the checkpoint is kept in its state
+    folder, for a workspace not set up for a team as for one that is."""
+    from revisionworx.gui.controller import Controller
+    monkeypatch.setattr(workspace_module, "CHECKPOINT_EVERY", 1)
+    ctl = Controller(cfg_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache", state_dir=tmp_path / "its-state")
+    ctl.open_workspace(root)
+    ctl.units_page()
+    assert list((tmp_path / "its-state" / "views").rglob("view-*.json"))
