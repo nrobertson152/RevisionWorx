@@ -217,7 +217,8 @@ What a revision's bytes are guaranteed to be. RevisionWorx cannot stop another p
 | G7 | Nothing relies on a fresh listing, a fresh "not found", or agreement between clocks. | Forward walk by name; `lock_silence` counts on one computer's monotonic clock |
 | G8 | A stuck lock costs a minute, and the record says so. | `_clear_lock` and its audit entry. Integrity doesn't depend on the lock (G1), which is why it can be cleared |
 | G9 | Passwords, recovery codes and signing keys aren't in the shared folder. | Only public keys go in the journal |
-| G10 | A workspace not set up this way is untouched. | `SharedWorkspace` is a separate code path, reached only through `format_version: 2` |
+| G10 | A workspace not set up this way is untouched. | `SharedWorkspace` is a separate code path, reached only through `format_version` 2 or 3 with `collaboration: shared` |
+| G11 | Under team rules 2, what the unit register writes once can't be changed or removed, and the rules never go back. | `judge`, by the `rules` in the signed team settings; a computer meeting rules it doesn't know stops (ADR-024, revision of 2026-11-08) |
 
 **Tests:** `test_team_authority.py` (the same contract as a plain workspace), `test_team_rules.py` (forged and damaged entries, read by several computers),
 `test_team_concurrency.py` (racing processes, a process killed before every file change, simulated client caches), `test_accounts.py`, `test_sharecheck.py`,

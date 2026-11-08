@@ -40,8 +40,8 @@ from .atomicio import ExclusiveCreateError
 from .documents import IMMUTABLE_REVISION_FIELDS
 from .workspace import (REQUEST_IDENTITY_VERSION, REV_FIELD, CommittedNotApplied, ConflictError, IdentityUnverifiable,
                         LockLostError, RecordCheck, RecordPut, TxidReuseError, Workspace, WorkspaceCorruptError, WorkspaceError,
-                        WorkspaceLockedError, current_actor, entry_digest, new_id, now_iso, register_kind, request_identity,
-                        strip_rev)
+                        WorkspaceFormatError, WorkspaceLockedError, current_actor, entry_digest, new_id, now_iso, register_kind,
+                        request_identity, strip_rev)
 
 register_kind("account")
 
@@ -53,6 +53,11 @@ LOCK_CLEARED_OP = "workspace.lock.cleared"
 ROLES = ("admin", "user")
 ADMIN_KINDS = ("settings", "lifecycle", "doctype", "root", "template")
 ADMIN_OPS = ("content.gc",)
+UPGRADE_OP = "team.rules"
+RULES = 2                                    # the newest team rules this version applies (ADR-024, revision of 2026-11-08)
+# Rules 2: records the unit register writes once (revisionworx/units/service.py, KIND) can't be changed or removed.
+WRITTEN_ONCE = {"unitevt": "unit events", "buildstd": "build standards", "uniteff": "effectivity decisions",
+                "unitdev": "deviations"}
 
 LOCK_WAIT_SECONDS = 10.0                     # how long opening for writing waits for someone else's turn to end
 BEAT_SECONDS = 5.0                           # how often a lock's holder shows it's alive
@@ -507,6 +512,29 @@ def _recovery_rule(entry: dict) -> str | None:
     return None if data.get("role") == "admin" and data.get("active") is True else "the recovery code can only recover an administrator"
 
 
+def rules_of(r: Replica) -> int:
+    """The team rules in effect after the entries this replica has applied: the ``rules`` the workspace's signed team
+    settings name, 1 if they name none (a team workspace set up before rules 2). Every computer reads them from the journal,
+    so every computer judges an entry by the same rules."""
+    value = _dict(r.record("settings", "sharing")).get("rules", 1)
+    if type(value) is not int or value < 1:
+        raise WorkspaceCorruptError("the team's settings name rules that can't be read; writes refused. Run "
+                                    "'revisionworx doctor'")
+    return value
+
+
+def _sharing_rule(item: dict, rules: int) -> str | None:
+    """Under rules 2, the team settings stay, and the rules they name never go back."""
+    if rules < 2:
+        return None
+    if item.get("delete"):
+        return "the team's settings can't be removed"
+    value = _dict(item.get("data")).get("rules", 1)
+    if type(value) is not int or value < rules:
+        return "the team's rules can't go back to an earlier version"
+    return None
+
+
 def judge(entry: dict, r: Replica) -> str | None:
     """Why this entry has no effect, or None if it does. It decides from the entries before it and nothing else, so every
     computer gets the same answer."""
@@ -539,6 +567,7 @@ def judge(entry: dict, r: Replica) -> str | None:
     admin = account.get("role") == "admin"
     if op in ADMIN_OPS and not admin:
         return "only an administrator can do that"
+    rules = rules_of(r)
     for item in entry["records"]:
         kind = item["kind"]
         problem = None
@@ -546,6 +575,11 @@ def judge(entry: dict, r: Replica) -> str | None:
             problem = _account_rule(entry, item, signer, account, r)
         elif kind in ADMIN_KINDS:
             problem = None if admin else f"only an administrator can change {kind} records"
+            if problem is None and kind == "settings" and item["id"] == "sharing":
+                problem = _sharing_rule(item, rules)
+        elif kind in WRITTEN_ONCE and rules >= 2:
+            if item.get("delete") or r.record(kind, item["id"]) is not None:
+                problem = f"{WRITTEN_ONCE[kind]} are written once: {kind} {item['id']} can't be changed or removed"
         elif kind == "checkout":
             problem = _checkout_rule(item, signer, admin, r)
         elif kind == "revision":
@@ -577,12 +611,19 @@ def _check_enable(entry: dict, r: Replica) -> None:
         raise bad
     if not isinstance(sharing.get("recovery_public"), str) or not _HEX_KEY.match(sharing["recovery_public"]):
         raise bad
+    if type(sharing.get("rules", 1)) is not int or sharing.get("rules", 1) < 1:
+        raise bad
     if not _signature_holds(account["key"]["public"], entry):
         raise bad
 
 
 def judge_next(entry: dict, r: Replica) -> str | None:
-    """Judge the entry that comes next in the journal. Raises if the journal itself can't be trusted from here on."""
+    """Judge the entry that comes next in the journal. Raises if the journal itself can't be trusted from here on, or if it
+    follows team rules newer than this version applies: judged by older rules, it could take effect here and nowhere else."""
+    if r.enabled_at() is not None and rules_of(r) > RULES:
+        raise WorkspaceCorruptError(f"journal entry {entry['seq']} comes after this workspace moved to team rules "
+                                    f"{rules_of(r)}, which this RevisionWorx doesn't know (it knows {RULES}): update RevisionWorx. "
+                                    "Writes refused")
     if r.enabled_at() is None:
         if entry.get("op") == ENABLE_OP:
             _check_enable(entry, r)
@@ -805,11 +846,19 @@ class SharedWorkspace(Workspace):
                 r.db.execute("RELEASE one_entry")
 
     def _refuse_if_untrustworthy(self) -> None:
+        if self._replica.enabled_at() is not None and rules_of(self._replica) > RULES:
+            raise WorkspaceFormatError(f"this workspace follows team rules {rules_of(self._replica)}, which this RevisionWorx "
+                                       f"doesn't know (it knows {RULES}): update RevisionWorx. Nothing was changed")
         if self._damage:
             raise WorkspaceCorruptError(self._damage)
         if self._replica.enabled_at() is None:
             raise SetupIncomplete("setting this workspace up for a team didn't finish. Run it again on the computer it was "
                                   "started on: 'revisionworx team enable'. Nobody can make changes until then")
+
+    @property
+    def rules(self) -> int:
+        """The team rules in effect here (ADR-024): 2 on a workspace set up for a team since 2026-11-08 or upgraded."""
+        return rules_of(self._replica)
 
     def _check_same_history(self) -> None:
         """The last entry this computer read must still be there. If it isn't, this folder isn't the history this computer

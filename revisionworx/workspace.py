@@ -73,7 +73,8 @@ def _checkpoint_check(data: dict) -> str:
 
 FORMAT_NAME = "RevisionWorx Workspace"
 FORMAT_VERSION = 1
-SHARED_FORMAT_VERSION = 2                            # a workspace set up for a team (ADR-024): older versions must refuse it
+SHARED_FORMAT_VERSION = 3                            # a workspace set up for a team (ADR-024): older versions must refuse it
+SHARED_FORMAT_VERSIONS = (2, 3)                      # 2: on the team rules of 2026-11-05; 3: rules 2 (ADR-024, 2026-11-08)
 META_DIRNAME = ".revisionworx"
 _SEQ_RE = re.compile(r"^(\d{20})\.json$")
 _ID_RE = re.compile(r"^[a-z]{2,8}_[0-9a-f]{32}$|^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -355,7 +356,7 @@ def now_iso() -> str:
 
 def is_shared_info(info: dict) -> bool:
     """Whether a workspace.json describes a workspace set up for a team (ADR-024)."""
-    return info.get("collaboration") == "shared" and info.get("format_version") == SHARED_FORMAT_VERSION
+    return info.get("collaboration") == "shared" and info.get("format_version") in SHARED_FORMAT_VERSIONS
 
 
 def current_actor() -> dict:

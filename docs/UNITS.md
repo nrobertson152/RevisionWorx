@@ -251,7 +251,7 @@ records only what someone in the office accepts. Proposals from phones are never
 | A revision a unit uses is released again, superseded or obsoleted | The unit still uses it; the flags say what changed |
 | A document is moved or renamed | Nothing changes: units hold ids |
 | An older RevisionWorx opens the workspace | It reads and replays these entries like any others, and can't write these kinds (CORE_API §8) |
-| A modified program in a team workspace overwrites a unit event | The journal rules accept a signed put of any subsystem record; `unit verify` reports `altered-event`. A journal rule making these kinds write-once would need a new workspace format (ADR-024) and is planned |
+| A modified program in a team workspace overwrites a unit event | On team rules 2 (ADR-024, revision of 2026-11-08) no computer accepts it, nor a change to a build standard, an effectivity decision or a deviation. On rules 1 (a team set up before, until `team upgrade`) the journal accepts it and `unit verify` reports `altered-event` |
 | A unit record file altered on disk | Reads come from the journal (ADR-022); `verify` reports the file |
 | A phone that signed records is lost, or enrolled to the wrong person | An administrator revokes it (`revisionworx user device revoke`); its signatures are refused from then on, and what was accepted stands |
 | Signature evidence written by a program that skips the checks | `verify` reports `signature-invalid` |
