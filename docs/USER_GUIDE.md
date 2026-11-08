@@ -105,6 +105,11 @@ Your administrator login works on your computer only. To use another one, use th
 
 **Disabling an account** stops that person's changes being accepted, by every computer, from then on. What they did before stands.
 
+**A team set up before 8 November 2026** follows the older team rules until an administrator runs `revisionworx team upgrade`
+(`revisionworx team status` says which a workspace follows). Under the newer rules, no computer accepts a change to a unit's
+history, a build standard, an effectivity decision or a deviation once it is recorded. Copies of RevisionWorx older than this
+one can't open the workspace afterwards, so update every computer first.
+
 **Phones (FieldWorx).** A FieldWorx phone signs every record it makes. Enrol a person's phone to their account, and what they
 record on it can be accepted as *verified* in their name, rather than just *reported*:
 
@@ -127,6 +132,7 @@ enrol. Disabling someone's account stops their phone being trusted too.
 | "Someone else changed the workspace at the same moment" | Your change wasn't made. Nothing is lost. | Try again. |
 | "This administrator account only works on the computer it was set up on" | You're on another computer. | Use **Use recovery code…** in the login window, or a second administrator account. |
 | "journal entry N is gone from the shared folder" / "isn't the one this computer read" | Files in `.revisionworx` have been lost, altered or restored. Changes are refused. | Lost or altered: on a computer that has read them, `revisionworx team repair`. Restored from a backup on purpose: on each computer, `revisionworx team forget-local`. Then `revisionworx doctor`. |
+| "this workspace follows team rules 3, which this RevisionWorx doesn't know" | Someone moved the workspace to rules a newer RevisionWorx made. This computer reads what came before, and changes nothing. | Update RevisionWorx on this computer. |
 
 ## PDFs of CAD drawings
 

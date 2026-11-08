@@ -21,8 +21,8 @@ import unicodedata
 from pathlib import Path
 
 from . import atomicio, clientstate, ed25519, projects, sharecheck
-from .shared import (ENABLE_OP, PASSWORD_OP, RECOVER_OP, RECOVERY, ROLES, NotPermitted, Session, SharedWorkspace, forget_session,
-                     next_rolling, save_session, saved_session, signing_message, team_dir)
+from .shared import (ENABLE_OP, PASSWORD_OP, RECOVER_OP, RECOVERY, ROLES, RULES, UPGRADE_OP, NotPermitted, Session, SharedWorkspace,
+                     forget_session, next_rolling, save_session, saved_session, signing_message, team_dir)
 from .workspace import (FORMAT_VERSION, REQUEST_IDENTITY_VERSION, SHARED_FORMAT_VERSION, RecordPut, Workspace, WorkspaceError,
                         current_actor, entry_digest, is_shared_info, now_iso, request_identity, strip_rev, default_settings)
 
@@ -138,6 +138,12 @@ def _recovery_seed(code: str, workspace_id: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------- turning team use on
+# A team set up now: workspace.json format 3, on team rules 2. Tests set these to (2, 1) to make a team workspace exactly as one
+# set up before 2026-11-08 was, with no rules in its signed settings.
+NEW_TEAM_FORMAT = SHARED_FORMAT_VERSION
+NEW_TEAM_RULES = RULES
+
+
 def is_team_workspace(location: Path) -> bool:
     return Workspace._is_shared_folder(Workspace.meta_dir_for(location))
 
@@ -173,7 +179,8 @@ def enable_team_use(location: Path, admin: str, name: str, password: str, state_
         settings = {**default_settings(), **strip_rev(ws.get("settings", "workspace") or {}), "collaboration_mode": "shared-folder"}
         ops = [RecordPut("account", account, record, expect_rev=0),
                RecordPut("settings", "sharing", {"id": "sharing", "recovery_public": recovery_public, "enabled": now_iso(),
-                                                 "first_admin": account}, expect_rev=0),
+                                                 "first_admin": account,
+                                                 **({"rules": NEW_TEAM_RULES} if NEW_TEAM_RULES > 1 else {})}, expect_rev=0),
                RecordPut("settings", "workspace", settings), *projects.roots_inside_workspace(ws)]
         rolling, previous = "", ""
         head = ws.head_seq()
@@ -190,7 +197,7 @@ def enable_team_use(location: Path, admin: str, name: str, password: str, state_
         entry["digest"] = entry_digest(entry)
         # workspace.json first: a crash between the two leaves nobody able to write until this is run again, which is safe. The
         # other order would leave a journal that older code keeps writing to without signing anything.
-        atomicio.atomic_write_json(info_path, {**info, "format_version": SHARED_FORMAT_VERSION, "collaboration": "shared"})
+        atomicio.atomic_write_json(info_path, {**info, "format_version": NEW_TEAM_FORMAT, "collaboration": "shared"})
         try:
             atomicio.publish_exclusive(ws._journal_dir() / f"{head + 1:020d}.json", atomicio.dumps_json(entry))
         except BaseException:
@@ -294,6 +301,30 @@ def _as_admin(ws) -> None:
     ws._signer()
     if not ws.is_admin:
         raise NotPermitted("only an administrator can do that")
+
+
+def upgrade_rules(ws) -> dict:
+    """Move a team workspace set up before 2026-11-08 to team rules 2 (ADR-024): from the entry this writes on, every computer
+    refuses an entry that changes or removes a record the unit register writes once. Entries before keep the verdicts they
+    had. Only an administrator, on a writable handle.
+
+    workspace.json goes to format 3 first, so a RevisionWorx that knows only rules 1 refuses the workspace before anything is
+    judged by rules 2. A crash between the two leaves a format-3 workspace on rules 1, which this version reads as it is: run
+    this again."""
+    _as_admin(ws)
+    before = ws.rules
+    info_path = ws.meta_dir / "workspace.json"
+    info = atomicio.read_json_object(info_path)
+    if info.get("format_version") != SHARED_FORMAT_VERSION:
+        atomicio.atomic_write_json(info_path, {**info, "format_version": SHARED_FORMAT_VERSION})
+    if before >= RULES:
+        return {"rules": before, "changed": False}
+    sharing = ws.get("settings", "sharing")
+    if sharing is None:
+        raise AccountError("this workspace's team settings are missing; run 'revisionworx doctor'")
+    ws.commit(UPGRADE_OP, [RecordPut("settings", "sharing", {**strip_rev(sharing), "rules": RULES},
+                                     expect_rev=int(sharing.get("_rev", 0)))])
+    return {"rules": ws.rules, "changed": True}
 
 
 def list_accounts(ws) -> list[dict]:

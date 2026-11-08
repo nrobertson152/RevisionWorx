@@ -69,6 +69,9 @@ The first release. Everything below is new.
   and every computer checks every change, so nobody can make themselves an administrator or act in someone else's name. Other programs can
   use a login kept on the computer. It's opt-in, can't be undone, and hasn't been verified between real computers:
   `revisionworx share test` is how to find out about your share. See [Known limitations](docs/KNOWN_LIMITATIONS.md).
+- In a team workspace, no computer accepts a change to a unit's history, a build standard, an effectivity decision or a
+  deviation once it is recorded (team rules 2, workspace format 3). A team set up before this keeps the older rules until an
+  administrator runs `revisionworx team upgrade`.
 
 ### FluidWorx
 - `.fluidworx` simulation studies are recognised by content and registered under a new built-in "Simulation study"

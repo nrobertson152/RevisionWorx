@@ -79,8 +79,10 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
   `unit remove`, citing the ECO.
 - **Queries read every unit.** Finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000 on a local disk; there's no
   index yet.
-- **In a team workspace, a modified program could overwrite a unit's history.** `revisionworx unit verify` notices, and actions on
-  that unit are refused, but the journal's rules don't stop the write itself yet.
+- **A team workspace set up before 2026-11-08 stays on team rules 1 until an administrator runs `revisionworx team upgrade`.**
+  There, a modified program could overwrite a unit's history: `revisionworx unit verify` notices, and actions on that unit are
+  refused, but the journal accepts the write. On rules 2 (every team set up since, and every one upgraded) no computer accepts it.
+  RevisionWorx older than this can't open a workspace on rules 2.
 
 ## Not in 1.0
 

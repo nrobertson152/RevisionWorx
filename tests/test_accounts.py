@@ -11,7 +11,7 @@ from conftest import tree_snapshot
 from revisionworx import accounts, atomicio, cli, documents as D, ed25519, projects, shared
 from revisionworx.projects import NewProject
 from revisionworx.shared import NotLoggedIn, NotPermitted, SessionExpired, SharedWorkspace, team_dir
-from revisionworx.workspace import FORMAT_VERSION, RecordPut, Workspace, WorkspaceError, WorkspaceFormatError
+from revisionworx.workspace import FORMAT_VERSION, SHARED_FORMAT_VERSION, RecordPut, Workspace, WorkspaceError, WorkspaceFormatError
 from team_helpers import PASSWORD, add_user, computer, log_in, new_team
 
 A = "prj_" + "a" * 32
@@ -90,7 +90,7 @@ def test_a_future_format_is_still_refused(team):
     folder, pc, *_ = team
     path = folder / ".revisionworx" / "workspace.json"
     info = atomicio.read_json_object(path)
-    atomicio.atomic_write_json(path, {**info, "format_version": 3})
+    atomicio.atomic_write_json(path, {**info, "format_version": SHARED_FORMAT_VERSION + 1})   # 3 is today's (team rules 2)
     with pytest.raises(WorkspaceFormatError):
         Workspace.open(folder, state_dir=pc)
 

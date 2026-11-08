@@ -268,12 +268,24 @@ def cmd_team_status(args):
         me = ws.session.account if ws.session else None
         info = {"team": True, "accounts": rows, "logged_in": me, "role": ws.role, "journal_seq": ws.head_seq(),
                 "health": ws.health(), "writer_lock": Workspace.read_writer_lock(ws.meta_dir),
-                "network_location": paths.is_network_location(ws.meta_dir)}
+                "network_location": paths.is_network_location(ws.meta_dir), "rules": ws.rules}
     lines = [f"Set up for a team, {len(rows)} account(s). Logged in as {me} ({info['role']})." if me
              else f"Set up for a team, {len(rows)} account(s). Not logged in here."]
+    if info["rules"] < 2:
+        lines.append("On team rules 1: an administrator can move it to rules 2 with 'revisionworx team upgrade'.")
     if not info["health"]["ok"]:
         lines.append(f"Writes are refused: {info['health']['reason']}")
     _emit(args, info, "\n".join(lines))
+
+
+def cmd_team_upgrade(args):
+    from . import accounts
+    with _team_handle(args, True) as ws:
+        result = accounts.upgrade_rules(ws)
+    text = ("This workspace now follows team rules 2: unit events, build standards, effectivity decisions and deviations, "
+            "written once, can't be changed or removed by anyone. RevisionWorx older than this can't open it any more."
+            if result["changed"] else f"This workspace already follows team rules {result['rules']}.")
+    _emit(args, result, text)
 
 
 def cmd_team_repair(args):
@@ -828,6 +840,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--admin", required=True, help="your user name"); s.add_argument("--name", default="", help="your full name")
     password_option(s); s.set_defaults(fn=cmd_team_enable)
     tm.add_parser("status", help="accounts, who's logged in here, and whether writes are allowed").set_defaults(fn=cmd_team_status)
+    tm.add_parser("upgrade", help="move a team workspace set up before 2026-11-08 to team rules 2 (an administrator; older "
+                  "RevisionWorx can't open it afterwards)").set_defaults(fn=cmd_team_upgrade)
     s = tm.add_parser("repair", help="put back journal entries the shared folder has lost, from this computer's copy")
     s.add_argument("--remove-damaged", action="store_true", help="also move a damaged next entry, which no computer can have used, to quarantine")
     s.set_defaults(fn=cmd_team_repair)
