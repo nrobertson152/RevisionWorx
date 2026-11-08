@@ -61,12 +61,17 @@ def main() -> int:
                     results["locked"] += 1
     elif spec["do"] == "checkout":                   # everyone wants the same documents
         for doc in spec["documents"]:
-            try:
-                with open_ws() as ws:
-                    documents.checkout(ws, doc)
-                results["won"].append(doc)
-            except documents.CheckoutConflict:
-                results["conflicts"] += 1
+            while True:                              # a workspace busy for longer than `wait` is tried again, as a person would
+                try:
+                    with open_ws() as ws:
+                        documents.checkout(ws, doc)
+                    results["won"].append(doc)
+                except documents.CheckoutConflict:
+                    results["conflicts"] += 1
+                except WorkspaceLockedError:
+                    results["locked"] += 1
+                    continue
+                break
     elif spec["do"] == "commit":                     # one change, for a test that kills this process somewhere inside it
         with open_ws() as ws:
             ws.commit("t", [RecordPut("project", spec["record"], {"by": spec["account"]})], txid=spec.get("txid"))

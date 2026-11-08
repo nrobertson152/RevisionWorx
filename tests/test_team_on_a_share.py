@@ -119,6 +119,8 @@ def test_a_checkout_has_exactly_one_winner_across_clients(crew, tmp_path):
     procs = [crew.spawn(name, "checkout", documents=docs, gate=gate) for name in crew.sessions]
     crew.go(gate)
     results = [crew.finish(p, timeout=TIMEOUT) for p in procs]
+    note("checking out", {r["account"]: {"won": len(r["won"]), "conflicts": r["conflicts"], "had_to_wait": r["locked"]}
+                          for r in results})
     assert sorted(d for r in results for d in r["won"]) == sorted(docs)
     assert sum(r["conflicts"] for r in results) == len(docs) * (len(crew.sessions) - 1)
     checkouts = crew.all_agree(patience=30.0)[3]
