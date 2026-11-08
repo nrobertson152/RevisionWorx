@@ -22,6 +22,7 @@ issue #13 with migration notes. Anything not listed may change without notice.
   - **Preferences** (`preferences.json`: recent workspaces): `%APPDATA%\RevisionWorx` or `$XDG_CONFIG_HOME/revisionworx` (default `~/.config/revisionworx`).
   - **Checkout tokens** (`checkouts.json`): `%LOCALAPPDATA%\RevisionWorx\state` or `$XDG_STATE_HOME/revisionworx`. Deleting this file loses the ability to check in, and recovering needs an administrator.
   - **Search cache**: the core default (`revisionworx.index.default_cache_dir()`). It is disposable.
+  - **Journal checkpoints** (`views/`): in the state folder, beside the checkout tokens (ADR-029). Disposable: deleting one only means the next read-only handle reads the whole journal once.
 - **Quick start layout.** "Create project" in folder `F` creates the workspace at `F/.revisionworx`, the engineering root `F/Projects`, and the project folder `F/Projects/<number> <name>`. If `F` already holds a workspace, it is reused.
 
 ## 2. Stable widget surface

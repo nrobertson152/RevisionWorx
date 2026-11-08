@@ -658,6 +658,7 @@ def export_revision(ws: Workspace, rev_id: str, dest: Path, overwrite: bool = Fa
 
 
 def verify_revisions(ws: Workspace, doc_id: str | None = None) -> list[dict]:
+    ws.check_from_journal()                          # an integrity check never starts from this computer's checkpoint
     store = ContentStore(ws)
     problems = []
     for rev in _all(ws, "revision").values():

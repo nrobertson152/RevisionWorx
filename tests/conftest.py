@@ -15,6 +15,15 @@ from revisionworx.workspace import Workspace  # noqa: E402
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _computer_state_kept_out_of_home(tmp_path_factory, monkeypatch):
+    """What RevisionWorx keeps per computer (sessions, the team replica, view checkpoints) goes to a folder of the test run's
+    own, never the home folder of whoever runs the tests. Tests that need their own set these again."""
+    state = tmp_path_factory.getbasetemp() / "computer-state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state / "xdg"))
+    monkeypatch.setenv("LOCALAPPDATA", str(state / "local"))
+
+
 def tree_snapshot(root: Path) -> dict:
     """Every path under root with type, size, mtime and content hash - for non-destruction checks."""
     snap = {}

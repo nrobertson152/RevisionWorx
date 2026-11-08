@@ -245,6 +245,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                 out.write(impact.impact_csv(rep) if a.csv else impact.impact_text(rep))
                 return 0
             if a.cmd == "verify":
+                ws.check_from_journal()              # an integrity check never starts from this computer's checkpoint
                 changes, problems = svc.scan()
                 bad = 0
                 for c in changes:
