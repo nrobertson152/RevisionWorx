@@ -300,13 +300,24 @@ class AddAccountDialog(QDialog):
         self.accept()
 
 
+def _phones_text(phones: list[dict]) -> str:
+    counting = sum(1 for p in phones if p["active"])
+    revoked = sum(1 for p in phones if p["revoked"])
+    other = len(phones) - counting - revoked
+    parts = [f"{counting} phone" + ("" if counting == 1 else "s")] if counting else []
+    parts += [f"{revoked} revoked"] if revoked else []
+    parts += [f"{other} not counted"] if other else []
+    return ", ".join(parts)
+
+
 class AccountsDialog(QDialog):
-    COLUMNS = ("User name", "Name", "Role", "State")
+    COLUMNS = ("User name", "Name", "Role", "State", "Phones")
 
     def __init__(self, ctl: Controller, parent=None):
         super().__init__(parent)
         self.ctl = ctl
         self.rows: list[dict] = []
+        self.phones: list[dict] = []
         self.setWindowTitle("Accounts")
         self.setObjectName("accountsDialog")
         self.resize(640, 400)
@@ -333,9 +344,12 @@ class AccountsDialog(QDialog):
         self.role_btn.clicked.connect(lambda *_: self.toggle_role())
         self.reset_btn = QPushButton("&Reset password…", self)
         self.reset_btn.clicked.connect(lambda *_: self.reset())
+        self.phones_btn = QPushButton("&Phones…", self)
+        self.phones_btn.setToolTip("The FieldWorx phones enrolled to this person: what they sign is accepted as verified in their name")
+        self.phones_btn.clicked.connect(lambda *_: self.show_phones())
         close = QPushButton("&Close", self)
         close.clicked.connect(lambda *_: self.accept())
-        for button in (self.add_btn, self.active_btn, self.role_btn, self.reset_btn):
+        for button in (self.add_btn, self.active_btn, self.role_btn, self.reset_btn, self.phones_btn):
             row.addWidget(button)
         row.addStretch(1)
         row.addWidget(close)
@@ -350,13 +364,15 @@ class AccountsDialog(QDialog):
         select = select or (self.selected() or {}).get("id")
         try:
             self.rows = self.ctl.accounts()
+            self.phones = self.ctl.devices()
         except Exception as exc:
             self.rows = []
             self.error.setText(_say(exc))
         self.table.setRowCount(len(self.rows))
         for i, row in enumerate(self.rows):
             state = "Disabled" if not row["active"] else ("Hasn't chosen a password yet" if row.get("must_change") else "Active")
-            for j, text in enumerate((row["id"], row.get("name", ""), ROLE_NAMES.get(row["role"], row["role"]), state)):
+            phones = _phones_text([p for p in self.phones if p["account"] == row["id"]])
+            for j, text in enumerate((row["id"], row.get("name", ""), ROLE_NAMES.get(row["role"], row["role"]), state, phones)):
                 self.table.setItem(i, j, QTableWidgetItem(text))
             if row["id"] == select:
                 self.table.selectRow(i)
@@ -364,7 +380,7 @@ class AccountsDialog(QDialog):
 
     def update_buttons(self) -> None:
         row = self.selected()
-        for button in (self.active_btn, self.role_btn, self.reset_btn):
+        for button in (self.active_btn, self.role_btn, self.reset_btn, self.phones_btn):
             button.setEnabled(row is not None)
         if row is not None:
             self.active_btn.setText("&Disable" if row["active"] else "&Enable")
@@ -393,6 +409,12 @@ class AccountsDialog(QDialog):
         if row:
             self._do(lambda: self.ctl.set_account_role(row["id"], "user" if row["role"] == "admin" else "admin"))
 
+    def show_phones(self) -> None:
+        row = self.selected()
+        if row:
+            PhonesDialog(self.ctl, row["id"], self).exec()
+            self.refresh(row["id"])
+
     def reset(self) -> None:
         row = self.selected()
         if not row:
@@ -401,6 +423,96 @@ class AccountsDialog(QDialog):
                                         "next log in:", QLineEdit.EchoMode.Password)
         if ok:
             self._do(lambda: self.ctl.reset_account_password(row["id"], text))
+
+
+class PhonesDialog(QDialog):
+    """The FieldWorx phones enrolled to one account (ADR-028), and revoking one. Enrolling is done from FieldWorx's bridge,
+    which reads a field log the phone wrote and checks the fingerprint it shows."""
+    COLUMNS = ("Phone", "Fingerprint", "Enrolled", "State")
+
+    def __init__(self, ctl: Controller, account: str, parent=None):
+        super().__init__(parent)
+        self.ctl, self.account = ctl, account
+        self.rows: list[dict] = []
+        self.setWindowTitle(f"Phones of {account}")
+        self.setObjectName("phonesDialog")
+        self.resize(720, 320)
+        layout = QVBoxLayout(self)
+        layout.addWidget(_note("What a phone enrolled here signs in the field can be accepted as verified in this person's name. "
+                               "A phone is enrolled with 'fieldworx-bridge enrol', from a field log it wrote and the fingerprint "
+                               "it shows. Revoke a phone that's lost, stolen or handed on: what was accepted before stands.", self))
+        self.table = QTableWidget(0, len(self.COLUMNS), self)
+        self.table.setAccessibleName(f"Phones of {account}")
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.itemSelectionChanged.connect(self.update_buttons)
+        layout.addWidget(self.table, 1)
+        self.error = error_label(self)
+        layout.addWidget(self.error)
+        row = QHBoxLayout()
+        self.revoke_btn = QPushButton("&Revoke…", self)
+        self.revoke_btn.setToolTip("From now on, its signatures are refused. What was accepted before stands.")
+        self.revoke_btn.clicked.connect(lambda *_: self.revoke())
+        close = QPushButton("&Close", self)
+        close.clicked.connect(lambda *_: self.accept())
+        row.addWidget(self.revoke_btn)
+        row.addStretch(1)
+        row.addWidget(close)
+        layout.addLayout(row)
+        self.refresh()
+
+    def selected(self) -> dict | None:
+        rows = self.table.selectionModel().selectedRows()
+        return self.rows[rows[0].row()] if rows and rows[0].row() < len(self.rows) else None
+
+    @staticmethod
+    def state(row: dict) -> str:
+        if row["revoked"]:
+            return f"Revoked {row['revoked'][:10]} by {row['revoked_by']}: {row['reason']}"
+        return "Its signatures count" if row["active"] else f"Doesn't count: {row['problem']}"
+
+    def refresh(self, select: str | None = None) -> None:
+        select = select or (self.selected() or {}).get("device")
+        try:
+            self.rows = [r for r in self.ctl.devices() if r["account"] == self.account]
+        except Exception as exc:
+            self.rows = []
+            self.error.setText(_say(exc))
+        self.table.setRowCount(len(self.rows))
+        for i, r in enumerate(self.rows):
+            enrolled = f"{r['added'][:10]} by {r['added_by']}"
+            for j, text in enumerate((r["name"] or r["device"], r["fingerprint"], enrolled, self.state(r))):
+                item = QTableWidgetItem(text)
+                item.setToolTip(r["device"])
+                self.table.setItem(i, j, item)
+            if r["device"] == select:
+                self.table.selectRow(i)
+        if self.rows and self.selected() is None:
+            self.table.selectRow(0)
+        self.update_buttons()
+
+    def update_buttons(self) -> None:
+        row = self.selected()
+        self.revoke_btn.setEnabled(row is not None and not row["revoked"])
+
+    def revoke(self) -> None:
+        row = self.selected()
+        if not row or row["revoked"]:
+            return
+        reason, ok = QInputDialog.getText(self, "Revoke a phone", f"Why is {row['name'] or row['device']} being revoked? Its "
+                                          "signatures are refused from now on:")
+        if not ok:
+            return
+        self.error.setText("")
+        try:
+            self.ctl.revoke_device(self.account, row["device"], reason)
+        except Exception as exc:
+            self.error.setText(_say(exc))
+        self.refresh(row["device"])
 
 
 def show_share_check(ctl: Controller, parent=None) -> None:

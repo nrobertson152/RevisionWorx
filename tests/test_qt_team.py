@@ -436,6 +436,51 @@ def test_a_regular_user_sees_the_refusal_in_the_accounts_dialog(qapp, team, monk
     assert "Nothing was written" in describe_error(NotPermitted("only an administrator can do that"))
 
 
+def test_phones_in_the_accounts_window_and_revoking_one(qapp, team, monkeypatch):
+    """ADR-028: an account's enrolled FieldWorx phones, whether their signatures count, and revoking a lost one."""
+    from revisionworx import devices, ed25519
+    folder, pc, _code, boss, project, doc, path, tmp = team
+    key = ed25519.public_key(bytes(range(32))).hex()
+    with Workspace.open(folder, writable=True, session=boss, state_dir=pc) as ws:
+        devices.enrol(ws, "alice", "dev_" + "1" * 32, key, devices.fingerprint(key), "Alice's phone")
+    ctl, _window = _logged_in_window(qapp, team, "boss", PASSWORD, monkeypatch)
+    dialog = T.AccountsDialog(ctl)
+    phones_column = T.AccountsDialog.COLUMNS.index("Phones")
+    texts = {dialog.rows[i]["id"]: dialog.table.item(i, phones_column).text() for i in range(len(dialog.rows))}
+    assert texts == {"alice": "1 phone", "boss": ""}
+    dialog.refresh("alice")
+    assert dialog.phones_btn.isEnabled()
+    phones = T.PhonesDialog(ctl, "alice")
+    assert [r["name"] for r in phones.rows] == ["Alice's phone"]
+    assert phones.table.item(0, 1).text() == devices.fingerprint(key)
+    assert phones.table.item(0, 3).text() == "Its signatures count" and phones.revoke_btn.isEnabled()
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText", staticmethod(lambda *a, **k: ("", True)))
+    phones.revoke()
+    assert "reason" in phones.error.text() and phones.rows[0]["active"], "a revocation needs a reason"
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText", staticmethod(lambda *a, **k: ("lost on site", True)))
+    phones.revoke()
+    assert phones.error.text() == ""
+    assert phones.table.item(0, 3).text().startswith("Revoked ") and phones.table.item(0, 3).text().endswith(
+        "by boss: lost on site")
+    assert not phones.revoke_btn.isEnabled()
+    dialog.refresh("alice")
+    assert dialog.table.item(dialog.table.currentRow(), phones_column).text() == "1 revoked"
+
+
+def test_a_regular_user_cant_revoke_a_phone(qapp, team, monkeypatch):
+    from revisionworx import devices, ed25519
+    folder, pc, _code, boss, project, doc, path, tmp = team
+    key = ed25519.public_key(bytes(range(32))).hex()
+    with Workspace.open(folder, writable=True, session=boss, state_dir=pc) as ws:
+        devices.enrol(ws, "alice", "dev_" + "1" * 32, key, devices.fingerprint(key))
+    ctl, _window = _logged_in_window(qapp, team, "alice", OTHER, monkeypatch)
+    phones = T.PhonesDialog(ctl, "alice")
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText", staticmethod(lambda *a, **k: ("mine", True)))
+    phones.revoke()
+    assert "administrator" in phones.error.text()
+    assert phones.rows[0]["active"] is True
+
+
 def test_the_recovery_code_through_the_login_dialog(qapp, team, monkeypatch):
     folder, pc, code, boss, project, doc, path, tmp = team
     ctl = controller(tmp, "laptop")

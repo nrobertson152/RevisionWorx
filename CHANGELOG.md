@@ -43,8 +43,9 @@ The first release. Everything below is new.
 - **Field records signed on enrolled phones.** In a team workspace an administrator enrols a person's FieldWorx phone to their
   account, after comparing the fingerprint the phone shows (`fieldworx-bridge enrol`, through `revisionworx link device-enrol`). A
   record signed on that phone can then be accepted as *verified* in their name (`link ... --field-signature`): RevisionWorx checks
-  the signature against the phone enrolled to the account, and refuses it, writing nothing, if it can't. `revisionworx user device
-  list` and `user device revoke` for a lost or stolen phone; `unit verify` checks every signed acceptance again.
+  the signature against the phone enrolled to the account, and refuses it, writing nothing, if it can't. Team › Accounts… ›
+  Phones… (or `revisionworx user device list` and `revoke`) lists each person's phones and revokes a lost or stolen one;
+  `unit verify` checks every signed acceptance again.
 
 ### Working as a team
 - A workspace can be set up for a team working from one shared network folder, with no server. An administrator account is created on

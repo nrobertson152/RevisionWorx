@@ -959,9 +959,10 @@ people.
 | The account is renamed or its password changes | Nothing changes: evidence names the account id, and the phone's entry is kept |
 | Computers' clocks disagree | Nothing depends on them: whether a phone was enrolled when it signed isn't judged by times |
 
-**Not done.** Enrolling or listing phones in the desktop window: it is done from the bridge, which reads the phone's field log, and
-listed and revoked with `revisionworx user device`. Verifying is pure Python, about 2 ms a signature, so `unit verify` adds about
-20 s for 10,000 signed events. Nothing here is verified on real phones or between real computers.
+**Not done.** Enrolling a phone in the desktop window: it is done from FieldWorx's bridge, which reads the phone's field log.
+The window lists each account's phones and revokes one (Team › Accounts… › Phones…), as `revisionworx user device` does. Verifying
+is pure Python, about 2 ms a signature, so `unit verify` adds about 20 s for 10,000 signed events. Nothing here is verified on
+real phones or between real computers.
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

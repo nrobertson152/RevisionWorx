@@ -905,6 +905,18 @@ class Controller:
         with self._write() as ws:
             return accounts.reset_password(ws, account, password)
 
+    def devices(self) -> list[dict]:
+        """Phones enrolled to accounts (ADR-028), revoked ones too."""
+        from .. import devices
+        with self._read() as ws:
+            return devices.listing(ws)
+
+    def revoke_device(self, account: str, device: str, reason: str) -> dict:
+        """An administrator refuses a phone's signatures from now on. What was accepted before stands."""
+        from .. import devices
+        with self._write() as ws:
+            return devices.revoke(ws, account, device, reason)
+
     # ------------------------------------------------------------------ background jobs
     @property
     def busy(self) -> bool:
