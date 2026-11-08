@@ -1120,8 +1120,9 @@ workspace: someone outside the company asks the company. With it, a lost or stol
 turns signing on with a new key and tells its customers, and the register still exposes a pack it didn't issue (`docs/UNITS.md`
 section 13.1). Only Ed25519 keys; RSA and ECDSA ones are refused when signing is turned on.
 
-**Not verified:** signing with a real YubiKey, and signing on Windows. The tests sign with software keys through ssh-keygen,
-and check security-key signatures built to OpenSSH's PROTOCOL.u2f, which `ssh-keygen -Y verify` accepts.
+**Not verified:** signing with a real YubiKey. The tests sign with software keys through ssh-keygen, which runs in CI on Linux
+and on Windows (the runner's OpenSSH), and check security-key signatures built to OpenSSH's PROTOCOL.u2f, which `ssh-keygen -Y
+verify` accepts.
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

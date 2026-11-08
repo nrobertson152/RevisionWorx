@@ -508,7 +508,8 @@ while it is off.
 - **Ed25519 only.** RSA and ECDSA keys (including `ecdsa-sk` on older YubiKeys) are refused when signing is turned on; the
   signature is checked in pure Python (`revisionworx/sshsig.py`), and the standard library has no RSA or ECDSA.
 - **Not verified with real hardware.** Security-key signatures are checked against ones built to OpenSSH's PROTOCOL.u2f, which
-  `ssh-keygen -Y verify` accepts in the tests; signing with a real YubiKey, and on Windows, hasn't been tried.
+  `ssh-keygen -Y verify` accepts in the tests; signing with a real YubiKey hasn't been tried. Signing with a software key through
+  ssh-keygen runs in CI on Linux and on Windows (the runner's OpenSSH, RevisionWorx #72).
 
 
 ## 14. Not done, and costs

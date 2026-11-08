@@ -71,8 +71,8 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
   one (`unit check-pack` with `-w`), but someone without the workspace can't confirm a pack alone (docs/UNITS.md section 13,
   ADR-030).
 - **Signing packs:** Ed25519 keys only (no RSA or ECDSA, so no `ecdsa-sk` on older YubiKeys); from the command line only, with
-  OpenSSH's ssh-keygen installed; a lost or stolen key can't be revoked offline. Signing with a real YubiKey, and signing on
-  Windows, haven't been tried (docs/UNITS.md section 13.1).
+  OpenSSH's ssh-keygen installed; a lost or stolen key can't be revoked offline. Signing with a real YubiKey hasn't been tried;
+  with a software key it runs in CI on Linux and Windows (docs/UNITS.md section 13.1).
 - **An engineering change reaches units through a decision someone records** (`unit change decide`), once the ECO is
   implemented. The candidates are worked out from each unit's recorded configuration; a unit whose configuration isn't recorded
   has to be named. A retrofit's document revisions move automatically; parts it changes are recorded with `unit fit` and
