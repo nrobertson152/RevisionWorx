@@ -14,10 +14,10 @@
     fit REF POSITION (--component REF | --part-number PN) [--serial S] [--lot L] [--replace [--disposition D]]
     remove REF POSITION [--disposition D]                               void REF N [N ...] --reason R
     history REF                                                         where-used ...        verify
-    pack REF FOLDER [--on DATE]           (a handover pack: a page, the PDFs that apply, the record, SHA256SUMS; recorded
-                                           in the unit's history as issued)
-    packs REF                             withdraw-pack REF N --reason R
-    check-pack FOLDER                     (is a handover pack whole? needs no workspace; with one, did it issue the pack?)
+    pack REF FOLDER [--on DATE] [--sign-with KEYFILE]   (a handover pack: a page, the PDFs that apply, the record, SHA256SUMS;
+                                           recorded in the unit's history as issued)
+    packs REF                             withdraw-pack REF N --reason R      pack-signing [on --key FILE.pub | off]
+    check-pack FOLDER [--key FILE.pub]    (is a handover pack whole? needs no workspace; with one, did it issue the pack?)
     numbering new NAME --pattern 'NH-{yy}-{seq:4}' [--issuer I]       numbering list | numbering next NAME
     new --serial-from NAME ...  (the next serial of a numbering, taken in the same entry)
     change candidates|status ECO          change decide ECO --kind K [--standard STD] [--scope RULE --value V | --unit REF]
@@ -164,6 +164,12 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
                        "as issued, with its number")
     s.add_argument("ref"); s.add_argument("folder", help="a new folder for the pack")
     s.add_argument("--on", default="", help="the unit as known on this date (default: now)")
+    s.add_argument("--sign-with", default="", metavar="KEYFILE",
+                   help="where packs are signed: the key file ssh-keygen signs with (a private key, or a security key's handle)")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("pack-signing", help="whether handover packs are signed, and with which key (off by default)")
+    s.add_argument("action", nargs="?", choices=("on", "off"), help="on: sign every pack from now on with --key; off: stop")
+    s.add_argument("--key", default="", metavar="FILE.pub", help="the company's public key (ssh-ed25519 or sk-ssh-ed25519)")
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("packs", help="the handover packs issued for a unit")
     s.add_argument("ref"); s.add_argument("--json", action="store_true")
@@ -172,6 +178,10 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s = sub.add_parser("check-pack", help="is a handover pack whole? Needs no workspace; given the one it came from "
                        "(revisionworx -w FOLDER unit check-pack ...), also whether that workspace issued it")
     s.add_argument("folder"); s.add_argument("--json", action="store_true")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--key", default="", metavar="FILE.pub", help="the signature must be by this key (your supplier's)")
+    g.add_argument("--fingerprint", default="", metavar="SHA256:...", help="the signature must be by the key with this "
+                   "fingerprint")
 
     ch = sub.add_parser("change", help="which units an engineering change reaches, and where each one stands"
                         ).add_subparsers(dest="sub", required=True)
@@ -336,7 +346,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     sub = getattr(a, "sub", None)
     writable = a.cmd not in READS and not (a.cmd in ("standard", "numbering") and sub in ("list", "show", "next")) and \
         not (a.cmd == "import" and a.dry_run) and not (a.cmd == "change" and sub in CHANGE_READS) and \
-        not (a.cmd == "deviation" and sub in DEVIATION_READS)
+        not (a.cmd == "deviation" and sub in DEVIATION_READS) and not (a.cmd == "pack-signing" and a.action is None)
     try:
         if a.cmd == "check-pack":                    # a pack is checked anywhere; the workspace '-' is none
             return _check_pack(a, out)
@@ -410,6 +420,8 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
             out.write(f"pack {r['pack']:<3} {r['time'][:10]} {who:<20} {shows:<26} {state}\n")
         out.write(f"{len(rows)} handover pack(s) of {unit_label(unit)}\n")
         return 0
+    if cmd == "pack-signing":
+        return _pack_signing(a, ws, out)
     if cmd == "withdraw-pack":
         unit = svc.resolve(a.ref)
         svc.withdraw_pack(unit["id"], a.number, a.reason)
@@ -765,7 +777,7 @@ def _make_pack(a: argparse.Namespace, out) -> int:
     it on a writable one, which refuses if anything was recorded on the unit in between. Nothing is left if it isn't."""
     from . import pack
     with Workspace.open(Path(a.workspace)) as ws:
-        draft = pack.build(service_for(ws), a.ref, Path(a.folder), on=a.on)
+        draft = pack.build(service_for(ws), a.ref, Path(a.folder), on=a.on, sign_with=Path(a.sign_with) if a.sign_with else None)
     with draft:
         with Workspace.open(Path(a.workspace), writable=True) as ws:
             made = pack.issue(service_for(ws), draft)
@@ -777,17 +789,53 @@ def _make_pack(a: argparse.Namespace, out) -> int:
     for m in made["missing"]:
         out.write(f"  not included: {m['document']} rev {m['revision']}: {m['missing']}\n")
     out.write("  recorded in its history as issued" + (" (the workspace finishes recording it when next opened for writing)"
-                                                      if made["pending"] else "") + "; not signed\n")
+                                                      if made["pending"] else "")
+              + (f"; signed with the key {made['key']}\n" if made["signed"] else "; not signed\n"))
+    return 0
+
+
+def _pack_signing(a: argparse.Namespace, ws: Workspace, out) -> int:
+    from . import pack
+    if a.action == "on" and not a.key:
+        raise ValidationError("give the company's public key: pack-signing on --key FILE.pub")
+    if a.action is None and a.key:
+        raise ValidationError("--key goes with 'on'")
+    if a.action == "on":
+        state = pack.set_signing(ws, Path(a.key).read_text("utf-8"))
+    elif a.action == "off":
+        state = pack.set_signing(ws, None)
+    else:
+        state = pack.signing(ws)
+    if a.json:
+        out.write(json.dumps({"enabled": state["enabled"], "fingerprint": state["fingerprint"],
+                              "key": state["key"].openssh() if state["key"] else "",
+                              "allowed_signers": pack.allowed_signers(state["key"]) if state["key"] else "",
+                              "changed": state["changed"], "changed_by": state["changed_by"]}, indent=1) + "\n")
+        return 0
+    if not state["enabled"]:
+        out.write("handover packs aren't signed in this workspace (each one is still recorded as issued)\n")
+        return 0
+    key = state["key"]
+    out.write(f"every handover pack is signed with the key {key.fingerprint} ({key.type})\n"
+              "give your customers this fingerprint, or this line for an OpenSSH allowed_signers file:\n"
+              f"  {pack.allowed_signers(key)}\n")
     return 0
 
 
 def _check_pack(a: argparse.Namespace, out) -> int:
+    from .. import sshsig
     from . import pack
+    key = a.fingerprint
+    if a.key:
+        try:
+            key = sshsig.parse_public_key(Path(a.key).read_text("utf-8")).fingerprint
+        except sshsig.SignatureError as exc:
+            raise ValidationError(f"{a.key}: {exc}") from None
     if a.workspace == "-":
-        report = pack.check(Path(a.folder))
+        report = pack.check(Path(a.folder), key=key)
     else:
         with Workspace.open(Path(a.workspace)) as ws:
-            report = pack.check(Path(a.folder), service_for(ws))
+            report = pack.check(Path(a.folder), service_for(ws), key=key)
     if a.json:
         out.write(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
         return 0 if report["ok"] else 1
@@ -799,7 +847,12 @@ def _check_pack(a: argparse.Namespace, out) -> int:
     if report["pack"]:
         what += f" (pack {report['pack']})"
     whole = len(report["problems"]) - (1 if reg is not None and reg["state"] != "issued" else 0)
-    out.write(f"{what}: {report['files']} file(s), " + ("whole" if not whole else f"{whole} problem(s)") + "; not signed\n")
+    sig = report["signed"]
+    out.write(f"{what}: {report['files']} file(s), " + ("whole" if not whole else f"{whole} problem(s)")
+              + (f"; signed with the key {sig['key']}" + (" (a security key, touched)" if sig["security_key"] else "")
+                 if sig else "; not signed") + "\n")
+    if sig and not key and reg is None:
+        out.write("anyone can make a key: compare that one with the key your supplier gave you, or give it with --key\n")
     if reg is not None:
         out.write(("issued: " if reg["state"] == "issued" else "NOT CONFIRMED: ") + reg["message"] + "\n")
     elif report["pack"]:

@@ -66,9 +66,13 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
 - **The Units window only reads, except for handover packs.** It finds units, shows their drawings, changes due and history,
   and makes handover packs, which records each one in the unit's history; registering units, recording changes and deciding
   effectivity are done with `revisionworx unit` (and `revisionworx link units` for other programs).
-- **Handover packs aren't signed.** `SHA256SUMS` shows that a pack is whole, not who made it; anyone can make a folder that
-  checks. The workspace records every pack it issues, so the company can confirm one (`unit check-pack` with `-w`), but someone
-  without the workspace can't confirm a pack alone (docs/UNITS.md section 13, ADR-030).
+- **Handover packs are signed only if an administrator turns it on.** Unsigned, `SHA256SUMS` shows that a pack is whole, not
+  who made it, and anyone can make a folder that checks; the workspace records every pack it issues, so the company can confirm
+  one (`unit check-pack` with `-w`), but someone without the workspace can't confirm a pack alone (docs/UNITS.md section 13,
+  ADR-030).
+- **Signing packs:** Ed25519 keys only (no RSA or ECDSA, so no `ecdsa-sk` on older YubiKeys); from the command line only, with
+  OpenSSH's ssh-keygen installed; a lost or stolen key can't be revoked offline. Signing with a real YubiKey, and signing on
+  Windows, haven't been tried (docs/UNITS.md section 13.1).
 - **An engineering change reaches units through a decision someone records** (`unit change decide`), once the ECO is
   implemented. The candidates are worked out from each unit's recorded configuration; a unit whose configuration isn't recorded
   has to be named. A retrofit's document revisions move automatically; parts it changes are recorded with `unit fit` and

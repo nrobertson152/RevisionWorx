@@ -914,8 +914,7 @@ deviations and concessions (`docs/UNITS.md` section 12: written once with the un
 signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: where-used for other programs
 (`link where-used`, done); journal checkpoints (ADR-022's revision of 2026-11-08 and ADR-029, done); handover packs
 (`docs/UNITS.md` section 13, done), recorded in the unit's history as issued (ADR-030, the Director's decision at gate 4, done);
-signing packs, optional and off by default (ADR-030, in progress); transfer between workspaces and merged identities (not
-started).
+signing packs, optional and off by default (ADR-030, done); transfer between workspaces and merged identities (not started).
 
 **Costs and limits.** Queries read every unit (no index yet). In a team workspace on team rules 2 (ADR-024's revision of 2026-11-08),
 no computer accepts an entry that changes or removes a unit event, build standard, effectivity decision or deviation; on rules 1 (a team
@@ -1072,7 +1071,7 @@ The checkpoint for 20,000 units is 3.5 MB.
 **Not done:** writable handles starting from one; a checkpoint shared between computers (it would need signing, like the
 team journal); and the journal listing on opening, which is still O(n) names.
 
-### ADR-030 The workspace records every handover pack it issues; signing one is optional — IMPLEMENTED (the register; signing in progress)
+### ADR-030 The workspace records every handover pack it issues; signing one is optional — IMPLEMENTED; signing NOT VERIFIED with a real security key
 
 **Problem.** A handover pack (`docs/UNITS.md` section 13) leaves the company as a folder of files. `SHA256SUMS` shows that it is
 whole, but anyone can make a folder that is whole: change a page, write `SHA256SUMS` afresh, and it checks. A customer, an
@@ -1090,8 +1089,15 @@ optional (default off)."*
   withdrawn (when, by whom and why), or not issued. The pack's own record only says which unit to look at.
 - **A pack is withdrawn, never voided.** `unit withdraw-pack REF N --reason ...` records that pack N isn't to be relied on now. A
   pack that left the company was issued, so `pack.*` events can't be voided.
-- **Signing is optional, and off by default.** A company that wants packs a customer can check without asking turns it on and
-  signs with a key it holds, a hardware key (YubiKey) if it likes; not yet built. Off, nothing about signing appears anywhere.
+- **Signing is optional, and off by default.** A company that wants packs a customer can check without asking turns it on
+  (`unit pack-signing on --key COMPANY.pub`, an administrator's setting) and signs with a key it holds, on a YubiKey if it likes.
+  Off, nothing about signing appears anywhere.
+- **OpenSSH signs; RevisionWorx checks.** Signing is `ssh-keygen -Y sign -n revisionworx-handover-pack` on `SHA256SUMS`
+  (`SHA256SUMS.sig`), so a security key is handled by OpenSSH, which asks for the touch and the PIN, and a customer can check a
+  pack with OpenSSH alone. RevisionWorx checks the SSHSIG signature in pure Python (`revisionworx/sshsig.py`, on the Ed25519 of
+  ADR-024): `ssh-ed25519` and `sk-ssh-ed25519@openssh.com`, with a touch required. ssh-keygen is an outside program used only
+  when signing is on; the core still uses the standard library only. The key's fingerprint is recorded in `pack.issued`, so a
+  check against the workspace knows which key signed each pack, even after the key changes.
 
 **Order of a pack.** Put together beside its folder from a read-only handle, recorded on a writable handle only if nothing was
 recorded on the unit since (`expecting` the event count it was made from), then moved into place. Two people can't issue the
@@ -1104,8 +1110,14 @@ person's account key: only team workspaces have accounts, and a signature in a p
 register in a separate file or database: a second source of truth.
 
 **Consequences.** Making a pack writes to the workspace, so it needs the writer lock (briefly) and a workspace that isn't
-read-only; the Units window's **Handover pack…** follows the window's read-only state. Packs made before this (format version 1)
-are whole but can't be confirmed. Confirming a pack needs the workspace: someone outside the company asks the company.
+read-only; the Units window's **Handover pack…** follows the window's read-only state, and leaves signed packs to the command
+line. Packs made before this (format version 1) are whole but can't be confirmed. Without signing, confirming a pack needs the
+workspace: someone outside the company asks the company. With it, a lost or stolen key can't be revoked offline: the company
+turns signing on with a new key and tells its customers, and the register still exposes a pack it didn't issue (`docs/UNITS.md`
+section 13.1). Only Ed25519 keys; RSA and ECDSA ones are refused when signing is turned on.
+
+**Not verified:** signing with a real YubiKey, and signing on Windows. The tests sign with software keys through ssh-keygen,
+and check security-key signatures built to OpenSSH's PROTOCOL.u2f, which `ssh-keygen -Y verify` accepts.
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

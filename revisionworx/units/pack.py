@@ -7,6 +7,10 @@ A pack is put together from what a read-only handle sees (``build``), then recor
 number and the SHA-256 of its SHA256SUMS, and only then moved into place (``issue``): the workspace is the company's record
 of every pack it issued (ADR-030, the Director's decision at gate 4). ``check`` says whether a pack is whole and, given the
 workspace, whether that workspace issued it.
+
+Signing is optional and off by default (ADR-030). An administrator turns it on with the company's public key (``set_signing``);
+then every pack is signed with ``ssh-keygen -Y sign`` (``SHA256SUMS.sig``), with a software key or one on a security key such
+as a YubiKey, and the key's fingerprint is recorded with the pack.
 """
 from __future__ import annotations
 
@@ -22,15 +26,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .. import atomicio, derivatives
+from .. import atomicio, derivatives, sshsig
 from ..content import ContentStore
-from ..workspace import CommittedNotApplied, WorkspaceCorruptError
+from ..workspace import CommittedNotApplied, RecordPut, WorkspaceCorruptError, now_iso
 from . import history as H, query
 from .model import NotFound, UnitError, actor_record, check_date, day_of, is_id
 
 PACK_FORMAT = "revisionworx-unit-pack"
 PACK_VERSION = 2                    # 2: numbered, and recorded in the unit's history as issued (ADR-030)
 SUMS = "SHA256SUMS"
+SIGNATURE = "SHA256SUMS.sig"
+NAMESPACE = "revisionworx-handover-pack"   # what a pack's signature is for (ssh-keygen -n): never valid for anything else
+SETTING = "pack-signing"                   # the settings record (admin-only in a team workspace)
 RECORD = "unit.json"
 PAGE = "index.html"
 PDF_DIR = "documents"
@@ -41,16 +48,64 @@ class PackError(UnitError):
     pass
 
 
+# ---------------------------------------------------------------------------------------------------------- signing
+def signing(ws) -> dict:
+    """Whether this workspace signs its handover packs, and with which key: ``{"enabled", "key" (sshsig.PublicKey or None),
+    "fingerprint", "changed", "changed_by"}``. Off unless someone turned it on. A setting that can't be read is refused
+    (``PackError``): whether packs must be signed isn't known, so none is made."""
+    rec = ws.get("settings", SETTING)
+    if rec is None:
+        return {"enabled": False, "key": None, "fingerprint": "", "changed": "", "changed_by": None}
+    rec = {k: v for k, v in rec.items() if k != "_rev"}
+    if set(rec) != {"id", "enabled", "key", "changed", "changed_by"} or rec["id"] != SETTING \
+            or not isinstance(rec["enabled"], bool) or not isinstance(rec["key"], str) or not isinstance(rec["changed"], str) \
+            or not isinstance(rec["changed_by"], dict) or rec["enabled"] != bool(rec["key"]):
+        raise PackError("the workspace's pack-signing setting is damaged, so no pack is made; an administrator sets it again "
+                        "with 'revisionworx unit pack-signing on --key FILE' or 'off'")
+    key = None
+    if rec["enabled"]:
+        try:
+            key = sshsig.parse_public_key(rec["key"])
+        except sshsig.SignatureError as exc:
+            raise PackError(f"the workspace's pack-signing key can't be read ({exc}), so no pack is made") from None
+    return {"enabled": rec["enabled"], "key": key, "fingerprint": key.fingerprint if key else "", "changed": rec["changed"],
+            "changed_by": rec["changed_by"]}
+
+
+def set_signing(ws, key_text: str | None) -> dict:
+    """Sign every handover pack from now on with the key whose public half is ``key_text`` (a ``.pub`` file's text), or
+    stop signing (``None``). Only an administrator, in a team workspace. Packs already made don't change."""
+    if not getattr(ws, "is_admin", True):
+        raise PackError("only an administrator can change how handover packs are signed")
+    key = None
+    if key_text is not None:
+        try:
+            key = sshsig.parse_public_key(key_text)
+        except sshsig.SignatureError as exc:
+            raise PackError(f"that key can't sign packs: {exc}") from None
+    current = ws.get("settings", SETTING)
+    record = {"id": SETTING, "enabled": key is not None, "key": key.openssh() if key else "", "changed": now_iso(),
+              "changed_by": actor_record(ws.actor())}
+    ws.commit("unit.pack.signing", [RecordPut("settings", SETTING, record,
+                                              expect_rev=int(current.get("_rev", 0)) if current else 0)])
+    return signing(ws)
+
+
+def allowed_signers(key) -> str:
+    """The line a customer puts in an OpenSSH ``allowed_signers`` file to check packs with ``ssh-keygen -Y verify``."""
+    return f'supplier namespaces="{NAMESPACE}" {key.openssh()}'
+
+
 # ---------------------------------------------------------------------------------------------------------- making
 class Draft:
     """A pack put together beside its folder and not yet issued. ``issue`` records it and moves it into place; leaving a
     ``with`` block without issuing it removes it, so a pack that wasn't recorded is never left behind."""
 
     def __init__(self, work: Path, dest: Path, unit_id: str, label: str, count: int, number: int, sums: str, as_of: str,
-                 files: int, pdfs: list[dict]):
+                 files: int, pdfs: list[dict], key: str = ""):
         self.work, self.dest, self.unit_id, self.label = work, dest, unit_id, label
         self.count, self.number, self.sums, self.as_of = count, number, sums, as_of
-        self.files, self.pdfs = files, pdfs
+        self.files, self.pdfs, self.key = files, pdfs, key
         self.issued = False
 
     def __enter__(self) -> "Draft":
@@ -65,17 +120,28 @@ class Draft:
             shutil.rmtree(self.work, ignore_errors=True)
 
 
-def make(svc, ref: str, dest: Path, *, on: str = "") -> dict:
+def make(svc, ref: str, dest: Path, *, on: str = "", sign_with: Path | None = None) -> dict:
     """Make the handover pack of unit ``ref`` in the new folder ``dest``, as the unit stands now or ``on`` a date, and
     record it as issued, on one writable handle. All of it or nothing: see ``build`` and ``issue``."""
-    with build(svc, ref, dest, on=on) as draft:
+    with build(svc, ref, dest, on=on, sign_with=sign_with) as draft:
         return issue(svc, draft)
 
 
-def build(svc, ref: str, dest: Path, *, on: str = "") -> Draft:
+def build(svc, ref: str, dest: Path, *, on: str = "", sign_with: Path | None = None) -> Draft:
     """Put the handover pack of unit ``ref`` together beside the new folder ``dest``, numbered as the unit's next pack.
     Reads only: nothing is written to the workspace, and nothing is in ``dest`` yet. Refused if ``dest`` exists and isn't an
-    empty folder."""
+    empty folder.
+
+    In a workspace that signs its packs, ``sign_with`` is the key file ``ssh-keygen -Y sign -f`` takes (a private key, or the
+    handle of a key on a security key, which asks to be touched); the signature must be by the workspace's key. Given a key
+    where packs aren't signed, it is refused: nothing is signed by accident."""
+    policy = signing(svc.ws)
+    if policy["enabled"] and sign_with is None:
+        raise PackError(f"this workspace signs every handover pack, with the key {policy['fingerprint']}: give its key file "
+                        "('revisionworx unit pack REF FOLDER --sign-with KEYFILE')")
+    if sign_with is not None and not policy["enabled"]:
+        raise PackError("this workspace doesn't sign handover packs; an administrator turns it on with "
+                        "'revisionworx unit pack-signing on --key COMPANY.pub'")
     unit = svc.resolve(ref)
     on = day_of(check_date(on, "date")) if on else ""
     number = len(H.packs_in(svc.events(unit["id"]))) + 1
@@ -88,8 +154,10 @@ def build(svc, ref: str, dest: Path, *, on: str = "") -> Draft:
     try:
         (work / PDF_DIR).mkdir()
         pdfs = _pdfs(svc.ws, detail["documents"], work / PDF_DIR)
+        signed = {"key": policy["fingerprint"], "type": policy["key"].type, "namespace": NAMESPACE} if policy["enabled"] \
+            else False
         record = {"format": PACK_FORMAT, "version": PACK_VERSION, "pack": number, "made": svc.clock(),
-                  "made_by": _person(actor_record(svc.actor())), "signed": False,
+                  "made_by": _person(actor_record(svc.actor())), "signed": signed,
                   "workspace": {"id": svc.ws.id, "name": svc.ws.info.get("name", "")}, "as_of": on or None,
                   "unit": detail, "pdfs": pdfs}
         atomicio.atomic_write_bytes(work / RECORD, (json.dumps(record, indent=1, sort_keys=True, ensure_ascii=False)
@@ -100,11 +168,27 @@ def build(svc, ref: str, dest: Path, *, on: str = "") -> Draft:
         files = _listing(work)
         listing = "".join(f"{files[name]}  {name}\n" for name in sorted(files)).encode("utf-8")
         atomicio.atomic_write_bytes(work / SUMS, listing)
+        if policy["enabled"]:
+            _sign(work, listing, Path(sign_with), policy)
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise
     return Draft(work, dest, unit["id"], detail["label"], unit["events"]["count"], number,
-                 hashlib.sha256(listing).hexdigest(), on, len(files) + 1, pdfs)
+                 hashlib.sha256(listing).hexdigest(), on, len(files) + 1 + bool(policy["enabled"]), pdfs,
+                 policy["fingerprint"])
+
+
+def _sign(work: Path, listing: bytes, key_file: Path, policy: dict) -> None:
+    """Sign SHA256SUMS with ssh-keygen, then check the signature here: it must hold, be by the workspace's key, and (on a
+    security key) say the key was touched. Otherwise ``PackError``, and the pack is removed."""
+    try:
+        sig = sshsig.sign_file(work / SUMS, key_file, NAMESPACE)
+        info = sshsig.verify(sig, listing, NAMESPACE)
+    except sshsig.SignatureError as exc:
+        raise PackError(f"the pack couldn't be signed: {exc}") from None
+    if info["fingerprint"] != policy["fingerprint"]:
+        raise PackError(f"{key_file} is the key {info['fingerprint']}, but this workspace signs its packs with "
+                        f"{policy['fingerprint']}: sign with that key")
 
 
 def issue(svc, draft: Draft) -> dict:
@@ -117,7 +201,7 @@ def issue(svc, draft: Draft) -> dict:
     try:
         _free(draft.dest)
         with svc.expecting({draft.unit_id: draft.count}):
-            svc.issue_pack(draft.unit_id, draft.number, draft.sums, as_of=draft.as_of)
+            svc.issue_pack(draft.unit_id, draft.number, draft.sums, as_of=draft.as_of, key=draft.key)
     except CommittedNotApplied:
         pending = True                               # recorded: the workspace finishes applying it when next opened
     except BaseException:
@@ -133,8 +217,8 @@ def issue(svc, draft: Draft) -> dict:
                         f"{draft.dest} ({exc}). It is complete in {draft.work}: rename that folder") from exc
     included = [p for p in draft.pdfs if p["file"]]
     return {"path": str(draft.dest), "unit": draft.label, "pack": draft.number, "files": draft.files,
-            "pdfs": len(included), "missing": [p for p in draft.pdfs if not p["file"]], "signed": False, "recorded": True,
-            "pending": pending}
+            "pdfs": len(included), "missing": [p for p in draft.pdfs if not p["file"]], "signed": bool(draft.key),
+            "key": draft.key, "recorded": True, "pending": pending}
 
 
 def _free(dest: Path) -> None:
@@ -203,12 +287,12 @@ def _file_name(stem: str, used: set) -> str:
 
 
 def _listing(folder: Path) -> dict[str, str]:
-    """``{relative path: SHA-256}`` of every file in the pack, but the list itself."""
+    """``{relative path: SHA-256}`` of every file in the pack, but the list itself and its signature."""
     out = {}
     for path in sorted(folder.rglob("*")):
         if path.is_file():
             rel = path.relative_to(folder).as_posix()
-            if rel != SUMS:
+            if rel not in (SUMS, SIGNATURE):
                 out[rel] = _sha256(path)
     return out
 
@@ -222,10 +306,14 @@ def _sha256(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------- checking
-def check(folder: Path, svc=None) -> dict:
+def check(folder: Path, svc=None, key: str = "") -> dict:
     """Is the pack whole? Every file listed in SHA256SUMS is there with that SHA-256, nothing else is, and the record is one
     this version can read. Given ``svc`` (the workspace the pack says it came from), also: did that workspace issue it, and
-    is it still in effect? ``register`` answers that, or is ``None`` when no workspace was given."""
+    is it still in effect? ``register`` answers that, or is ``None`` when no workspace was given.
+
+    A signed pack's signature must hold and be by the key the pack names; ``signed`` is then the key, or ``False``. Given
+    ``key`` (a fingerprint, as ``ssh-keygen -l`` prints it), the signature must be by that key. A key named by the pack alone
+    proves nothing: anyone can make a key."""
     folder = Path(folder)
     problems: list[str] = []
     report: dict = {"ok": False, "problems": problems, "unit": None, "pack": None, "files": 0, "signed": False,
@@ -256,7 +344,7 @@ def check(folder: Path, svc=None) -> dict:
             problems.append(f"{rel} has been changed since the pack was made")
     for rel in sorted(set(present) - set(listed)):
         problems.append(f"{rel} isn't part of the pack")
-    report["files"] = len(listed) + 1
+    report["files"] = len(listed) + 1 + (folder / SIGNATURE).is_file()
     record = None
     try:
         record = json.loads((folder / RECORD).read_text("utf-8"))
@@ -277,12 +365,49 @@ def check(folder: Path, svc=None) -> dict:
             report["pack"] = record.get("pack")
     except (OSError, ValueError, RecursionError) as exc:
         problems.append(f"{RECORD} can't be read: {exc}")
+    report["signed"] = _signature(folder, raw, record, key, problems)
     if svc is not None:
-        report["register"] = _in_register(svc, record, hashlib.sha256(raw).hexdigest())
-        if report["register"]["state"] != "issued":
-            problems.append(report["register"]["message"])
+        report["register"] = reg = _in_register(svc, record, hashlib.sha256(raw).hexdigest())
+        if reg["state"] != "issued":
+            problems.append(reg["message"])
+        if reg["state"] in ("issued", "withdrawn"):
+            have = report["signed"]["key"] if report["signed"] else ""
+            if reg["key"] != have:
+                problems.append(f"{reg['workspace']} issued this pack " + (f"signed with the key {reg['key']}"
+                                if reg["key"] else "unsigned") + ", but here it is " + (f"signed with the key {have}"
+                                                                                       if have else "not signed"))
     report["ok"] = not problems
     return report
+
+
+def _signature(folder: Path, raw: bytes, record: dict | None, key: str, problems: list[str]) -> dict | bool:
+    """The pack's signature, checked: ``{"key", "type", "security_key", "touched"}``, or ``False`` if there is none (or it
+    doesn't hold, which is then one of ``problems``)."""
+    says = record.get("signed") if isinstance(record, dict) else None
+    named = says.get("key") if isinstance(says, dict) else ""
+    path = folder / SIGNATURE
+    if not path.is_file():
+        if named:
+            problems.append(f"the pack says it is signed with the key {named}, but {SIGNATURE} is missing")
+        elif key:
+            problems.append(f"the pack isn't signed, so it isn't signed with the key {key}")
+        return False
+    try:
+        if path.stat().st_size > sshsig.MAX_SIGNATURE:
+            raise sshsig.SignatureError("it is far too big to be a signature")
+        info = sshsig.verify(path.read_bytes(), raw, NAMESPACE)
+    except (OSError, sshsig.SignatureError) as exc:
+        problems.append(f"{SIGNATURE} doesn't hold: {exc}")
+        return False
+    found = {"key": info["fingerprint"], "type": info["type"], "security_key": info["key"].security_key,
+             "touched": info["touched"]}
+    if record is not None and not named:
+        problems.append(f"{SIGNATURE} isn't part of the pack: the pack says it isn't signed")
+    elif named and named != info["fingerprint"]:
+        problems.append(f"{SIGNATURE} is by the key {info['fingerprint']}, but the pack says it is signed with {named}")
+    if key and key != info["fingerprint"]:
+        problems.append(f"the pack is signed with the key {info['fingerprint']}, not with the key you gave ({key})")
+    return found
 
 
 def _in_register(svc, record: dict | None, sums: str) -> dict:
@@ -361,12 +486,19 @@ def render(record: dict) -> str:
     as_of = f' It shows the unit as known on {e(record["as_of"])}.' if record.get("as_of") else ""
     company = e(record["workspace"]["name"]) or "the workspace"
     by = _who(record.get("made_by"))
+    signed = record.get("signed")
+    if isinstance(signed, dict):
+        sig = (f' It is signed with {company}\'s key <code>{e(signed["key"])}</code>: <b>{SIGNATURE}</b> is the signature of '
+               f'<b>{SUMS}</b>. Check it with OpenSSH, <code>ssh-keygen -Y check-novalidate -n {NAMESPACE} -s {SIGNATURE} '
+               f'&lt; {SUMS}</code>, and compare the key it names with the one {company} gave you, not with this page: anyone '
+               'can write a page.')
+    else:
+        sig = " The pack is not signed."
     out.append(f'<p class="note">{e(pack_name.capitalize())} of {e(u["label"])}, made on {e(record["made"][:10])}'
                f'{" by " + e(by) if by else ""} from the RevisionWorx workspace {company}, which records every pack it '
                f'issues.{as_of} <b>{SUMS}</b> lists the SHA-256 of every file, so anyone can check that nothing is missing '
                f'or changed (<code>sha256sum -c {SUMS}</code>, or <code>revisionworx unit check-pack FOLDER</code>), and '
-               f'{company} can confirm from its record that it issued this pack and that it is still in effect. The pack '
-               f'is not signed.</p>')
+               f'{company} can confirm from its record that it issued this pack and that it is still in effect.{sig}</p>')
 
     out.append("<h2>Identity</h2><table><tr><th>Kind</th><th>Value</th><th>Issued by</th><th></th></tr>")
     for i in u["identifiers"]:

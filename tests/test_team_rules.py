@@ -314,7 +314,8 @@ def test_audit_records_cant_be_changed_or_deleted(team):
     assert "can't be changed" in team.verdicts(team.forge(team.boss, records=[{"kind": "audit", "id": "aud_" + "c" * 32, "delete": True}]))
 
 
-@pytest.mark.parametrize("kind, rid", [("settings", "workspace"), ("lifecycle", "default"), ("doctype", "x"), ("template", "t"), ("root", "r")])
+@pytest.mark.parametrize("kind, rid", [("settings", "workspace"), ("settings", "pack-signing"), ("lifecycle", "default"),
+                                       ("doctype", "x"), ("template", "t"), ("root", "r")])
 def test_workspace_settings_are_for_an_administrator(team, kind, rid):
     seq = team.forge(team.alice, records=[put(kind, rid, {"id": rid})])
     assert "only an administrator" in team.verdicts(seq)
