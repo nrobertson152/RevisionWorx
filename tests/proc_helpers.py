@@ -160,24 +160,53 @@ def read_loop(location: str, rid: str, stop_file: str, results) -> None:
     results.put({"reads": reads, "errors": errors[:5]})
 
 
-def break_loop(location: str, stop_file: str, results) -> None:
-    """An impatient administrator: breaks whichever lock it sees, repeatedly."""
+def break_loop(location: str, stop_file: str, results, rid: str | None = None, patience: int = 25,
+               hold_s: float = 3.0) -> None:
+    """An impatient administrator: breaks whichever lock it sees, repeatedly.
+
+    With ``rid`` it isn't a denial of service. After every ``patience`` breaks it looks at that record. If nobody has
+    committed since it last looked, it holds off until someone has, for up to ``hold_s`` seconds. Without this, on a slow
+    machine it broke every lock before the commit could land (issue #76: CI 42505527481 on main 996f8eb, Windows: 0
+    commits in about 1,900 attempts over 120 s), and a soak without commits proves nothing. While writers are
+    committing it never holds off, so it's as impatient as before."""
     import time
     from pathlib import Path
     from revisionworx.workspace import Workspace, WorkspaceError
-    breaks, errors = 0, []
+    breaks, holds, errors = 0, 0, []
+    since_look, last_rev = 0, 0
+
+    def record_rev():
+        try:
+            with Workspace.open(Path(location)) as reader:
+                record = reader.get("root", rid)
+                return record["_rev"] if record else 0
+        except Exception:  # noqa: BLE001 - can't tell right now: hold off, as for no commit (the wait is bounded)
+            return None
+
     while not Path(stop_file).exists():
         try:
             holder = Workspace.read_writer_lock(Path(location))
             if holder:
                 Workspace.break_writer_lock(Path(location), holder["token"], "soak test")
                 breaks += 1
+                since_look += 1
         except WorkspaceError:
             pass                       # the lock changed since it was inspected, as it is told to report
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{type(exc).__name__}: {exc}")
+        if rid is not None and since_look >= patience:
+            since_look = 0
+            rev, until = record_rev(), time.monotonic() + hold_s
+            if rev is None or rev == last_rev:
+                holds += 1
+                while ((rev is None or rev == last_rev) and time.monotonic() < until
+                       and not Path(stop_file).exists()):
+                    time.sleep(0.05)
+                    rev = record_rev()
+            if rev is not None:
+                last_rev = rev
         time.sleep(0.03)
-    results.put({"breaks": breaks, "errors": errors[:5]})
+    results.put({"breaks": breaks, "holds": holds, "errors": errors[:5]})
 
 
 def subsystem_commit_then_die(location: str, kind: str, rid: str, txid: str) -> None:

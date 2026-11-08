@@ -6,6 +6,7 @@ Every test here reproduces a counterexample against rev. 2 (366d435) before asse
 import hashlib
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -439,15 +440,15 @@ def test_stale_view_missing_file_is_redecided_not_reported_absent(share, monkeyp
     """Found under load: admin B decides against head H, admin A then authorises at H+1 and takes
     custody, and B finds the file gone. B must re-decide (adopt A's clear), not report 'missing'."""
     _orphan(share)
-    real_read = wsmod.Path.read_bytes
+    real_read = wsmod.atomicio.read_bytes                # every read in the clear goes through atomicio (issue #74)
     state = {"done": False}
 
-    def read_bytes(self):
-        if self.name == NAME and not state["done"]:
+    def read_bytes(path):
+        if Path(path).name == NAME and not state["done"]:
             state["done"] = True
             state["a"] = Workspace.clear_orphaned_release(share, NAME, reason="admin A")
-        return real_read(self)
-    monkeypatch.setattr(wsmod.Path, "read_bytes", read_bytes)
+        return real_read(path)
+    monkeypatch.setattr(wsmod.atomicio, "read_bytes", read_bytes)
     b = Workspace.clear_orphaned_release(share, NAME, reason="admin A")   # same request, retried
     monkeypatch.undo()
     assert b["adopted"] and b["clear_id"] == state["a"]["clear_id"] and b["outcome"] == "completed"

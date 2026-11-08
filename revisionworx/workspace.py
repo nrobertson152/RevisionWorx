@@ -154,16 +154,17 @@ class OrphanClearConflict(WorkspaceError):
 
 
 class LockReleaseBusyError(WorkspaceError):
-    """A lock-release file (``.releasing-*`` / ``.fencing-*``) exists but could not be read: access was
-    denied, as on Windows while another session is still releasing or deleting it, or while a virus
-    scanner or backup tool holds it. Its writer cannot be fenced yet, so nobody may write and this
-    open was refused (fail closed); unlike :class:`WorkspaceCorruptError` there is no evidence of
-    damage, so the remedy is to retry, not an administrative clear. Nothing was written."""
+    """A lock-release file (``.releasing-*`` / ``.fencing-*``, or an orphan clear's ``.clearing-*``) exists
+    but could not be read or moved: access was denied, as on Windows while another session is still
+    releasing or deleting it, or while a virus scanner or backup tool holds it. Its writer cannot be
+    fenced yet, so nobody may write and this open was refused (fail closed); unlike
+    :class:`WorkspaceCorruptError` there is no evidence of damage, so the remedy is to retry, not an
+    administrative clear. Nothing was written."""
 
-    def __init__(self, name: str, cause: OSError):
+    def __init__(self, name: str, cause: OSError, failed: str = "could not be read"):
         self.name = name
         super().__init__(
-            f"lock-release file {name} could not be read ({cause.strerror or cause}); another session may "
+            f"lock-release file {name} {failed} ({cause.strerror or cause}); another session may "
             "be releasing the writer lock right now. Nothing was written: try again in a moment. If this "
             "persists, check file permissions and any program (virus scanner, backup) holding that file")
 
@@ -796,7 +797,7 @@ class Workspace:
         if not tok:
             # What we took custody of is not what we inspected: keep it as a blocking orphan.
             quarantine = locks / f".releasing-{uuid.uuid4().hex}"
-            os.replace(custody, quarantine)
+            atomicio.retry_sharing(lambda: os.replace(custody, quarantine))
             raise WorkspaceCorruptError(
                 f"orphaned lock-release file {quarantine.name} is unreadable, so its writer cannot be revoked; nobody "
                 "may write until an administrator confirms that writer is stopped and runs "
@@ -895,7 +896,14 @@ class Workspace:
             # silent merge. The existing one is still driven by acquisition / its own administrator.
             result = cls._orphan_clear_state(meta)[1].get(auth["clear_id"])
             raise OrphanClearConflict(auth, result["outcome"] if result else "pending")
-        result = cls._drive_orphan_clear(meta, auth)
+        try:
+            result = cls._drive_orphan_clear(meta, auth)
+        except PermissionError as exc:               # still held after the bounded sharing retries (ADR-016)
+            raise WorkspaceError(
+                f"{name} is authorised for clearing ({auth['clear_id']}), but a file it needs couldn't be moved or "
+                f"read ({exc.strerror or exc}): another program may have it open, or permissions don't allow it. "
+                "Nothing was lost and it still blocks writers. Run the same command again, with the same reason, "
+                "to finish the clear") from exc
         return {"clear_id": auth["clear_id"], "adopted": adopted, "outcome": result["outcome"],
                 "evidence": auth["evidence"], "quarantine": result.get("quarantine")}
 
@@ -944,7 +952,7 @@ class Workspace:
             if open_:
                 return open_[0], True
             try:
-                data = src.read_bytes()
+                data = atomicio.read_bytes(src)     # shares delete access: never blocks a competitor's custody move
             except FileNotFoundError:
                 if probe.head_seq() != head:
                     continue                        # a competitor authorised and moved it: re-decide
@@ -993,7 +1001,9 @@ class Workspace:
     @classmethod
     def _settle_orphan_clears(cls, meta: Path) -> None:
         """Drive every open authorisation and every custody file to its terminal disposition.
-        Called by acquisition before the barrier check; idempotent and safe to run concurrently."""
+        Called by acquisition before the barrier check; idempotent and safe to run concurrently.
+        A file still in use after the bounded sharing retries (ADR-016) refuses the open with
+        :class:`LockReleaseBusyError` ("retry"): the clear stays where it was, still blocking."""
         locks = meta / "locks"
         custody = sorted(locks.glob(".clearing-*"))
         if not custody and not any(locks.glob(".releasing-*")):
@@ -1003,30 +1013,42 @@ class Workspace:
         for c in custody:
             cid = c.name[len(".clearing-"):].rsplit("-", 1)[0]
             if cid not in by_id:   # custody without an authorisation: never ours to archive
+                quarantine = locks / f".releasing-{uuid.uuid4().hex}"
                 try:
-                    os.replace(c, locks / f".releasing-{uuid.uuid4().hex}")
+                    atomicio.retry_sharing(lambda: os.replace(c, quarantine))
                 except FileNotFoundError:
                     pass
+                except PermissionError as exc:
+                    raise LockReleaseBusyError(c.name, exc, "could not be moved or read") from exc
         for a in auths:
             in_custody = any(p.name.startswith(f".clearing-{a['clear_id']}-") for p in custody)
             if in_custody or (a["clear_id"] not in results and (locks / a["file"]).exists()):
-                cls._drive_orphan_clear(meta, a)
+                try:
+                    cls._drive_orphan_clear(meta, a)
+                except PermissionError as exc:
+                    raise LockReleaseBusyError(Path(exc.filename).name if exc.filename else a["file"],
+                                               exc, "could not be moved or read") from exc
 
     @classmethod
     def _drive_orphan_clear(cls, meta: Path, auth: dict) -> dict:
-        """Steps 2-5 of an authorised clear (see clear_orphaned_release). Idempotent."""
+        """Steps 2-5 of an authorised clear (see clear_orphaned_release). Idempotent.
+
+        Every read shares delete access and every move or delete is retried within ADR-016's bound, so
+        RevisionWorx processes racing here never block each other on Windows. PermissionError means
+        something outside RevisionWorx still holds a file; whatever was done stays, and a retry resumes."""
         locks = meta / "locks"
         cid, want = auth["clear_id"], auth["file_sha256"]
         evidence = locks / auth["evidence"]
         result = cls._orphan_clear_state(meta)[1].get(cid)
         if result is None:                           # step 2: custody (never clobbers: fresh name)
+            custody = locks / f".clearing-{cid}-{uuid.uuid4().hex[:12]}"
             try:
-                os.replace(locks / auth["file"], locks / f".clearing-{cid}-{uuid.uuid4().hex[:12]}")
+                atomicio.retry_sharing(lambda: os.replace(locks / auth["file"], custody))
             except FileNotFoundError:
                 pass                                 # already in custody, or taken by a competitor
         for c in sorted(locks.glob(f".clearing-{cid}-*")):
             try:
-                data = c.read_bytes()                # step 3: the bytes we judge are the bytes we keep
+                data = atomicio.read_bytes(c)        # step 3: the bytes we judge are the bytes we keep
             except FileNotFoundError:
                 continue
             got = hashlib.sha256(data).hexdigest()
@@ -1034,7 +1056,7 @@ class Workspace:
                 try:
                     atomicio.publish_exclusive(evidence, data)
                 except ExclusiveCreateError:
-                    if hashlib.sha256(evidence.read_bytes()).hexdigest() != want:
+                    if hashlib.sha256(atomicio.read_bytes(evidence)).hexdigest() != want:
                         raise WorkspaceCorruptError(
                             f"evidence {evidence.name} exists with bytes that differ from its audit; "
                             "writes refused") from None
@@ -1051,7 +1073,7 @@ class Workspace:
                                                   and result.get("observed_sha256") == got) else None
             cls._quarantine(c, locks / (target or f".releasing-{uuid.uuid4().hex}"))
         if result is None and not (locks / auth["file"]).exists() and evidence.exists():
-            if hashlib.sha256(evidence.read_bytes()).hexdigest() == want:
+            if hashlib.sha256(atomicio.read_bytes(evidence)).hexdigest() == want:
                 result = cls._publish_result_once(meta, auth, {"outcome": "completed"})
         return result or {"outcome": "pending"}
 
@@ -1060,11 +1082,11 @@ class Workspace:
         """The custody file duplicates verified evidence. Remove it only while it still holds those
         bytes; anything else found there is quarantined as a blocking orphan, never discarded."""
         try:
-            same = hashlib.sha256(custody.read_bytes()).hexdigest() == want
+            same = hashlib.sha256(atomicio.read_bytes(custody)).hexdigest() == want
         except FileNotFoundError:
             return
         if same:
-            custody.unlink(missing_ok=True)
+            atomicio.retry_sharing(lambda: custody.unlink(missing_ok=True))
         else:
             Workspace._quarantine(custody, custody.with_name(f".releasing-{uuid.uuid4().hex}"))
 
@@ -1075,7 +1097,8 @@ class Workspace:
         except FileNotFoundError:
             return                                   # a concurrent completer moved it
         except FileExistsError:
-            os.replace(src, dst.with_name(f".releasing-{uuid.uuid4().hex}"))
+            fresh = dst.with_name(f".releasing-{uuid.uuid4().hex}")
+            atomicio.retry_sharing(lambda: os.replace(src, fresh))
 
     @classmethod
     def _publish_admin_entry(cls, meta: Path, op: str, audit_data: dict, revokes: str | None = None,

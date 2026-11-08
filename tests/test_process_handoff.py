@@ -304,6 +304,66 @@ def test_commit_loop_gives_up_at_its_deadline(tmp_path):
     assert 0.5 <= elapsed < 30
 
 
+def _admin_thread(root, stop, q, rid, patience=1, hold_s=30.0):
+    import threading
+    admin = threading.Thread(target=proc_helpers.break_loop, args=(str(root), str(stop), q, rid, patience, hold_s))
+    admin.start()
+    return admin
+
+
+def _wait_until_broken(root):
+    import time
+    deadline = time.monotonic() + 30
+    while Workspace.read_writer_lock(root) is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert Workspace.read_writer_lock(root) is None
+
+
+def test_the_impatient_administrator_holds_off_while_nobody_has_committed(tmp_path):
+    """Issue #76: on a slow machine the soak's administrator broke every lock before a commit could land, so the soak
+    checked nothing. Once it has broken ``patience`` locks with nobody committing, it holds off until someone has."""
+    import queue
+    import time
+    from revisionworx.workspace import RecordPut
+    root, stop, q, rid = tmp_path / "share", tmp_path / "stop", queue.Queue(), "root_" + "d" * 32
+    with Workspace.create(root, "admin"):
+        pass
+    first = Workspace.open(root, writable=True)
+    admin = _admin_thread(root, stop, q, rid)
+    try:
+        _wait_until_broken(root)                                  # broken, and nobody has committed
+        with Workspace.open(root, writable=True) as second:       # so this lock is left alone long enough to commit
+            time.sleep(0.2)                                       # several of the administrator's polls
+            second.commit("work", [RecordPut("root", rid, {"name": "x"}, expect_rev=0)])
+    finally:
+        stop.write_text("")
+        admin.join(60)
+        first.close()
+    tally = q.get_nowait()
+    assert tally["errors"] == [] and tally["breaks"] >= 1 and tally["holds"] >= 1, tally
+
+
+def test_the_impatient_administrator_does_not_hold_off_while_writers_commit(tmp_path):
+    """...and while someone is committing, it is as impatient as before."""
+    import queue
+    from revisionworx.workspace import RecordPut
+    root, stop, q, rid = tmp_path / "share", tmp_path / "stop", queue.Queue(), "root_" + "e" * 32
+    with Workspace.create(root, "admin"):
+        pass
+    with Workspace.open(root, writable=True) as ws:
+        ws.commit("work", [RecordPut("root", rid, {"name": "x"}, expect_rev=0)])
+    held = Workspace.open(root, writable=True)
+    admin = _admin_thread(root, stop, q, rid)
+    try:
+        _wait_until_broken(root)
+    finally:
+        stop.write_text("")
+        admin.join(60)
+        held.close()
+    tally = q.get_nowait()
+    assert tally == {"breaks": 1, "holds": 0, "errors": []}, tally
+
+
 def test_soak_with_competing_writers_and_an_impatient_administrator(tmp_path):
     """Not deterministic, deliberately: four writers and an administrator breaking every lock it sees, as fast as it can.
     Refusals are expected. A wrong answer, a lost update or two effective writers are not."""
@@ -314,11 +374,11 @@ def test_soak_with_competing_writers_and_an_impatient_administrator(tmp_path):
     stop = tmp_path / "stop"
     ctx = mp.get_context("spawn")
     results, admin_results = ctx.Queue(), ctx.Queue()
-    # after their 100 rounds the writers keep trying (up to 120 s) while nobody has committed: the safety checks
-    # below need real commits
+    # after their 100 rounds the writers keep trying (up to 120 s) while nobody has committed, and the administrator
+    # holds off once it has broken 25 locks with nobody committing (issue #76): the safety checks below need real commits
     writers = [ctx.Process(target=proc_helpers.commit_loop, args=(str(root), rid, 100, results, 120.0))
                for _ in range(4)]
-    admin = ctx.Process(target=proc_helpers.break_loop, args=(str(root), str(stop), admin_results))
+    admin = ctx.Process(target=proc_helpers.break_loop, args=(str(root), str(stop), admin_results, rid))
     admin.start()
     for p in writers:
         p.start()
@@ -347,4 +407,4 @@ def test_soak_with_competing_writers_and_an_impatient_administrator(tmp_path):
         assert ws.get("root", rid) == ({"name": "x", REV_FIELD: previous} if previous else None)
         assert [p for p in ws.verify()["problems"] if p["problem"] != "fenced-entry"] == []
     committed = sum(t["committed"] for t in tallies)
-    assert committed > 0, tallies
+    assert committed > 0, (tallies, admin_tally)
