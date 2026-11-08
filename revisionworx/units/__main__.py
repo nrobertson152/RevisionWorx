@@ -13,6 +13,7 @@
     doc REF DOC@REV | doc REF DOC --not-applicable | doc REF DOC --reset
     fit REF POSITION (--component REF | --part-number PN) [--serial S] [--lot L] [--replace [--disposition D]]
     remove REF POSITION [--disposition D]                               void REF N [N ...] --reason R
+    merge DUPLICATE --into REF --reason R  (two records of one physical unit: the duplicate's identifiers move to REF)
     history REF                                                         where-used ...        verify
     pack REF FOLDER [--on DATE] [--sign-with KEYFILE]   (a handover pack: a page, the PDFs that apply, the record, SHA256SUMS;
                                            recorded in the unit's history as issued)
@@ -147,6 +148,10 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s.add_argument("--disposition", default="unknown", choices=DISPOSITIONS, help="of what is replaced"); _common(s)
     s = sub.add_parser("remove", help="take something out of a position")
     s.add_argument("ref"); s.add_argument("position"); s.add_argument("--disposition", default="unknown", choices=DISPOSITIONS)
+    _common(s)
+    s = sub.add_parser("merge", help="record that two units are one physical unit: the duplicate's identifiers move to the "
+                       "other, and the duplicate takes no more actions (undone by voiding the merge)")
+    s.add_argument("duplicate"); s.add_argument("--into", required=True, metavar="REF", help="the unit that stays")
     _common(s)
     s = sub.add_parser("void", help="mark recorded events as mistakes")
     s.add_argument("ref"); s.add_argument("events", nargs="+", type=int); s.add_argument("--reason", required=True)
@@ -285,6 +290,11 @@ def _print_unit(out, svc: UnitService, detail: dict) -> None:
         out.write("  " + "   ".join(where) + "\n")
     if detail["parent"]:
         out.write(f"  fitted in {detail['parent']['label']} at {detail['parent']['position']}\n")
+    if detail.get("merged_into"):
+        m = detail["merged_into"]
+        out.write(f"  MERGED into {m['label']} ({m['unit']}) on {m['time'][:10]}, event {m['event']}: record on it\n")
+    for m in detail.get("merged_from", []):
+        out.write(f"  {m['label']} ({m['unit']}) was merged into this unit on {m['time'][:10]}\n")
     for name, m in detail["milestones"].items():
         out.write(f"  {name} {m['date'] or '(date unknown)'}\n")
     if "as_of" in detail:
@@ -422,6 +432,14 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
         return 0
     if cmd == "pack-signing":
         return _pack_signing(a, ws, out)
+    if cmd == "merge":
+        dup, keep = svc.resolve(a.duplicate), svc.resolve(a.into)
+        label = unit_label(dup)
+        u = svc.merge(dup["id"], keep["id"], **_meta(ws, a))
+        moved = ", ".join(f"{i['scheme']} {i['value']}" for i in dup["identifiers"]) or "no identifiers"
+        out.write(f"merged {label} ({dup['id']}) into {unit_label(u)}: it has {moved} now, and {dup['id']} finds it too. "
+                  f"The duplicate's history stays readable ('unit history {dup['id']}'); voiding the merge undoes it\n")
+        return 0
     if cmd == "withdraw-pack":
         unit = svc.resolve(a.ref)
         svc.withdraw_pack(unit["id"], a.number, a.reason)
@@ -753,7 +771,7 @@ def _where_used(a: argparse.Namespace, svc: UnitService, out) -> int:
                 raise ValidationError("--lot looks like PART-NUMBER@LOT")
             kwargs.update(number=pn, lot=lot)
         else:
-            kwargs["component"] = svc.resolve(a.component)["id"]
+            kwargs["component"] = svc.resolve(a.component, follow=True)["id"]
         rows = query.units_with_component(svc, **kwargs)
     if a.json:
         out.write(json.dumps({"rows": rows, "coverage": "every unit in this workspace's register"}, indent=1,

@@ -71,15 +71,18 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
   one (`unit check-pack` with `-w`), but someone without the workspace can't confirm a pack alone (docs/UNITS.md section 13,
   ADR-030).
 - **Signing packs:** Ed25519 keys only (no RSA or ECDSA, so no `ecdsa-sk` on older YubiKeys); from the command line only, with
-  OpenSSH's ssh-keygen installed; a lost or stolen key can't be revoked offline. Signing with a real YubiKey, and signing on
-  Windows, haven't been tried (docs/UNITS.md section 13.1).
+  OpenSSH's ssh-keygen installed; a lost or stolen key can't be revoked offline. Signing with a real YubiKey hasn't been tried;
+  with a software key it runs in CI on Linux and Windows (docs/UNITS.md section 13.1).
 - **An engineering change reaches units through a decision someone records** (`unit change decide`), once the ECO is
   implemented. The candidates are worked out from each unit's recorded configuration; a unit whose configuration isn't recorded
   has to be named. A retrofit's document revisions move automatically; parts it changes are recorded with `unit fit` and
   `unit remove`, citing the ECO.
-- **Queries read every unit.** Fine for thousands; there's no index yet.
-- **In a team workspace, a modified program could overwrite a unit's history.** `revisionworx unit verify` notices, and actions on
-  that unit are refused, but the journal's rules don't stop the write itself yet.
+- **Queries read every unit.** Finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000 on a local disk; there's no
+  index yet.
+- **A team workspace set up before 2026-11-08 stays on team rules 1 until an administrator runs `revisionworx team upgrade`.**
+  There, a modified program could overwrite a unit's history: `revisionworx unit verify` notices, and actions on that unit are
+  refused, but the journal accepts the write. On rules 2 (every team set up since, and every one upgraded) no computer accepts it.
+  RevisionWorx older than this can't open a workspace on rules 2.
 
 ## Not in 1.0
 

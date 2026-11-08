@@ -10,8 +10,8 @@ from __future__ import annotations
 import copy
 from typing import Callable
 
-from .model import (EVENT_TYPES, MalformedUnitRecord, SCHEMA, day_of, digest, event_id, load_event, norm, position_key,
-                    unit_label)
+from .model import (EVENT_TYPES, MERGED, MalformedUnitRecord, SCHEMA, day_of, digest, event_id, load_event, norm,
+                    position_key, unit_label)
 
 EVENT_DOMAIN = "revisionworx/units/event/v1"
 
@@ -115,6 +115,25 @@ def _apply_change(s: dict, ev: dict) -> list[str]:
             return [f"event {n} removes something from {b['position']}, which was empty"]
     elif t == "parent.set":
         s["parent"] = {"unit": b["parent"], "position": b["position"]} if b["parent"] else None
+    elif t == "unit.merged":                            # the duplicate: its identifiers go to the unit it is merged into
+        problems = []
+        for moved in b["identifiers"]:
+            hit = [i for i in s["identifiers"] if _same_identifier(i, moved)]
+            if not hit:
+                problems.append(f"event {n} moves identifier {moved['value']!r}, which the unit doesn't have")
+            else:
+                s["identifiers"].remove(hit[0])
+        s["status"] = MERGED
+        return problems
+    elif t == "unit.absorbed":                          # the survivor: it takes them over, active or not as they were
+        problems = []
+        for moved in b["identifiers"]:
+            if any(_same_identifier(i, moved) for i in s["identifiers"]):
+                problems.append(f"event {n} takes over identifier {moved['value']!r}, which the unit already has")
+            else:
+                s["identifiers"].append({"scheme": moved["scheme"], "issuer": moved["issuer"], "value": moved["value"],
+                                         "active": moved["active"], "since": n})
+        return problems
     elif t == "verified":                               # a reported change confirmed: its facts become verified
         named, hit = set(b["events"]), False
         for entry in list(s["documents"].values()) + list(s["components"].values()):
@@ -186,6 +205,20 @@ def pack_problems(events: list[dict]) -> list[str]:
                 if by_n.get(n, {}).get("type", "").startswith("pack."):
                     problems.append(f"event {e['n']} voids event {n}, a handover pack event, which is never voided")
     return problems
+
+
+def merged_into(events: list[dict]) -> dict | None:
+    """The unit this one was merged into (its ``unit.merged`` event, unless voided): ``{"unit", "event", "time"}``, or None."""
+    voids = voided_by(events)
+    hits = [e for e in events if e["type"] == "unit.merged" and e["n"] not in voids]
+    return {"unit": hits[-1]["body"]["into"], "event": hits[-1]["n"], "time": hits[-1]["time"]} if hits else None
+
+
+def merged_from(events: list[dict]) -> list[dict]:
+    """The units merged into this one (its ``unit.absorbed`` events, unless voided), oldest first."""
+    voids = voided_by(events)
+    return [{"unit": e["body"]["unit"], "event": e["n"], "time": e["time"]} for e in events
+            if e["type"] == "unit.absorbed" and e["n"] not in voids]
 
 
 def after(events: list[dict], n: int) -> dict | None:
@@ -300,8 +333,14 @@ def summary(ev: dict, name: Callable[[str, str], str] = lambda kind, rid: rid) -
                 + (f", signed with key {b['key']}" if b["key"] else ""))
     if t == "pack.withdrawn":
         return f"handover pack {b['pack']} withdrawn"
+    if t == "unit.merged":
+        moved = ", ".join(f"{i['scheme']} {i['value']}" for i in b["identifiers"]) or "no identifiers"
+        return f"merged into {name('unit', b['into'])} (moved: {moved})"
+    if t == "unit.absorbed":
+        moved = ", ".join(f"{i['scheme']} {i['value']}" for i in b["identifiers"]) or "no identifiers"
+        return f"{name('unit', b['unit'])} merged into this unit (took over: {moved})"
     return t  # pragma: no cover
 
 
-__all__ = ["EVENT_DOMAIN", "after", "apply", "event_day", "event_digest", "make_event", "on", "pack_problems", "packs_in",
-           "reduce", "summary", "unit_label", "verify_chain", "voided_by"]
+__all__ = ["EVENT_DOMAIN", "after", "apply", "event_day", "event_digest", "make_event", "merged_from", "merged_into", "on",
+           "pack_problems", "packs_in", "reduce", "summary", "unit_label", "verify_chain", "voided_by"]

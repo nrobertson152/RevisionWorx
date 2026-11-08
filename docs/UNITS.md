@@ -54,7 +54,7 @@ allow newline and tab. Times are UTC ISO 8601 as the core writes them. Dates (`e
 | `name` | short description, ≤ 200 |
 | `model` | `{"part": "" or prt_…, "number": ≤ 100}`: the design it is an instance of. `number` is enough; `part` names a catalog part when there is one |
 | `identifiers` | `[{"scheme", "issuer", "value", "active", "since"}]` in the order they were added; `since` is the event that added it |
-| `status` | `planned`, `in-build`, `built`, `in-service`, `out-of-service`, `retired`, `scrapped` |
+| `status` | `planned`, `in-build`, `built`, `in-service`, `out-of-service`, `retired`, `scrapped`; or `merged`, which only a merge sets (section 15) |
 | `project` | `""` or a `prj_` id |
 | `customer`, `site`, `location` | text, ≤ 200 each: who has it, where, and where on the site |
 | `parent` | `null` or `{"unit": unt_…, "position"}`: the unit this one is fitted in |
@@ -131,9 +131,11 @@ superseded need an explicit choice (`allow_unreleased`), as an unreleased BOM do
 | `void` | `events: [n, …]` | the listed events are ignored from then on; the reason is required |
 | `pack.issued` | `pack` (its number: 1, 2, 3 for the unit), `sums` (SHA-256 of its `SHA256SUMS`), `as_of` (`""`, or the day it shows the unit on), `key` (`""`, or the fingerprint of the key that signed it) | none: it is the register of the packs the workspace issued (section 13) |
 | `pack.withdrawn` | `pack` | none: that pack isn't to be relied on now; the reason is required |
+| `unit.merged` | `into` (the unit that stays), `identifiers: [{scheme, issuer, value}]` | the duplicate, in the entry of a merge (section 15): those identifiers leave it, `status` becomes `merged` |
+| `unit.absorbed` | `unit` (the duplicate), `identifiers: [{scheme, issuer, value, active}]` | the unit that stays, in the same entry: it takes them over, active or not as they were |
 
 **Voiding** corrects a record, it doesn't undo a physical change. It applies to `unit.updated`, `milestone`, `standard.set`,
-`document.*`, `note`, `verified` and `component.*`. Voiding a component event also voids the matching `parent.set` on the component unit in the same
+`document.*`, `note`, `verified`, `component.*` and `unit.merged`/`unit.absorbed` (which takes its other half with it: section 15). Voiding a component event also voids the matching `parent.set` on the component unit in the same
 entry, and is refused if a later event on either unit touches that position or that component (record the correction by hand then).
 Identifiers are corrected with `identifier.removed`; a status is corrected by setting it again. A void can't be voided. A pack
 that was issued stays issued: `pack.*` events are never voided, and a pack is withdrawn instead.
@@ -186,6 +188,8 @@ checked by `revisionworx verify`, exactly as the core guarantees for any entry.
 | `void` | an event can't be voided, is already void or doesn't exist; a later event depends on it (section 4) |
 | `issue_pack` | the number isn't the unit's next; something was recorded on the unit since the pack was put together (section 13) |
 | `withdraw_pack` | no reason; the unit has no pack with that number; it is already withdrawn |
+| `merge` | no reason; the same unit; either is merged; the duplicate has something fitted, is fitted in something, or has engineering-change or deviation records; both hold the same identifier, or different serials or tags from the same issuer (section 15) |
+| any action on a merged unit | always, but voiding its merge: "merged into …: record it there" |
 
 **Retries.** Every action takes a `txid` (32 lowercase hex, one per user action). If the outcome of an earlier attempt is unknown, the
 same call with the same txid returns the result without writing again; a txid used for different input raises `ReplayRefused`, and so
@@ -205,6 +209,7 @@ does one whose attempt was fenced (start again with a new txid). New units take 
 | `signature-invalid` | an event's field signature (section 8) is malformed, isn't one signature and one signer, has a basis other than `verified`, cites another field record, or doesn't hold with the key the signer's account enrolled for that phone |
 | `signature-reused` | one signed field record is cited by more than one action (txid) |
 | `pack-register` | packs aren't numbered 1, 2, 3 in the order issued, a withdrawal names a pack that isn't issued and in effect, or a void names a `pack.*` event |
+| `merge-mismatch` | a unit's status and history disagree about a merge, or a merge is recorded in one of the two histories only |
 
 Problems are reported, never repaired: the journal holds every entry, and a person decides.
 
@@ -212,7 +217,9 @@ Problems are reported, never repaired: the journal holds every entry, and a pers
 
 `revisionworx link units [--project P] [--text T] [--detail]` and `revisionworx link unit REF`, documented in `docs/INTEGRATION.md`.
 `REF` is a unit id, a FieldWorx `ast_` id, or an identifier's value. FieldWorx packs units from these; nothing reads unit records
-directly.
+directly. A unit merged into another (section 15) isn't listed; its id answers as the unit it was merged into, with
+`named: {unit, merged_into}`, and is among that unit's `aliases`. An action another program records against it is recorded on that
+unit, with evidence `merged-unit:<the id it named>`.
 
 Other programs **record** through `link unit-register`, `unit-fit`, `unit-remove`, `unit-note`, `unit-milestone` and
 `unit-change-install` (feature `unit-records`): the actions of section 6 and 10.2, one entry each, through the same writer as the
@@ -257,7 +264,7 @@ records only what someone in the office accepts. Proposals from phones are never
 | A revision a unit uses is released again, superseded or obsoleted | The unit still uses it; the flags say what changed |
 | A document is moved or renamed | Nothing changes: units hold ids |
 | An older RevisionWorx opens the workspace | It reads and replays these entries like any others, and can't write these kinds (CORE_API §8) |
-| A modified program in a team workspace overwrites a unit event | The journal rules accept a signed put of any subsystem record; `unit verify` reports `altered-event`. A journal rule making these kinds write-once would need a new workspace format (ADR-024) and is planned |
+| A modified program in a team workspace overwrites a unit event | On team rules 2 (ADR-024, revision of 2026-11-08) no computer accepts it, nor a change to a build standard, an effectivity decision or a deviation. On rules 1 (a team set up before, until `team upgrade`) the journal accepts it and `unit verify` reports `altered-event` |
 | A unit record file altered on disk | Reads come from the journal (ADR-022); `verify` reports the file |
 | A phone that signed records is lost, or enrolled to the wrong person | An administrator revokes it (`revisionworx user device revoke`); its signatures are refused from then on, and what was accepted stands |
 | Signature evidence written by a program that skips the checks | `verify` reports `signature-invalid` |
@@ -501,16 +508,46 @@ while it is off.
 - **Ed25519 only.** RSA and ECDSA keys (including `ecdsa-sk` on older YubiKeys) are refused when signing is turned on; the
   signature is checked in pure Python (`revisionworx/sshsig.py`), and the standard library has no RSA or ECDSA.
 - **Not verified with real hardware.** Security-key signatures are checked against ones built to OpenSSH's PROTOCOL.u2f, which
-  `ssh-keygen -Y verify` accepts in the tests; signing with a real YubiKey, and on Windows, hasn't been tried.
+  `ssh-keygen -Y verify` accepts in the tests; signing with a real YubiKey hasn't been tried. Signing with a software key through
+  ssh-keygen runs in CI on Linux and on Windows (the runner's OpenSSH, RevisionWorx #72).
 
 
 ## 14. Not done, and costs
 
-- Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
+- Queries read every unit (`ws.list`): finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000 (ADR-025). No index
+  yet; the local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
-- Transfers between workspaces and merged identities are a later phase (ADR-025). Signing packs is optional and off by default
-  (section 13.1).
+- Transfers between workspaces are a later phase (ADR-025). Signing packs is optional and off by default (section 13.1).
+- A merge (section 15) moves identifiers only: the duplicate's documents, milestones and notes stay in its own history, and are
+  recorded on the unit that stays by hand where they matter.
 - Approval of a deviation is recording it; there is no review workflow for deviations like change control's for ECOs.
 - Effectivity rows cover documents only; parts a retrofit changes are recorded by hand, citing the change.
 - Candidates read every unit's configuration: fine for thousands of units.
 - Nothing here is verified between real computers, which RevisionWorx as a whole hasn't been (`docs/KNOWN_LIMITATIONS.md`).
+
+## 15. Merged identities
+
+Two records sometimes turn out to be one physical unit: the same pump imported from an asset register under a customer's tag,
+then registered by a work order under its serial. `revisionworx unit merge DUPLICATE --into REF --reason ...` records that, in
+one entry:
+
+- **`unit.merged` on the duplicate** (section 4): its identifiers leave it, and its status becomes `merged`.
+- **`unit.absorbed` on the unit that stays**: it takes them over, active or not as they were, and their claims are given to it at
+  the revision read, so nobody else can take them in between.
+- **Nothing is rewritten.** Each unit keeps its own chained history. The one that stays says what was merged into it and when
+  (`merged_from` in `unit show` and `link unit`); the duplicate says what it was merged into (`merged_into`), and its history stays
+  readable: `unit history DUPLICATE-ID`.
+- **The earlier id still finds it.** The duplicate's serials and tags are the other unit's now. Its `unt_` id names the
+  duplicate for a person (`unit show`), and the unit that stays for another program (`link unit`, and actions through `link`, which
+  cite the id they named: section 8). That id is among the unit's `aliases`, so a FieldWorx label printed with it still finds the
+  unit on a phone.
+- **The duplicate takes no more actions.** Each one is refused: "merged into SN-500: record it there". It isn't listed, searched
+  or counted: `unit list`, where-used, candidates for a change. Where-used `--history` still finds where it was fitted before.
+- **Refused until a person has settled it.** The duplicate has something fitted, is fitted in something, or has engineering-change
+  or deviation records; the two hold the same identifier, or different serials or tags from the same issuer (retire the wrong one
+  first); either is already merged; or no reason is given.
+- **A wrong merge is undone by voiding it**, on either unit, with a reason: one entry voids both halves, and the identifiers and
+  their claims go back. It is refused if the unit that stays has recorded identifier changes or merges since (record what is
+  right instead).
+
+The duplicate's documents, milestones and notes stay in its own history; the merge doesn't copy them.

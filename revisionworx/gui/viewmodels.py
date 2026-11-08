@@ -1150,6 +1150,9 @@ def unit_sections(d: dict) -> list[tuple[str, list[str]]]:
     head += [" · ".join(where)] if where else []
     if d.get("parent"):
         head.append(f"Fitted in {d['parent']['label']} at {d['parent']['position']}")
+    if d.get("merged_into"):
+        head.append(f"Merged into {d['merged_into']['label']} on {d['merged_into']['time'][:10]}: it is recorded there now")
+    head += [f"Merged into this unit: {m['label']} ({m['unit']}), on {m['time'][:10]}" for m in d.get("merged_from", [])]
     head += [f"{name.capitalize()}: {m['date'] or 'date unknown'}" for name, m in d["milestones"].items()]
     due = [c for c in d.get("changes", []) if c["outstanding"]]
     flagged = [r for r in d["documents"] if r["flags"]]

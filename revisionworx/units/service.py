@@ -17,7 +17,8 @@ from typing import Any, Callable, Iterable, Iterator
 from .. import documents as D
 from ..workspace import RecordCheck, RecordDelete, RecordPut, Workspace, new_id, now_iso, register_kind
 from . import history as H
-from .model import (BASES, CLASSES, DISPOSITIONS, KEY_FINGERPRINT_RE, LIMITS, MILESTONES, PERMANENT_SCHEMES, SIGNED_EVIDENCE,
+from .model import (BASES, CLASSES, DISPOSITIONS, KEY_FINGERPRINT_RE, LIMITS, MERGED, MILESTONES, PERMANENT_SCHEMES,
+                    SIGNED_EVIDENCE,
                     STANDARD_SCHEME, STATUSES, UPDATABLE, VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord,
                     NotFound,
                     ReplayRefused, ValidationError, actor_record, check_choice, check_date, check_evidence, check_id,
@@ -54,6 +55,8 @@ class _Tx:
         self.extra_puts: list[RecordPut] = []
         self.numberings: dict[str, dict] = {}          # working copies of numberings this action issues from
         self.numbering_revs: dict[str, int] = {}
+        self.key_moves: dict[str, tuple[dict, int]] = {}   # claims given to another owner (a merge), at their revision
+        self.merged_ok: set[str] = set()               # merged units this action may touch: only a void of their merge
 
     # -------------------------------------------------------------------------------------------- units
     def unit(self, unit_id: str) -> dict:
@@ -72,6 +75,10 @@ class _Tx:
                 raise Changed(f"{unit_label(state)} has {state['events']['count']} events in its history, not the {expected} it "
                               "had when this was decided: something was recorded on it since. Nothing was changed; look at it "
                               "again")
+            if state["status"] == MERGED and unit_id not in self.merged_ok:
+                into = H.merged_into(history)
+                raise ValidationError(f"{unit_label(state)} was merged into "
+                                      f"{self.svc.describe(into['unit']) if into else 'another unit'}: record it there")
             self.revs[unit_id] = int(rec.get("_rev", 0))
             self.states[unit_id] = state
             self.order.append(unit_id)
@@ -125,6 +132,19 @@ class _Tx:
             return
         self.key_puts[kid] = {"schema": 1, "scheme": scheme, "issuer": issuer, "value": value, "owner": owner}
 
+    def move_claim(self, scheme: str, issuer: str, value: str, owner: str, to: str) -> None:
+        """Give an identifier's claim to another unit (a merge, or voiding one), at the revision read. Nothing if there is no
+        claim (a retired identifier that isn't permanent has none); refused if someone else holds it."""
+        kid = key_id(scheme, issuer, value)
+        rec = self.svc.ws.get(KIND["key"], kid)
+        if rec is None:
+            return
+        claim = load_key(rec)
+        if claim["owner"] != owner:
+            raise DuplicateIdentifier(f"{scheme} {value} belongs to {self.svc.describe(claim['owner'])}", claim["owner"])
+        self.checks.pop((KIND["key"], kid), None)
+        self.key_moves[kid] = ({**claim, "owner": to}, int(rec.get("_rev", 0)))
+
     def release(self, scheme: str, issuer: str, value: str, owner: str) -> None:
         kid = key_id(scheme, issuer, value)
         rec = self.svc.ws.get(KIND["key"], kid)
@@ -173,6 +193,7 @@ class _Tx:
             self.checks.setdefault((KIND["unit"], uid), self.revs[uid])
         out += [RecordPut(KIND["key"], kid, rec, expect_rev=0) for kid, rec in self.key_puts.items()]
         out += [RecordDelete(KIND["key"], kid, expect_rev=rev) for kid, rev in self.key_deletes.items()]
+        out += [RecordPut(KIND["key"], kid, rec, expect_rev=rev) for kid, (rec, rev) in self.key_moves.items()]
         out += self.extra_puts
         out += [RecordPut(KIND["numbering"], nid, rec, expect_rev=self.numbering_revs[nid])
                 for nid, rec in self.numberings.items()]
@@ -214,7 +235,8 @@ class UnitService:
         return units, problems
 
     def units(self) -> list[dict]:
-        return self.scan()[0]
+        """Every readable unit but those merged into another: a merged one is history, and its identifiers are the other's."""
+        return [u for u in self.scan()[0] if u["status"] != MERGED]
 
     def events(self, unit_id: str) -> list[dict]:
         """A unit's history, oldest first. Refuses (``MalformedUnitRecord``) if it isn't complete and intact."""
@@ -271,15 +293,26 @@ class UnitService:
                     break
         return hits
 
-    def resolve(self, ref: str) -> dict:
-        """One unit for a reference a person typed, or ``NotFound``/``Ambiguous`` naming the candidates."""
+    def resolve(self, ref: str, follow: bool = False) -> dict:
+        """One unit for a reference a person typed, or ``NotFound``/``Ambiguous`` naming the candidates. With ``follow``, a
+        unit merged into another answers as that one (other programs naming an earlier id: docs/UNITS.md section 15)."""
         hits = self.find(ref)
         if not hits:
             raise NotFound(f"no unit {ref!r}")
         if len(hits) > 1:
             names = ", ".join(f"{unit_label(h['unit'])} ({h['unit']['id']})" for h in hits[:10])
             raise Ambiguous(f"{ref!r} names {len(hits)} units: {names}; use the unit id", [h["unit"] for h in hits])
-        return hits[0]["unit"]
+        unit = hits[0]["unit"]
+        for _ in range(MAX_DEPTH):
+            if not follow or unit["status"] != MERGED:
+                return unit
+            into = H.merged_into(self.events(unit["id"]))
+            if into is None:
+                raise MalformedUnitRecord(f"unit {unit['id']} is merged but its history doesn't say into what; run "
+                                          "'revisionworx unit verify'")
+            unit = self.unit(into["unit"])
+        raise MalformedUnitRecord(f"unit {ref!r} is merged into units merged into others {MAX_DEPTH} deep; run "
+                                  "'revisionworx unit verify'")
 
     def resolve_standard(self, ref: str) -> dict:
         ref = ref.strip()
@@ -996,10 +1029,12 @@ class UnitService:
         mirrors: dict[str, list[int]] = {}
 
         def build(tx: _Tx) -> None:
-            tx.unit(unit_id)
             history = self.events(unit_id)
-            already = H.voided_by(history)
             by_n = {e["n"]: e for e in history}
+            if all(by_n.get(n, {}).get("type") == "unit.merged" for n in targets):
+                tx.merged_ok.add(unit_id)                # undoing its merge is the one thing a merged unit takes
+            tx.unit(unit_id)
+            already = H.voided_by(history)
             for n in targets:
                 ev = by_n.get(n)
                 if ev is None:
@@ -1013,12 +1048,87 @@ class UnitService:
                     raise ValidationError(f"event {n} is already void")
                 if ev["type"].startswith("component."):
                     self._void_component(tx, unit_id, ev, history, set(targets) | already, mirrors)
+                elif ev["type"] in ("unit.merged", "unit.absorbed"):
+                    self._void_merge(tx, unit_id, ev, history, mirrors)
             for comp, ns in mirrors.items():
                 tx.emit(comp, "void", {"events": sorted(ns)})
             tx.emit(unit_id, "void", {"events": targets})
 
         self._run("unit.void", txid, {"unit": unit_id, "events": targets, "meta": meta}, [unit_id], build, meta)
         return self.unit(unit_id)
+
+    def _void_merge(self, tx: _Tx, unit_id: str, ev: dict, history: list[dict], mirrors: dict[str, list[int]]) -> None:
+        """Undo a merge: its other half is voided in the same entry, and the identifiers and their claims go back."""
+        if ev["type"] == "unit.merged":
+            dup, survivor = unit_id, ev["body"]["into"]
+        else:
+            dup, survivor = ev["body"]["unit"], unit_id
+        other = survivor if dup == unit_id else dup
+        tx.merged_ok.add(dup)
+        tx.unit(other)
+        theirs = self.events(other)
+        voids = H.voided_by(theirs) | set(mirrors.get(other, []))
+        want = "unit.absorbed" if other == survivor else "unit.merged"
+        pair = [e for e in theirs if e["type"] == want and e["n"] not in voids
+                and e["body"]["unit" if want == "unit.absorbed" else "into"] == (dup if other == survivor else survivor)]
+        if not pair:
+            raise ValidationError(f"{self.describe(other)} doesn't record this merge; run 'revisionworx unit verify'")
+        absorbed = pair[-1] if other == survivor else ev
+        later = [e for e in (theirs if other == survivor else history) if e["n"] > absorbed["n"]
+                 and e["type"].startswith(("identifier.", "unit.merged", "unit.absorbed"))]
+        if later:
+            raise ValidationError(f"{self.describe(survivor)} has recorded identifier changes or merges since (event "
+                                  f"{later[0]['n']}): undo those first, or record what is right instead")
+        mirrors.setdefault(other, []).append(pair[-1]["n"])
+        for i in absorbed["body"]["identifiers"]:
+            tx.move_claim(i["scheme"], i["issuer"], i["value"], survivor, dup)
+
+    # -------------------------------------------------------------------------------------------- merging
+    def merge(self, duplicate: str, into: str, reason: str, txid: str | None = None, **meta_args: Any) -> dict:
+        """Record that ``duplicate`` is the same physical unit as ``into`` (docs/UNITS.md section 15), in one entry: the
+        duplicate's identifiers, and their claims, go to ``into``; the duplicate becomes ``merged`` and takes no more
+        actions. Each keeps its own history. A reason is required. Refused if the duplicate has anything fitted, is fitted
+        in something, has engineering-change or deviation records, or if the two hold different serials or tags from the
+        same issuer: a person settles those first."""
+        meta_args["reason"] = reason
+        meta = self._meta(**meta_args)
+        if not meta["reason"]:
+            raise ValidationError("say why these are the same unit (a reason is required)")
+        if duplicate == into:
+            raise ValidationError("a unit can't be merged into itself")
+        from .deviation import all_devunits
+        from .effect import all_compliance
+
+        def build(tx: _Tx) -> None:
+            dup, keep = tx.unit(duplicate), tx.unit(into)
+            label, other = unit_label(dup), unit_label(keep)
+            if dup["components"]:
+                raise ValidationError(f"{label} has something fitted: take it out first, or record it on {other}")
+            if dup["parent"] is not None:
+                raise ValidationError(f"{label} is fitted in {self.describe(dup['parent']['unit'])}: take it out first")
+            if any(r["unit"] == duplicate for r in all_compliance(self)[0]):
+                raise ValidationError(f"{label} has engineering change records: settle them on it, or record them on {other}, "
+                                      "before merging")
+            if any(r["unit"] == duplicate for r in all_devunits(self)[0]):
+                raise ValidationError(f"{label} is covered by a deviation or concession: record it on {other} first")
+            for a in dup["identifiers"]:
+                for b in keep["identifiers"]:
+                    same_kind = a["scheme"] == b["scheme"] and norm(a["issuer"]) == norm(b["issuer"])
+                    if same_kind and norm(a["value"]) == norm(b["value"]):
+                        raise ValidationError(f"both units hold {a['scheme']} {a['value']}: remove it from one of them first")
+                    if same_kind and a["scheme"] in ("serial", "tag") and a["active"] and b["active"]:
+                        raise ValidationError(f"{label} has {a['scheme']} {a['value']} and {other} has {b['scheme']} "
+                                              f"{b['value']}{' from ' + a['issuer'] if a['issuer'] else ''}: retire the wrong "
+                                              "one first")
+            moved = [{"scheme": i["scheme"], "issuer": i["issuer"], "value": i["value"]} for i in dup["identifiers"]]
+            tx.emit(duplicate, "unit.merged", {"into": into, "identifiers": moved})
+            tx.emit(into, "unit.absorbed", {"unit": duplicate, "identifiers": [
+                {**m, "active": i["active"]} for m, i in zip(moved, dup["identifiers"])]})
+            for i in moved:
+                tx.move_claim(i["scheme"], i["issuer"], i["value"], duplicate, into)
+
+        self._run("unit.merge", txid, {"duplicate": duplicate, "into": into, "meta": meta}, [duplicate, into], build, meta)
+        return self.unit(into)
 
     def _void_component(self, tx: _Tx, unit_id: str, ev: dict, history: list[dict], ignore: set[int],
                         mirrors: dict[str, list[int]]) -> None:
