@@ -46,6 +46,10 @@ The first release. Everything below is new.
   the signature against the phone enrolled to the account, and refuses it, writing nothing, if it can't. Team › Accounts… ›
   Phones… (or `revisionworx user device list` and `revoke`) lists each person's phones and revokes a lost or stolen one;
   `unit verify` checks every signed acceptance again.
+- **Where used, for other programs.** `revisionworx link where-used` answers what `unit where-used` does: which units use a
+  revision or a document, or hold a part number, serial, lot or component, now or ever. Each answer has the unit's status,
+  customer, site and location, so a recall put together elsewhere (OpenMeridian tracing a lot, say) knows where every unit is.
+  It only reads.
 
 ### Working as a team
 - A workspace can be set up for a team working from one shared network folder, with no server. An administrator account is created on

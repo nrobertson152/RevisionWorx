@@ -249,3 +249,9 @@ def test_the_reference_client_records_on_units(plant):
     assert exc.value.kind == "changed"
     assert rwx.unit_note(unit["id"], "fresh", TX[17])["result"] == "recorded"
     assert [u["label"] for u in rwx.units(text="NH-26-000")] == ["NH-26-0001", "NH-26-0002"]
+    assert rwx.has("unit-where-used")
+    rows = rwx.where_used(part_number="pmp-10", serial="333")
+    assert [(r["unit"]["label"], r["position"], r["current"]) for r in rows] == [("NH-26-0002", "P1", True)]
+    with pytest.raises(rwx_client.RwxError) as exc:
+        rwx.where_used(lot="L-1")
+    assert exc.value.kind == "bad-input"

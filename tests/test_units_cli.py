@@ -185,6 +185,43 @@ def test_link_answers_for_other_programs(eng, capsys):
     assert code == 2 and missing == {"ok": False, "error": "no unit 'HPU-9999'", "kind": "not-found"}
 
 
+def test_link_where_used_says_which_units_and_where_each_one_is(eng, capsys):
+    """Feature unit-where-used: what `unit where-used` answers, as JSON, each row with the unit's summary, so a recall can
+    say where every unit is. Read-only."""
+    w = ["-w", str(eng)]
+    code, ver = link(capsys, *w, "link", "version")
+    assert "unit-where-used" in ver["features"]
+    for serial, customer, site in (("NH-26-0001", "Acme", "Milltown"), ("NH-26-0002", "Bayside Marine", "Port Ellis")):
+        assert run(capsys, *w, "unit", "new", "--serial", serial, "--model", "HPU-75", "--project", "J-2001",
+                   "--customer", customer, "--site", site, "--doc", "FRM-200@A", "--status", "in-service")[0] == 0
+    assert run(capsys, *w, "unit", "fit", "NH-26-0001", "H1", "--part-number", "HSE-08", "--lot", "DM-26-1104")[0] == 0
+    assert run(capsys, *w, "unit", "fit", "NH-26-0002", "H1", "--part-number", "HSE-08", "--lot", "DM-26-1104")[0] == 0
+    assert run(capsys, *w, "unit", "fit", "NH-26-0002", "H1", "--part-number", "HSE-08", "--lot", "DM-26-1121", "--replace",
+               "--disposition", "scrapped")[0] == 0
+    before = sorted(p.name for p in (eng / ".revisionworx").rglob("*"))
+
+    code, now = link(capsys, *w, "link", "where-used", "--part-number", "hse-08", "--lot", "dm-26-1104")
+    assert code == 0 and now["coverage"].startswith("every unit in this workspace's register")
+    assert [(r["unit"]["label"], r["unit"]["customer"], r["unit"]["site"], r["unit"]["status"], r["position"], r["lot"],
+             r["current"]) for r in now["rows"]] == [("NH-26-0001", "Acme", "Milltown", "in-service", "H1", "DM-26-1104", True)]
+    code, ever = link(capsys, *w, "link", "where-used", "--part-number", "HSE-08", "--lot", "DM-26-1104", "--history")
+    rows = sorted((r["unit"]["label"], r["current"], r.get("disposition", "")) for r in ever["rows"])
+    assert code == 0 and rows == [("NH-26-0001", True, ""), ("NH-26-0002", False, "scrapped")]
+    code, frm = link(capsys, *w, "link", "where-used", "--revision", "FRM-200@A")
+    assert code == 0 and sorted(r["unit"]["label"] for r in frm["rows"]) == ["NH-26-0001", "NH-26-0002"]
+    code, doc = link(capsys, *w, "link", "where-used", "--document", "FRM-200")
+    assert code == 0 and {r["revision"]["label"] for r in doc["rows"]} == {"A"}
+
+    for args, kind, words in ((["--lot", "DM-26-1104"], "bad-input", "give --part-number with --lot"),
+                              ([], "bad-input", "give one of"),
+                              (["--revision", "FRM-200@A", "--part-number", "HSE-08"], "bad-input", "give one of"),
+                              (["--revision", "FRM-200@A", "--history"], "bad-input", "--history is for what is fitted"),
+                              (["--component", "NOPE"], "not-found", "no unit")):
+        code, refused = link(capsys, *w, "link", "where-used", *args)
+        assert code == 2 and refused["ok"] is False and refused["kind"] == kind and words in refused["error"], args
+    assert sorted(p.name for p in (eng / ".revisionworx").rglob("*")) == before, "asking changes nothing"
+
+
 # ------------------------------------------------------------------------------------------------ team workspace
 def test_in_a_team_workspace_unit_entries_are_signed_in_the_persons_name(env, capsys, monkeypatch):
     folder = env / "ws"
