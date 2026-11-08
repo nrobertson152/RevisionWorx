@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-RWX_CLIENT_VERSION = 3
+RWX_CLIENT_VERSION = 4
 API_VERSION = 1
 _TIMEOUT = 120
 
@@ -199,7 +199,7 @@ class RevisionWorx:
         except RwxError:
             return False
 
-    # ------------------------------------------------------------------ units (features "units", "unit-records")
+    # ------------------------------------------------------------------ units (features "units", "unit-records", "unit-where-used")
     def units(self, project: Optional[str] = None, text: str = "", detail: bool = False) -> List[Dict[str, Any]]:
         args = ["units"] + (["--project", project] if project else []) + (["--text", text] if text else [])
         return self._run(*(args + (["--detail"] if detail else [])))["units"]
@@ -208,6 +208,16 @@ class RevisionWorx:
         """One unit by id, FieldWorx asset id, serial, tag or other code; ``at`` an event number or ``on`` a date."""
         args = ["unit", ref] + (["--at", str(at)] if at is not None else []) + (["--on", on] if on else [])
         return self._run(*args)["unit"]
+
+    def where_used(self, revision: str = "", document: str = "", part_number: str = "", serial: str = "", lot: str = "",
+                   component: str = "", history: bool = False) -> List[Dict[str, Any]]:
+        """Units that use a revision (DOC@REV) or a document, or hold what is fitted: a part number, serial, lot (with its
+        part number) or component, all given holding; ``history`` for wherever it has ever been (feature
+        "unit-where-used"). Each row's ``unit`` says where the unit is. Read-only."""
+        args = ["where-used"] + [f"--{k}={v}" for k, v in (("revision", revision), ("document", document),
+                                                           ("part-number", part_number), ("serial", serial), ("lot", lot),
+                                                           ("component", component)) if v]
+        return self._run(*(args + (["--history"] if history else [])))["rows"]
 
     # Recording on units: every call needs a ``txid`` (32 lowercase hex) that you keep and send again with every attempt at
     # the same action, so a retry after a lost answer writes nothing ("result": "already-recorded"). ``if_events``: act only

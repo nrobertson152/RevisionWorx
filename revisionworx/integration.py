@@ -181,7 +181,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 # ---------------------------------------------------------------------------------------------- commands
 FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations",        # additive commands since API 1:
-            "field-signatures"]                                                                   # ask before relying on one
+            "field-signatures", "unit-where-used"]                                                # ask before relying on one
 
 
 def version() -> dict:
@@ -474,6 +474,42 @@ def unit(ref: str, workspace: Path | None = None, at: int | None = None, on: str
             return {"workspace": _ws_summary(ws, loc), "unit": query.unit_detail(svc, u, at=at, on=on)}
         except UnitError as exc:
             raise _unit_error(exc) from None
+
+
+WHERE_USED_COVERAGE = "every unit in this workspace's register; units recorded nowhere else can't be searched"
+
+
+def where_used(workspace: Path | None = None, *, revision: str = "", document: str = "", part_number: str = "",
+               serial: str = "", lot: str = "", component: str = "", history: bool = False,
+               cfg_dir: Path | None = None) -> dict:
+    """Which units use a revision or a document, or hold a part number, serial, lot or component unit (feature
+    ``unit-where-used``), as ``revisionworx unit where-used`` answers. Read-only. Fitted things can be combined, and all
+    given must hold; a lot belongs to a part, so ``lot`` needs ``part_number``. With ``history``, wherever they have
+    ever been fitted, with the events that fitted and removed them. Every row carries the unit's summary (status,
+    customer, site, location), and ``coverage`` says what was searched."""
+    from .units import UnitError, query
+    fitted = bool(part_number or serial or lot or component)
+    if sum((bool(revision), bool(document), fitted)) != 1:
+        raise LinkError("give one of --revision, --document, or what is fitted (--part-number, --serial, --lot, "
+                        "--component)", "bad-input")
+    if lot and not part_number:
+        raise LinkError("a lot belongs to a part: give --part-number with --lot", "bad-input")
+    if history and not fitted:
+        raise LinkError("--history is for what is fitted: a unit's documents are answered as they are now", "bad-input")
+    loc = _one_workspace(workspace, cfg_dir)
+    with Workspace.open(loc) as ws:
+        svc = _unit_service(ws)
+        try:
+            if revision:
+                rows = query.units_using_revision(svc, svc.doc_rev(revision)[1])
+            elif document:
+                rows = query.units_using_document(svc, svc.document_id(document))
+            else:
+                rows = query.units_with_component(svc, number=part_number, serial=serial, lot=lot, history=history,
+                                                  component=svc.resolve(component)["id"] if component else "")
+        except UnitError as exc:
+            raise _unit_error(exc) from None
+        return {"workspace": _ws_summary(ws, loc), "rows": rows, "coverage": WHERE_USED_COVERAGE}
 
 
 # ------------------------------------------------------------------------- recording facts on units (feature "unit-records")
@@ -880,6 +916,11 @@ def main(argv: list[str], workspace: str | None = None) -> int:
     s.add_argument("--detail", action="store_true")
     s = sub.add_parser("unit"); s.add_argument("ref"); g = s.add_mutually_exclusive_group()
     g.add_argument("--at", type=int); g.add_argument("--on", default="")
+    s = sub.add_parser("where-used", help="units that use a revision or document, or hold a part, serial, lot or component")
+    s.add_argument("--revision", default="", metavar="DOC@REV"); s.add_argument("--document", default="")
+    s.add_argument("--part-number", default=""); s.add_argument("--serial", default="")
+    s.add_argument("--lot", default="", help="with --part-number"); s.add_argument("--component", default="", metavar="REF")
+    s.add_argument("--history", action="store_true", help="wherever it has ever been fitted, not only now")
     from .units.model import BASES, CLASSES, DISPOSITIONS, MILESTONES, STATUSES
 
     def recording(s, *, basis: str = "declared", effective: bool = True, change: bool = True, guard: bool = True) -> None:
@@ -954,6 +995,9 @@ def main(argv: list[str], workspace: str | None = None) -> int:
             out = list_units(ws, a.project, a.text, a.detail)
         elif a.cmd == "unit":
             out = unit(a.ref, ws, a.at, a.on)
+        elif a.cmd == "where-used":
+            out = where_used(ws, revision=a.revision, document=a.document, part_number=a.part_number, serial=a.serial,
+                             lot=a.lot, component=a.component, history=a.history)
         elif a.cmd.startswith("unit-"):
             out = _record_command(a, ws)
         elif a.cmd == "devices":
