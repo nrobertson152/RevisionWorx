@@ -62,6 +62,7 @@ allow newline and tab. Times are UTC ISO 8601 as the core writes them. Dates (`e
 | `documents` | unit differences: `{doc_id: {"revision": rev_… or "" (doesn't apply), "event", "basis"}}` |
 | `components` | `{position key: {"position", "part", "number", "unit", "serial", "lot", "since", "event", "basis"}}`; the key is the position casefolded |
 | `milestones` | `{"built" \| "shipped" \| "installed" \| "commissioned" \| "decommissioned": {"date", "event"}}` |
+| `lots` | only once the unit has factory lots (`lots.used`, section 4): `[{"number", "lot", "quantity", "units", "event", "since", "basis"}]`, in the order recorded. A unit without them has no `lots` field, so its record reads as it always did |
 | `notes` | ≤ 4000 |
 | `events` | `{"count", "head"}`: how many events, and the digest of the last |
 | `created`, `updated` | the recorded times of the first and last events |
@@ -133,9 +134,11 @@ superseded need an explicit choice (`allow_unreleased`), as an unreleased BOM do
 | `pack.withdrawn` | `pack` | none: that pack isn't to be relied on now; the reason is required |
 | `unit.merged` | `into` (the unit that stays), `identifiers: [{scheme, issuer, value}]` | the duplicate, in the entry of a merge (section 15): those identifiers leave it, `status` becomes `merged` |
 | `unit.absorbed` | `unit` (the duplicate), `identifiers: [{scheme, issuer, value, active}]` | the unit that stays, in the same entry: it takes them over, active or not as they were |
+| `lots.used` | `lots: [{number, lot, quantity}]` (1 to 1000: a part number and its lot, both required, and how much of the lot was used, as text or `""`), `units` (how many units were built with these lots, 1 or more) | `lots` gains them. The work that built the unit used them: a completion of a work order, recorded when it registers its units (section 8). With `units` more than 1 the unit holds some of them, not necessarily all, and nothing records a lot leaving the unit |
 
 **Voiding** corrects a record, it doesn't undo a physical change. It applies to `unit.updated`, `milestone`, `standard.set`,
-`document.*`, `note`, `verified`, `component.*` and `unit.merged`/`unit.absorbed` (which takes its other half with it: section 15). Voiding a component event also voids the matching `parent.set` on the component unit in the same
+`document.*`, `note`, `verified`, `component.*`, `lots.used` and `unit.merged`/`unit.absorbed` (which takes its other half with it:
+section 15). Voiding a component event also voids the matching `parent.set` on the component unit in the same
 entry, and is refused if a later event on either unit touches that position or that component (record the correction by hand then).
 Identifiers are corrected with `identifier.removed`; a status is corrected by setting it again. A void can't be voided. A pack
 that was issued stays issued: `pack.*` events are never voided, and a pack is withdrawn instead.
@@ -249,7 +252,11 @@ They are reserved: nothing records them except `link` after checking, so typing 
 refused. Revoking the phone stops its signatures being accepted on anything new; `unit verify` still checks those accepted before.
 
 The Director decided (2026-11-07) that OpenMeridian may register the units its own work orders build, and nothing else; FieldWorx
-records only what someone in the office accepts. Proposals from phones are never applied by themselves.
+records only what someone in the office accepts. Proposals from phones are never applied by themselves. On 2026-11-08 the Director
+decided that OpenMeridian also records the lots each completion used: `link unit-register --lots` (feature `unit-lots`) registers the
+completion's units and their `lots.used` in one entry, under the completion's txid. `unit show`, `link unit` (`factory_lots`), the
+Units window, the handover pack and where-used (as *built from*, saying how many units were built with the lot) show them, and a
+FieldWorx package carries them in the unit's history (its line names the first ten and says how many more).
 
 ## 9. Failure modes
 
@@ -439,7 +446,7 @@ window's **Handover pack…**) writes it into a new folder:
 
 | File | What it is |
 |---|---|
-| `index.html` | The page to read and print: the pack's number, identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
+| `index.html` | The page to read and print: the pack's number, identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, the lots it was built from, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
 | `documents/<number> rev <label>.pdf` | The PDF of each revision that applies: the revision's own PDF (ADR-026), or the revision itself when it is a PDF. Never another revision's: one without a PDF is listed on the page as not included, with why |
 | `unit.json` | The record, as `revisionworx link unit` answers it but without computer names, with `format` `revisionworx-unit-pack`, `version` 2, the pack's number (`pack`), who made it (`made_by`, without the computer), the PDFs included or not, and `signed`: `false`, or the key that signs it (`key`, its fingerprint; `type`; `namespace`) |
 | `SHA256SUMS` | The SHA-256 of every other file, in the format `sha256sum -c SHA256SUMS` reads |

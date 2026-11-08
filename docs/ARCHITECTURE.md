@@ -930,8 +930,9 @@ deviations and concessions (`docs/UNITS.md` section 12: written once with the un
 signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: where-used for other programs
 (`link where-used`, done); journal checkpoints (ADR-022's revision of 2026-11-08 and ADR-029, done); handover packs
 (`docs/UNITS.md` section 13, done), recorded in the unit's history as issued (ADR-030, the Director's decision at gate 4, done);
-signing packs, optional and off by default (ADR-030, done); merged identities (`docs/UNITS.md` section 15, done); transfer
-between workspaces (not started).
+signing packs, optional and off by default (ADR-030, done); merged identities (`docs/UNITS.md` section 15, done); factory lots,
+recorded by OpenMeridian when it registers a completion's units (the Director's decision of 2026-11-08, `docs/UNITS.md` section 8,
+done); transfer between workspaces (not started).
 
 **Costs and limits.** Queries read every unit (no index yet): finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000
 (Linux, local disk, a handle after the first, 2026-11-08), most of it reading each unit's record file. An index of identifiers kept

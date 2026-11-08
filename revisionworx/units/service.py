@@ -22,7 +22,8 @@ from .model import (BASES, CLASSES, DISPOSITIONS, KEY_FINGERPRINT_RE, LIMITS, ME
                     STANDARD_SCHEME, STATUSES, UPDATABLE, VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord,
                     NotFound,
                     ReplayRefused, ValidationError, actor_record, check_choice, check_date, check_evidence, check_id,
-                    check_identifier, check_model, check_pattern, check_position, check_txid, clean, day_of, derived_id, digest,
+                    check_identifier, check_lots, check_model, check_pattern, check_position, check_txid, clean, day_of,
+                    derived_id, digest,
                     event_id, is_id, key_id, load_event, load_key, load_numbering, load_standard, load_unit, norm, numbering_id,
                     pattern_period, position_key, render_pattern, standard_digest, unit_label)
 
@@ -506,7 +507,7 @@ class UnitService:
     # ------------------------------------------------------------------------------------------- register
     def _spec(self, spec: dict, where: str) -> dict:
         allowed = {"identifiers", "class", "name", "model", "status", "project", "customer", "site", "location", "notes",
-                   "standard", "documents", "milestones", "serial_from"}
+                   "standard", "documents", "milestones", "serial_from", "lots"}
         unknown = set(spec) - allowed
         if unknown:
             raise ValidationError(f"{where}: unknown fields {sorted(unknown)}")
@@ -554,12 +555,16 @@ class UnitService:
                 "site": clean(spec.get("site", ""), "site", LIMITS["site"]),
                 "location": clean(spec.get("location", ""), "location", LIMITS["location"]),
                 "notes": clean(spec.get("notes", ""), "notes", LIMITS["notes"], multiline=True),
-                "standard": standard, "documents": docs, "milestones": milestones, "serial_from": serial_from}
+                "standard": standard, "documents": docs, "milestones": milestones, "serial_from": serial_from,
+                # only when given: a registration without lots asks for exactly what it asked for before, so its retry
+                # (the same txid) is still recognised
+                **({"lots": check_lots(spec["lots"])} if spec.get("lots") else {})}
 
     def register(self, txid: str | None = None, **spec: Any) -> dict:
         """Register one unit. ``spec``: identifiers ``[{scheme, value, issuer}]``, ``class``, name, model ``{part, number}``,
         status, project (id), customer, site, location, notes, standard (bst id), documents ``{doc id: rev id or ""}``,
-        milestones ``{name: date}``; plus effective, basis, evidence, reason, change."""
+        milestones ``{name: date}``, lots ``[{number, lot, quantity}]`` (the lots it was built from); plus effective, basis,
+        evidence, reason, change."""
         meta = {k: spec.pop(k) for k in ("effective", "basis", "evidence", "reason", "change") if k in spec}
         if "cls" in spec:                            # ``class`` can't be a Python keyword argument
             spec["class"] = spec.pop("cls")
@@ -573,9 +578,11 @@ class UnitService:
         meta = self._meta(effective, basis, evidence, reason, change)
         clean_specs = [self._spec(s, f"unit {i + 1}") for i, s in enumerate(specs)]
         ids = [derived_id("unt", txid, f"unit:{i}") if txid else new_id("unt") for i in range(len(specs))]
+        # units registered together with the same lots were built with them together (a completion of a work order)
+        shared = [sum(1 for t in clean_specs if t.get("lots") == s["lots"]) if s.get("lots") else 0 for s in clean_specs]
 
         def build(tx: _Tx) -> list[str]:
-            for uid, s in zip(ids, clean_specs):
+            for uid, s, together in zip(ids, clean_specs, shared):
                 tx.new_unit(uid)
                 body = {k: s[k] for k in ("class", "name", "model", "status", "project", "customer", "site", "location",
                                           "notes")}
@@ -596,6 +603,8 @@ class UnitService:
                 for name in MILESTONES:
                     if name in s["milestones"]:
                         tx.emit(uid, "milestone", {"milestone": name}, effective=s["milestones"][name])
+                if s.get("lots"):
+                    tx.emit(uid, "lots.used", {"lots": s["lots"], "units": together}, effective=as_built)
             return ids
 
         args = {"specs": clean_specs, "meta": meta}

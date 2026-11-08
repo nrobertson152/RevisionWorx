@@ -1212,6 +1212,13 @@ def unit_sections(d: dict) -> list[tuple[str, list[str]]]:
     if d["components"]:
         sections.append(("Fitted", [f"{c['position']}: {c['label'] or c['number'] or c['part']}"
                                     + "".join(f" {k} {c[k]}" for k in ("serial", "lot") if c[k]) for c in d["components"]]))
+    if d.get("factory_lots"):
+        shared = max(x["units"] for x in d["factory_lots"])
+        lines = [f"{x['number']} lot {x['lot']}" + (f" ({x['quantity']})" if x["quantity"] else "") for x in d["factory_lots"]]
+        if shared > 1:
+            lines.append(f"Shared by the {shared} units built together: this one holds some of these lots, not "
+                         "necessarily all.")
+        sections.append(("Built from these lots", lines))
     if d.get("history"):
         sections.append(("History", [f"{e['n']}. {e['time'][:10]} {e['summary']}" + (" (void)" if e["voided"] else "")
                                      for e in reversed(d["history"])]))

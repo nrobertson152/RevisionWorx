@@ -134,6 +134,10 @@ def _apply_change(s: dict, ev: dict) -> list[str]:
                 s["identifiers"].append({"scheme": moved["scheme"], "issuer": moved["issuer"], "value": moved["value"],
                                          "active": moved["active"], "since": n})
         return problems
+    elif t == "lots.used":                              # factory lots: the record has them only once there are some
+        s.setdefault("lots", []).extend(
+            {"number": x["number"], "lot": x["lot"], "quantity": x["quantity"], "units": b["units"], "event": n,
+             "since": ev["effective"], "basis": ev["basis"]} for x in b["lots"])
     elif t == "verified":                               # a reported change confirmed: its facts become verified
         named, hit = set(b["events"]), False
         for entry in list(s["documents"].values()) + list(s["components"].values()):
@@ -339,6 +343,13 @@ def summary(ev: dict, name: Callable[[str, str], str] = lambda kind, rid: rid) -
     if t == "unit.absorbed":
         moved = ", ".join(f"{i['scheme']} {i['value']}" for i in b["identifiers"]) or "no identifiers"
         return f"{name('unit', b['unit'])} merged into this unit (took over: {moved})"
+    if t == "lots.used":                                # one line: the first ten, then how many more (the record has all)
+        lots = "; ".join(f"{x['number']} lot {x['lot']}" + (f" ({x['quantity']})" if x["quantity"] else "")
+                         for x in b["lots"][:10])
+        more = len(b["lots"]) - 10
+        lots += f"; and {more} more lot{'s' if more > 1 else ''}" if more > 0 else ""
+        shared = f", shared by the {b['units']} units built together" if b["units"] > 1 else ""
+        return f"built from {lots}{shared}"
     return t  # pragma: no cover
 
 

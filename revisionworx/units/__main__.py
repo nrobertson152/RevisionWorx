@@ -336,6 +336,13 @@ def _print_unit(out, svc: UnitService, detail: dict) -> None:
             what = c["label"] or c["number"] or c["part"]
             extra = "".join(f" {k} {c[k]}" for k in ("serial", "lot") if c[k])
             out.write(f"    {c['position']:<10} {what}{extra}{'  since ' + c['since'] if c['since'] else ''}\n")
+    if detail.get("factory_lots"):
+        shared = max(x["units"] for x in detail["factory_lots"])
+        out.write("  built from these lots" + (f" (shared by the {shared} units built together: this unit holds some of "
+                                               "them, not necessarily all)" if shared > 1 else "") + ":\n")
+        for x in detail["factory_lots"]:
+            out.write(f"    {x['number']:<12} lot {x['lot']}{'  ' + x['quantity'] if x['quantity'] else ''}"
+                      f"{' [' + x['basis'] + ']' if x['basis'] != 'declared' else ''}\n")
     if "history" in detail:
         out.write("  history:\n")
         for e in detail["history"]:
@@ -780,7 +787,10 @@ def _where_used(a: argparse.Namespace, svc: UnitService, out) -> int:
     for r in rows:
         u = r["unit"]
         extra = ""
-        if "position" in r:
+        if r.get("built_from"):
+            n = r["built_from"]["units"]
+            extra = f" built from lot {r['lot']}" + (f" (with {n - 1} other unit{'s' if n > 2 else ''})" if n > 1 else "")
+        elif "position" in r:
             extra = f" at {r['position']}" + ("" if r.get("current") else f" (removed, event {r['removed']})")
         elif "revision" in r:
             extra = f" rev {r['revision']['label']}" if r.get("revision") else " (doesn't apply)"

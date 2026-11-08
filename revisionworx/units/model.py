@@ -30,9 +30,9 @@ UPDATABLE = ("class", "name", "model", "project", "customer", "site", "location"
 EVENT_TYPES = ("unit.registered", "unit.updated", "identifier.added", "identifier.retired", "identifier.removed",
                "status.changed", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
                "component.removed", "parent.set", "note", "verified", "void", "pack.issued", "pack.withdrawn", "unit.merged",
-               "unit.absorbed")
+               "unit.absorbed", "lots.used")
 VOIDABLE = ("unit.updated", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-            "component.removed", "note", "verified", "unit.merged", "unit.absorbed")
+            "component.removed", "note", "verified", "unit.merged", "unit.absorbed", "lots.used")
 # a pack that was issued stays issued: it is withdrawn, never voided
 
 # Engineering changes reaching units (docs/UNITS.md section 10)
@@ -65,7 +65,7 @@ LIMITS = {"name": 200, "model": 100, "customer": 200, "site": 200, "location": 2
           "issuer": 200, "position": 64, "serial": 100, "lot": 100, "reason": 2000, "text": 4000, "evidence": 50,
           "evidence_ref": 200, "evidence_label": 200, "standard_number": 64, "standard_title": 200,
           "standard_documents": 2000, "deviation_number": 64, "deviation_title": 200, "departure": 4000,
-          "deviation_documents": 200, "deviation_units": 10000}
+          "deviation_documents": 200, "deviation_units": 10000, "number": 100, "quantity": 50, "lots": 1000}
 
 ID_PATTERNS = {"unit": "unt", "event": "uev", "key": "uky", "standard": "bst", "project": "prj", "document": "doc",
                "revision": "rev", "part": "prt", "change": "eco", "fieldworx": "ast", "effectivity": "uef",
@@ -411,9 +411,13 @@ def _int(v: Any, what: str, minimum: int = 0) -> int:
     return v
 
 
+LOT_RECORD_FIELDS = {"number", "lot", "quantity", "units", "event", "since", "basis"}
+
+
 def load_unit(record: Any) -> dict:
-    """The unit record, refused unless it is exactly schema 1. Returns it without ``_rev``."""
-    r = _fields(record, UNIT_FIELDS, "unit")
+    """The unit record, refused unless it is exactly schema 1. Returns it without ``_rev``. ``lots`` is there only once the
+    unit has factory lots (``lots.used``), so a unit without them reads as it always did."""
+    r = _fields(record, UNIT_FIELDS | ({"lots"} if isinstance(record, dict) and "lots" in record else set()), "unit")
     what = f"unit {r.get('id')!r}"
     try:
         if not is_id("unit", r["id"]):
@@ -473,6 +477,17 @@ def load_unit(record: Any) -> dict:
                 raise MalformedUnitRecord(f"{what}: milestone {name} has the wrong fields")
             _str(m["date"], "milestone date")
             _int(m["event"], "milestone event", 1)
+        if "lots" in r:
+            if not isinstance(r["lots"], list) or not r["lots"]:
+                raise MalformedUnitRecord(f"{what}: lots, when there, lists the unit's factory lots")
+            for x in r["lots"]:
+                if not isinstance(x, dict) or set(x) != LOT_RECORD_FIELDS:
+                    raise MalformedUnitRecord(f"{what}: a factory lot has the wrong fields")
+                for k in ("number", "lot", "quantity", "since"):
+                    _str(x[k], f"{what} factory lot {k}")
+                _int(x["units"], f"{what} factory lot units", 1)
+                _int(x["event"], f"{what} factory lot event", 1)
+                check_choice(x["basis"], BASES, "basis")
         ev = r["events"]
         if not isinstance(ev, dict) or set(ev) != {"count", "head"}:
             raise MalformedUnitRecord(f"{what}: events must be {{count, head}}")
@@ -505,7 +520,30 @@ BODY_KEYS = {
     "pack.withdrawn": {"pack"},
     "unit.merged": {"into", "identifiers"},
     "unit.absorbed": {"unit", "identifiers"},
+    "lots.used": {"lots", "units"},
 }
+LOT_FIELDS = {"number", "lot", "quantity"}
+
+
+def check_lots(lots: Any) -> list[dict]:
+    """The lots the work that built a unit used (``lots.used``, docs/UNITS.md section 4): 1 to 1000 of ``{number, lot,
+    quantity}``. ``number`` is the part number and ``lot`` the lot, both required; ``quantity`` is how much of the lot that
+    work used, as the program that recorded it writes it (``"8"``, ``"2.5 kg"``), or ``""``. A lot of a part is given once."""
+    if not isinstance(lots, list) or not 1 <= len(lots) <= LIMITS["lots"]:
+        raise ValidationError(f"give from 1 to {LIMITS['lots']} lots")
+    out, seen = [], set()
+    for x in lots:
+        if not isinstance(x, dict) or set(x) - LOT_FIELDS or not {"number", "lot"} <= set(x):
+            raise ValidationError("a lot is {number, lot, quantity}")
+        number = clean(x["number"], "a lot's part number", LIMITS["number"], required=True)
+        lot = clean(x["lot"], f"the lot of {number}", LIMITS["lot"], required=True)
+        quantity = clean(x.get("quantity", ""), f"the quantity of lot {lot}", LIMITS["quantity"])
+        key = (norm(number), norm(lot))
+        if key in seen:
+            raise ValidationError(f"lot {lot} of {number} is given twice")
+        seen.add(key)
+        out.append({"number": number, "lot": lot, "quantity": quantity})
+    return out
 
 
 def _check_body(t: str, b: dict, what: str) -> None:
@@ -533,6 +571,13 @@ def _check_body(t: str, b: dict, what: str) -> None:
                 isinstance(i, dict) and set(i) == fields and all(isinstance(i[k], str) for k in ("scheme", "issuer", "value"))
                 and isinstance(i.get("active", True), bool) for i in b["identifiers"]):
             raise MalformedUnitRecord(f"{what}: a {t} event has the wrong shape")
+    elif t == "lots.used":
+        try:
+            ok = check_lots(b["lots"]) == b["lots"]
+        except ValidationError:
+            ok = False
+        if not ok or isinstance(b["units"], bool) or not isinstance(b["units"], int) or b["units"] < 1:
+            raise MalformedUnitRecord(f"{what}: a lots.used event names its lots and how many units were built with them")
     elif t in ("pack.issued", "pack.withdrawn"):
         if isinstance(b["pack"], bool) or not isinstance(b["pack"], int) or b["pack"] < 1:
             raise MalformedUnitRecord(f"{what}: a {t} event names a handover pack by its number")
@@ -542,7 +587,7 @@ def _check_body(t: str, b: dict, what: str) -> None:
                                        and (not b["key"] or KEY_FINGERPRINT_RE.match(b["key"]))):
             raise MalformedUnitRecord(f"{what}: a pack.issued event has the wrong shape")
     for k, v in b.items():
-        if k not in ("identifiers", "model", "fields", "cleared", "events", "pack") and not isinstance(v, str):
+        if k not in ("identifiers", "model", "fields", "cleared", "events", "pack", "lots", "units") and not isinstance(v, str):
             raise MalformedUnitRecord(f"{what}: {k} must be text")
 
 

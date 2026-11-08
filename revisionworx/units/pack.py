@@ -554,6 +554,17 @@ def render(record: dict) -> str:
                        f'<td>{e(c.get("serial") or "")}</td><td>{e(c.get("lot") or "")}</td>'
                        f'<td>{e(c.get("since") or "")}</td></tr>')
         out.append("</table>")
+    if u.get("factory_lots"):
+        shared = max(x["units"] for x in u["factory_lots"])
+        out.append("<h2>Built from these lots</h2>")
+        if shared > 1:
+            out.append(f'<p class="muted">Shared by the {shared} units built together: this unit holds some of these lots, '
+                       "not necessarily all.</p>")
+        out.append("<table><tr><th>Part</th><th>Lot</th><th>Quantity used</th><th>Basis</th></tr>")
+        for x in u["factory_lots"]:
+            out.append(f'<tr><td>{e(x["number"])}</td><td>{e(x["lot"])}</td><td>{e(x["quantity"])}</td>'
+                       f'<td>{e(x["basis"])}</td></tr>')
+        out.append("</table>")
     if u.get("deviations"):
         out.append("<h2>Approved departures from the documents</h2><table><tr><th>Number</th><th>Kind</th><th>What</th>"
                    "<th>Where it stands</th></tr>")

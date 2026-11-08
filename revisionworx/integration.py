@@ -17,6 +17,7 @@ nearest folder above it holding ``.revisionworx``, else the workspaces recently 
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -181,7 +182,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 # ---------------------------------------------------------------------------------------------- commands
 FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations",        # additive commands since API 1:
-            "field-signatures", "unit-where-used", "unit-merges"]                                 # ask before relying on one
+            "field-signatures", "unit-where-used", "unit-merges", "unit-lots"]                    # ask before relying on one
 
 
 def version() -> dict:
@@ -624,11 +625,15 @@ def unit_register(*, txid: str, serials: Iterable[str] = (), issuer: str = "", s
                   tag: str = "", tag_issuer: str = "", other: str = "", name: str = "", model: str = "", cls: str = "product",
                   status: str = "planned", project: str = "", customer: str = "", site: str = "", location: str = "",
                   standard: str = "", docs: Iterable[str] = (), milestones: dict[str, str] | None = None, notes: str = "",
-                  effective: str = "", basis: str = "declared", evidence: Iterable[str] = (), reason: str = "",
-                  change: str = "", field_signature: str = "", workspace: Path | None = None, cfg_dir: Path | None = None,
-                  cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
+                  lots: list[dict] | None = None, effective: str = "", basis: str = "declared", evidence: Iterable[str] = (),
+                  reason: str = "", change: str = "", field_signature: str = "", workspace: Path | None = None,
+                  cfg_dir: Path | None = None, cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
     """Register units, all of them or none, in one entry. One unit per serial given; or ``count`` units each issued the next
-    serial of ``serial_from``; or one unit known by a tag or other code. The ids come from the txid, so a retry finds them."""
+    serial of ``serial_from``; or one unit known by a tag or other code. The ids come from the txid, so a retry finds them.
+
+    ``lots`` (feature ``unit-lots``) are the lots the work that built them used, ``[{number, lot, quantity}]``: each unit
+    records them (``lots.used``) in the same entry, with how many units were built with them, so with several the record
+    says each holds some of them."""
     serials = [s for s in serials]
     if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_UNITS_PER_CALL:
         raise LinkError(f"--count is a whole number from 1 to {MAX_UNITS_PER_CALL}", "bad-input")
@@ -654,7 +659,8 @@ def unit_register(*, txid: str, serials: Iterable[str] = (), issuer: str = "", s
         base = {"class": cls, "name": name, "model": {"part": "", "number": model}, "status": status,
                 "project": svc.project_id(project) if project else "", "customer": customer, "site": site,
                 "location": location, "notes": notes, "standard": svc.resolve_standard(standard)["id"] if standard else "",
-                "documents": documents_, "milestones": dict(milestones or {}), "serial_from": serial_from}
+                "documents": documents_, "milestones": dict(milestones or {}), "serial_from": serial_from,
+                **({"lots": list(lots)} if lots else {})}
         specs = []
         for i in range(n):
             idents = []
@@ -873,6 +879,26 @@ def _one_workspace(workspace: Path | None, cfg_dir: Path | None, near: Path | No
 
 
 # ------------------------------------------------------------------------------------------ command line
+def _lots_arg(text: str, file: str) -> list[dict] | None:
+    """``--lots JSON`` or ``--lots-file FILE``: a list of ``{number, lot, quantity}``, checked when the units are registered."""
+    if text and file:
+        raise LinkError("give --lots or --lots-file, not both", "bad-input")
+    if file:
+        try:
+            text = Path(file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise LinkError(f"--lots-file can't be read: {exc}", "bad-input") from None
+    if not text:
+        return None
+    try:
+        lots = json.loads(text)
+    except (ValueError, RecursionError):
+        raise LinkError('--lots is JSON: [{"number": "P-100", "lot": "L-7", "quantity": "8"}]', "bad-input") from None
+    if not isinstance(lots, list) or not lots:
+        raise LinkError("--lots lists at least one lot", "bad-input")
+    return lots
+
+
 def _record_command(a, ws: Path | None) -> dict:
     common = {"txid": a.txid, "basis": a.basis, "evidence": a.evidence, "reason": a.reason,
               "field_signature": a.field_signature, "workspace": ws}
@@ -885,7 +911,8 @@ def _record_command(a, ws: Path | None) -> dict:
         return unit_register(serials=a.serial, issuer=a.issuer, serial_from=a.serial_from, count=a.count, tag=a.tag,
                              tag_issuer=a.tag_issuer, other=a.other, name=a.name, model=a.model, cls=a.cls, status=a.status,
                              project=a.project, customer=a.customer, site=a.site, location=a.location, standard=a.standard,
-                             docs=a.doc, milestones=milestones, notes=a.notes, effective=a.effective, **common)
+                             docs=a.doc, milestones=milestones, notes=a.notes, lots=_lots_arg(a.lots, a.lots_file),
+                             effective=a.effective, **common)
     if a.cmd == "unit-fit":
         return unit_fit(a.ref, a.position, component=a.component, part_number=a.part_number, serial=a.serial, lot=a.lot,
                         replace=a.replace, disposition=a.disposition, effective=a.effective, **guard, **common)
@@ -956,7 +983,10 @@ def main(argv: list[str], workspace: str | None = None) -> int:
     s.add_argument("--standard", default=""); s.add_argument("--doc", action="append", default=[], metavar="DOC@REV")
     for m in MILESTONES:
         s.add_argument(f"--{m}", default=None, metavar="DATE")
-    s.add_argument("--notes", default=""); recording(s, guard=False)
+    s.add_argument("--notes", default="")
+    s.add_argument("--lots", default="", metavar="JSON", help='the lots they were built from: [{"number", "lot", "quantity"}]')
+    s.add_argument("--lots-file", default="", metavar="FILE", help="the same, from a file (no command-line length limit)")
+    recording(s, guard=False)
     s = sub.add_parser("unit-fit"); s.add_argument("ref"); s.add_argument("position")
     s.add_argument("--component", default=""); s.add_argument("--part-number", default="")
     s.add_argument("--serial", default=""); s.add_argument("--lot", default=""); s.add_argument("--replace", action="store_true")

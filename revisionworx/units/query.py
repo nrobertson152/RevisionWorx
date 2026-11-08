@@ -184,6 +184,7 @@ def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int |
     out["merged_from"] = [{**m, "label": names("unit", m["unit"])} for m in merged]
     out["aliases"] = sorted({i["value"] for i in shown["identifiers"] if i["scheme"] == "fieldworx"}
                             | {m["unit"] for m in merged})                # earlier ids field records may name
+    out["factory_lots"] = [dict(x) for x in shown.get("lots", [])]   # the lots the work that built it used
     if docs["standard_problem"]:
         out["problems"] = [docs["standard_problem"]]
     if at or on:
@@ -273,7 +274,16 @@ def units_with_component(svc: UnitService, *, number: str = "", part: str = "", 
             ((number, b["number"]), (part, b["part"]), (serial, b["serial"]), (lot, b["lot"])))
 
     out = []
+    lot_wanted = not (part or serial or component)          # a factory lot is only a part number and a lot
     for u in (svc.scan()[0] if history else svc.units()):   # history: a unit merged into another was fitted where it was
+        if lot_wanted:
+            # The lots the work that built it used: nothing records one leaving the unit, so it is always listed, as built
+            # from rather than fitted at a position, saying how many units were built with it.
+            for x in u.get("lots", []):
+                if matches({"number": x["number"], "part": "", "serial": "", "lot": x["lot"], "unit": ""}):
+                    out.append({"unit": unit_summary(u), "position": "", "fitted": x["event"], "fitted_on": x["since"],
+                                "removed": None, "current": True, "serial": "", "lot": x["lot"],
+                                "built_from": {"units": x["units"], "quantity": x["quantity"]}})
         if not history:
             for c in u["components"].values():
                 if matches(c):
