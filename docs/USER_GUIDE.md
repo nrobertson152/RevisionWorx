@@ -211,6 +211,13 @@ drawings, record the approval once:
   overdue` lists units with a temporary one past its end date (and exits 1 if there is one). One more unit:
   `unit deviation add DEV-0001 NH-26-0009 --reason ...`. `unit show` and the Units window list a unit's deviations.
 
+**Handover packs.** When a machine goes to its customer, `revisionworx unit pack NH-26-0001 "NH-26-0001 handover pack"` (or
+**Handover pack…** in the Units window) saves its record as a folder anyone can open: a page to read and print, the PDF of each
+revision that applies to it, its record as `unit.json`, and `SHA256SUMS`. `--on 2026-11-01` makes it as the unit was known on
+that date. Whoever receives it can check nothing is missing or changed with `sha256sum -c SHA256SUMS`, or
+`revisionworx unit check-pack FOLDER`. A revision with no PDF attached is listed as not included, never replaced by another
+revision's. Packs aren't signed yet: they show that they are whole, not who made them.
+
 ## Troubleshooting
 
 | You see | What it means | What to do |

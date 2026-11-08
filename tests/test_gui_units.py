@@ -136,3 +136,49 @@ def test_the_window_finds_filters_and_closes_with_its_workspace(plant):
     w.close_ws()
     assert w.units_window is None and not win.isVisible()
     w.close()
+
+
+def test_the_controller_makes_a_handover_pack_and_changes_nothing(plant, tmp_path):
+    from revisionworx.units import pack
+    unit_id = plant.units_page("NH-26-0001")[0]["id"]
+    with Workspace.open(plant.location) as ws:
+        head = ws.head_seq()
+    made = plant.unit_pack(unit_id, tmp_path / "out" / "NH-26-0001 handover pack")
+    assert made["unit"] == "NH-26-0001" and made["pdfs"] == 0                     # no PDFs attached to FRM-200 here
+    assert [(m["document"], m["revision"]) for m in made["missing"]] == [("FRM-200", "B")]
+    assert pack.check(tmp_path / "out" / "NH-26-0001 handover pack")["ok"]
+    with Workspace.open(plant.location) as ws:
+        assert ws.head_seq() == head
+
+
+@pytest.mark.qt
+def test_the_window_makes_a_handover_pack_in_a_new_folder(plant, tmp_path, monkeypatch):
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from revisionworx.gui.qt import units as units_window
+    from revisionworx.gui.qt.mainwindow import MainWindow
+    w = MainWindow(plant)
+    w.open_location(plant.location, quiet=True)
+    win = w.show_units()
+    packs = tmp_path / "packs"
+    packs.mkdir()
+    asked = []
+    monkeypatch.setattr(units_window.QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: (asked.append(a[1] if len(a) > 1 else ""), str(packs))[1]))
+    assert win.select_unit("NH-26-0002") and win.pack_button.isEnabled()
+    win.pack_button.click()
+    assert asked == ["Where should the handover pack of NH-26-0002 go?"]
+    assert (packs / "NH-26-0002 handover pack" / "SHA256SUMS").is_file()
+    assert win.status.text().startswith(f"Handover pack of NH-26-0002 saved in {packs / 'NH-26-0002 handover pack'}")
+    assert "Not included, with the reason on its first page: FRM-200 rev A." in win.status.text()
+    assert "It isn't signed" in win.status.text()
+    win.pack_button.click()                                       # the folder is taken: the next one is used, never that one
+    assert (packs / "NH-26-0002 handover pack (2)" / "SHA256SUMS").is_file()
+    monkeypatch.setattr(units_window.QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
+    win.pack_button.click()                                       # cancelled: nothing made
+    assert sorted(p.name for p in packs.iterdir()) == ["NH-26-0002 handover pack", "NH-26-0002 handover pack (2)"]
+    win.search.setText("nothing like this")
+    win.refresh()
+    assert not win.pack_button.isEnabled()
+    w.close_ws()
+    w.close()
