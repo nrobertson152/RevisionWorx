@@ -909,8 +909,8 @@ def _delegate(argv: list[str]) -> int | None:
         from .units.__main__ import main as unit_main
         if rest and rest[0] in ("-h", "--help"):
             return unit_main(["--help"], prog="revisionworx [-w WORKSPACE] unit")
-        if rest and rest[0] == "check-pack":         # checking a handover pack needs no workspace
-            return unit_main(["-", *rest], prog="revisionworx unit")
+        if rest and rest[0] == "check-pack":         # needs no workspace; given one with -w, its register is checked too
+            return unit_main([workspace or "-", *rest], prog="revisionworx unit")
         workspace = workspace or os.environ.get("REVISIONWORX_WORKSPACE")
         if not workspace:
             print("error: no workspace: use -w FOLDER or set REVISIONWORX_WORKSPACE", file=sys.stderr)

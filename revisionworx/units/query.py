@@ -372,6 +372,8 @@ def verify(svc: UnitService) -> list[dict]:
             if issues or computed != u:
                 problem("record-mismatch", uid, f"{label}: the record isn't what its history says"
                         + (f" ({'; '.join(issues)})" if issues else ""))
+            for issue in H.pack_problems(events):
+                problem("pack-register", uid, f"{label}: {issue}")
             for ev in events:
                 wrong = devices.recheck(accounts, ev, checked)
                 if wrong:
