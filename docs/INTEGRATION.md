@@ -11,8 +11,8 @@ kind)` with a message written for your user.
 
 **Version:** `API_VERSION = 1` (`revisionworx link version`). It increments only on incompatible changes. New
 fields may be added to answers at any time, so ignore fields you do not know. Commands added since API 1 are named in
-`version`'s `features` (today `["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations"]`): check for one
-before using it.
+`version`'s `features` (today `["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations",
+"field-signatures"]`): check for one before using it.
 
 ## Safety
 
@@ -46,6 +46,8 @@ folder above it that holds `.revisionworx`, then the workspaces recently opened 
 | `units [--project P] [--text T] [--detail]` | the unit register (feature `units`): summaries, or with `--detail` each `unit` object below | `units: [summary \| unit]` |
 | `unit REF [--at N \| --on DATE]` | one unit, now, after its event N, or as known now on a date | `unit` |
 | `unit-register`, `unit-fit`, `unit-remove`, `unit-note`, `unit-milestone`, `unit-change-install` | record a fact on units (feature `unit-records`, below) | `result`, `unit` and `events`, or `units` |
+| `devices` | phones enrolled to accounts (feature `field-signatures`, below) | `team`, `devices: [device]` |
+| `device-enrol --account A --device D --key K --fingerprint F [--name N]` | enrol a phone to an account (below) | `result`, `device` |
 
 `REF` is a document id or document number. `P` is a project id, number or name.
 
@@ -96,6 +98,8 @@ drawings where one in effect allows it is not a mistake in the record. A summary
 - Recording on units adds `duplicate` (a serial or tag another unit holds; the message names it), `changed` (the unit changed
   since you read it: `--if-events`), `txid-used` (that txid was used for something else) and `conflict` (someone changed a
   record at the same moment; nothing was written, try again with the same txid).
+- `--field-signature` adds `signature`: the signature can't be trusted (below); nothing was written. `device-enrol` answers
+  `refused` when the phone can't be enrolled that way.
 - The client adds `unavailable` (RevisionWorx not installed).
 
 ## Recording on units (feature `unit-records`)
@@ -128,10 +132,41 @@ Every one also takes:
 - **`--if-events N`** (not `unit-register`): act only if the unit still has N events, its `events.count` when your program or its
   user decided. If anything was recorded on it since, the answer is `changed` and nothing is written: look again. It is compared
   when the action reads the unit, at the revision its entry insists on. A retry of an attempt already recorded isn't checked.
+- **`--field-signature DEVICE:EVENT:SIG`** (feature `field-signatures`): the field record was signed on a phone enrolled to an
+  account (below). Give it with `--basis verified` and `--evidence fieldworx-event:EVENT` for the same record.
 
 **Answer:** `result` (`recorded` or `already-recorded`), `unit` (as `unit` answers it, after the action) and `events` (the numbers
 of the events this attempt wrote on it); `unit-register` answers `units` instead. `warning` when it was saved but finishing was
 delayed (the workspace completes it when next opened for writing): it is recorded, so don't record it again.
+
+## Phones enrolled to accounts (feature `field-signatures`)
+
+In a team workspace, a FieldWorx phone signs each record it makes with its own Ed25519 key (FieldWorx's PROTOCOL.md section 12),
+and an administrator enrols the phone to the person's account (ADR-028). A record signed on an enrolled phone can then be accepted as
+**verified** in that person's name.
+
+**`device-enrol --account A --device D --key K --fingerprint F [--name N]`**, in the name of the administrator logged in on this
+computer. `D` is the phone's device id (`dev_` and 32 hex digits), `K` its public key (64 hex digits), both from the phone's own
+files; `F` is the fingerprint the person enrolling typed **from the phone's screen**, and must be `K`'s: the first 8 bytes of
+`SHA-256("fieldworx/key-fingerprint/v1\0" + K's 32 bytes)` as 16 uppercase hex digits in four groups joined by `-`. Answer:
+`result` (`enrolled`, or `already-enrolled` for the same phone and account again, which writes nothing) and `device`. `refused`
+for a fingerprint that isn't the key's, a device or key enrolled before (revoked ones included: a phone that changes hands starts
+again as a new device), or a disabled account; `not-found` for no such account.
+
+**`devices`** lists every phone, revoked ones included: `{device, account, account_name, name, fingerprint, key, added, added_by,
+revoked, revoked_by, reason, active, problem}`. `active` is whether its signatures count now; `problem` says why not, if it isn't
+revoked (`enrolled to more than one account, so it counts for neither`, `the account is disabled`). An administrator revokes a phone
+with `revisionworx user device revoke NAME DEVICE --reason R`.
+
+**`--field-signature DEVICE:EVENT:SIG`** on a recording command: `EVENT` is the field record's id (64 hex digits) and `SIG` the
+Ed25519 signature (128 hex digits) of the bytes `"fieldworx/event-signature/v1\0"` followed by `EVENT` as ASCII. RevisionWorx
+checks that DEVICE is enrolled to exactly one account, isn't revoked, its account is active, and SIG holds with the key enrolled for
+it; and that the command has `--basis verified` and cites the same record as `--evidence fieldworx-event:EVENT` (`bad-input`
+otherwise). Then it records the fact with two more evidence items, `field-signature` (`DEVICE:EVENT`, labelled with SIG) and
+`field-signer` (the account, labelled with the phone's name), in the name of the person logged in here, as always. Anything else is
+`signature`, with nothing written: accept the record as `reported` instead if a person decides to. A retry of an acceptance
+already recorded answers `already-recorded`, even if the phone has been revoked since. Those two evidence kinds can't be given with
+`--evidence`.
 
 ## Example
 

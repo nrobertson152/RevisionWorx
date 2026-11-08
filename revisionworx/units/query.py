@@ -351,6 +351,10 @@ def verify(svc: UnitService) -> list[dict]:
     events_of: dict[str, set] = {}
     for eid, rec in ws.list(KIND["event"]).items():
         events_of.setdefault(str(rec.get("unit", "")), set()).add(eid)
+    from .. import devices
+    accounts = devices.accounts_of(ws)
+    checked: dict = {}                               # a signature on several events of one action is checked once
+    signed: dict[str, set] = {}                      # signed field record -> the txids of the actions that cite it
 
     for uid, u in units.items():
         label = unit_label(u)
@@ -367,6 +371,13 @@ def verify(svc: UnitService) -> list[dict]:
             if issues or computed != u:
                 problem("record-mismatch", uid, f"{label}: the record isn't what its history says"
                         + (f" ({'; '.join(issues)})" if issues else ""))
+            for ev in events:
+                wrong = devices.recheck(accounts, ev, checked)
+                if wrong:
+                    problem("signature-invalid", uid, f"{label}: event {ev['n']}: {wrong}")
+                for x in ev["evidence"]:
+                    if isinstance(x, dict) and x.get("kind") == devices.SIGNATURE_EVIDENCE:
+                        signed.setdefault(str(x.get("ref", "")), set()).add(ev["txid"])
         for ident in u["identifiers"]:
             kid = key_id(ident["scheme"], ident["issuer"], ident["value"])
             held = ident["active"] or ident["scheme"] in PERMANENT_SCHEMES
@@ -418,6 +429,10 @@ def verify(svc: UnitService) -> list[dict]:
     for uid in sorted(set(events_of) - set(units)):
         if uid:
             problem("unrecorded-event", uid, f"events for unit {uid}, which has no record")
+    for ref, txids in signed.items():
+        if len(txids) > 1:
+            problem("signature-reused", ref.partition(":")[2] or ref, f"signed field record {ref} is cited by {len(txids)} "
+                    "different actions: a field record is accepted once")
     _verify_changes(ws, units, standards, problem)
     _verify_deviations(ws, units, problem)
     for nid, rec in ws.list(KIND["numbering"]).items():

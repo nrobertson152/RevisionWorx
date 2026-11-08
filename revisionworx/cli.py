@@ -389,6 +389,35 @@ def cmd_user_role(args):
     _emit(args, row, f"{row['id']} is now {row['role']}.")
 
 
+def _device_line(r: dict) -> str:
+    state = (f"REVOKED {r['revoked'][:10]} by {r['revoked_by']}: {r['reason']}" if r["revoked"] else
+             f"NOT COUNTED: {r['problem']}" if r["problem"] else f"enrolled {r['added'][:10]} by {r['added_by']}")
+    return f"{r['device']}  {r['account']:<16} {r['fingerprint']}  {r['name'] or '(no name)'}  {state}"
+
+
+def cmd_user_device_list(args):
+    from . import devices
+    from .accounts import normal_id
+    with _team_handle(args, False) as ws:
+        rows = devices.listing(ws)
+    if args.name:
+        rows = [r for r in rows if r["account"] == normal_id(args.name)]
+    _emit(args, rows, "\n".join(_device_line(r) for r in rows) or "No phones are enrolled" + (f" to {args.name}." if args.name else "."))
+
+
+def cmd_user_device_revoke(args):
+    from . import devices
+    with _team_handle(args, True) as ws:
+        out = devices.revoke(ws, args.name, args.device, args.reason)
+    r = out["device"]
+    if out["result"] == "already-revoked":
+        text = f"Phone {r['device']} was already revoked from {r['account']} ({r['revoked'][:10]}, {r['reason']})."
+    else:
+        text = (f"Revoked phone {r['device']} ({r['name'] or 'no name'}) from {r['account']}. Its signatures are refused from "
+                "now on; what was accepted before stands, and 'revisionworx unit verify' still checks it.")
+    _emit(args, out, text)
+
+
 def cmd_share_check(args):
     from . import sharecheck
     report = sharecheck.check_folder(Path(args.folder))
@@ -822,6 +851,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = us.add_parser("enable"); s.add_argument("name"); s.set_defaults(fn=cmd_user_enable)
     s = us.add_parser("reset", help="give someone a new starting password"); s.add_argument("name"); password_option(s); s.set_defaults(fn=cmd_user_reset)
     s = us.add_parser("role"); s.add_argument("name"); s.add_argument("role", choices=("user", "admin")); s.set_defaults(fn=cmd_user_role)
+    dv = us.add_parser("device", help="phones enrolled to accounts: their field records can be accepted as verified "
+                       "(enrol one with 'fieldworx-bridge enrol')").add_subparsers(dest="device_cmd", required=True)
+    s = dv.add_parser("list", help="phones enrolled, revoked ones too"); s.add_argument("name", nargs="?", default="")
+    s.set_defaults(fn=cmd_user_device_list)
+    s = dv.add_parser("revoke", help="refuse a phone's signatures from now on (lost, stolen, or handed on)")
+    s.add_argument("name"); s.add_argument("device"); s.add_argument("--reason", required=True)
+    s.set_defaults(fn=cmd_user_device_revoke)
 
     sh = sub.add_parser("share", help="find out whether a network folder is fit for team use").add_subparsers(dest="sub", required=True)
     s = sh.add_parser("check", help="try the file operations a team workspace needs, from this computer"); s.add_argument("folder"); s.set_defaults(fn=cmd_share_check)

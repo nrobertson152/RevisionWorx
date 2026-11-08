@@ -180,7 +180,8 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------------------------- commands
-FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations"]       # additive commands since API 1: ask before relying on one
+FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations",        # additive commands since API 1:
+            "field-signatures"]                                                                   # ask before relying on one
 
 
 def version() -> dict:
@@ -542,11 +543,41 @@ def _answer_units(loc: Path, txid: str, ids: list[str], one: bool) -> dict:
     return out
 
 
-def _meta_args(svc, effective: str, basis: str, evidence: Iterable[str], reason: str, change: str) -> dict:
+def _evidence(svc, evidence: Iterable[str], basis: str, field_signature: str, txid: str) -> list[dict]:
+    """The evidence as given, and with ``field_signature`` (feature ``field-signatures``, ADR-028) the signed field record's,
+    once RevisionWorx has checked it: the phone that signed it is enrolled to exactly one active account and isn't revoked,
+    and the signature holds over the record with the key enrolled for it. Refused (``signature``) otherwise; a retry of an
+    acceptance already recorded is answered even if the phone has been revoked since."""
+    from . import devices
+    from .units.model import SIGNED_EVIDENCE, check_evidence, parse_evidence
+    items = parse_evidence(evidence)
+    if any(e["kind"] in SIGNED_EVIDENCE for e in items):
+        raise LinkError(f"{' and '.join(SIGNED_EVIDENCE)} evidence can't be given with --evidence: --field-signature adds it, "
+                        "once the signature is checked", "bad-input")
+    if not field_signature:
+        return items
+    if basis != "verified":
+        raise LinkError("a field record signed on an enrolled phone is accepted as verified: give --basis verified with "
+                        "--field-signature", "bad-input")
+    try:
+        _device, record, _sig = devices.parse_signature(field_signature)
+        signed, refusal = devices.signature_evidence(svc.ws, field_signature)
+    except devices.DeviceError as exc:
+        raise LinkError(f"{exc}; nothing was written", "signature") from None
+    if {e["ref"] for e in items if e["kind"] == devices.RECORD_EVIDENCE} != {record}:
+        raise LinkError(f"the signature is over field record {record}: cite that record, and only it, with --evidence "
+                        f"{devices.RECORD_EVIDENCE}:{record}", "bad-input")
+    if refusal and svc.ws.transaction_outcome(txid)["state"] != "committed":
+        raise LinkError(f"{refusal}; nothing was written. It can still be accepted as reported", "signature")
+    svc.signed_evidence = check_evidence(signed)
+    return items + signed
+
+
+def _meta_args(svc, effective: str, basis: str, evidence: Iterable[str], reason: str, change: str, field_signature: str = "",
+               txid: str = "") -> dict:
     from .units import effect
-    from .units.model import parse_evidence
-    return {"effective": effective, "basis": basis, "evidence": parse_evidence(evidence), "reason": reason,
-            "change": effect.order(svc, change).id if change else ""}
+    return {"effective": effective, "basis": basis, "evidence": _evidence(svc, evidence, basis, field_signature, txid),
+            "reason": reason, "change": effect.order(svc, change).id if change else ""}
 
 
 def unit_register(*, txid: str, serials: Iterable[str] = (), issuer: str = "", serial_from: str = "", count: int = 1,
@@ -554,8 +585,8 @@ def unit_register(*, txid: str, serials: Iterable[str] = (), issuer: str = "", s
                   status: str = "planned", project: str = "", customer: str = "", site: str = "", location: str = "",
                   standard: str = "", docs: Iterable[str] = (), milestones: dict[str, str] | None = None, notes: str = "",
                   effective: str = "", basis: str = "declared", evidence: Iterable[str] = (), reason: str = "",
-                  change: str = "", workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
-                  state_dir: Path | None = None) -> dict:
+                  change: str = "", field_signature: str = "", workspace: Path | None = None, cfg_dir: Path | None = None,
+                  cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
     """Register units, all of them or none, in one entry. One unit per serial given; or ``count`` units each issued the next
     serial of ``serial_from``; or one unit known by a tag or other code. The ids come from the txid, so a retry finds them."""
     serials = [s for s in serials]
@@ -594,7 +625,8 @@ def unit_register(*, txid: str, serials: Iterable[str] = (), issuer: str = "", s
             if other:
                 idents.append({"scheme": "other", "value": other, "issuer": ""})
             specs.append({**base, "identifiers": idents})
-        units = svc.register_many(specs, txid=txid, **_meta_args(svc, effective, basis, evidence, reason, change))
+        units = svc.register_many(specs, txid=txid,
+                                  **_meta_args(svc, effective, basis, evidence, reason, change, field_signature, txid))
         return [u["id"] for u in units]
 
     out, ids, loc = _record(workspace, txid, act, cfg_dir=cfg_dir, cache_dir=cache_dir, state_dir=state_dir)
@@ -630,14 +662,15 @@ def _one_unit_action(ref: str, txid: str, if_events: int | None, do: Callable[[A
 def unit_fit(ref: str, position: str, *, txid: str, component: str = "", part_number: str = "", serial: str = "",
              lot: str = "", replace: bool = False, disposition: str = "unknown", if_events: int | None = None,
              effective: str = "", basis: str = "declared", evidence: Iterable[str] = (), reason: str = "", change: str = "",
-             workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
-             state_dir: Path | None = None) -> dict:
+             field_signature: str = "", workspace: Path | None = None, cfg_dir: Path | None = None,
+             cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
     """Fit something at a position: a part number (with its serial or lot), or a component unit. ``replace`` takes out what is
     there first (``disposition``); without it an occupied position is refused."""
     def do(svc, u: dict) -> None:
         comp = svc.resolve(component)["id"] if component else ""
         svc.install(u["id"], position, number=part_number, component=comp, serial=serial, lot=lot, replace=replace,
-                    disposition=disposition, txid=txid, **_meta_args(svc, effective, basis, evidence, reason, change))
+                    disposition=disposition, txid=txid,
+                    **_meta_args(svc, effective, basis, evidence, reason, change, field_signature, txid))
 
     return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
                             state_dir=state_dir)
@@ -645,23 +678,24 @@ def unit_fit(ref: str, position: str, *, txid: str, component: str = "", part_nu
 
 def unit_remove(ref: str, position: str, *, txid: str, disposition: str = "unknown", if_events: int | None = None,
                 effective: str = "", basis: str = "declared", evidence: Iterable[str] = (), reason: str = "", change: str = "",
-                workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
-                state_dir: Path | None = None) -> dict:
+                field_signature: str = "", workspace: Path | None = None, cfg_dir: Path | None = None,
+                cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
     """Take out what is fitted at a position (refused when it's empty)."""
     def do(svc, u: dict) -> None:
         svc.remove(u["id"], position, disposition=disposition, txid=txid,
-                   **_meta_args(svc, effective, basis, evidence, reason, change))
+                   **_meta_args(svc, effective, basis, evidence, reason, change, field_signature, txid))
 
     return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
                             state_dir=state_dir)
 
 
 def unit_note(ref: str, text: str, *, txid: str, if_events: int | None = None, effective: str = "", basis: str = "declared",
-              evidence: Iterable[str] = (), reason: str = "", change: str = "", workspace: Path | None = None,
-              cfg_dir: Path | None = None, cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
+              evidence: Iterable[str] = (), reason: str = "", change: str = "", field_signature: str = "",
+              workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
+              state_dir: Path | None = None) -> dict:
     """Add a note to a unit's history: something found that the register doesn't settle on its own."""
     def do(svc, u: dict) -> None:
-        svc.note(u["id"], text, txid=txid, **_meta_args(svc, effective, basis, evidence, reason, change))
+        svc.note(u["id"], text, txid=txid, **_meta_args(svc, effective, basis, evidence, reason, change, field_signature, txid))
 
     return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
                             state_dir=state_dir)
@@ -669,11 +703,11 @@ def unit_note(ref: str, text: str, *, txid: str, if_events: int | None = None, e
 
 def unit_milestone(ref: str, milestone: str, *, txid: str, on: str = "", if_events: int | None = None,
                    basis: str = "declared", evidence: Iterable[str] = (), reason: str = "", change: str = "",
-                   workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
-                   state_dir: Path | None = None) -> dict:
+                   field_signature: str = "", workspace: Path | None = None, cfg_dir: Path | None = None,
+                   cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
     """Built, shipped, installed, commissioned or decommissioned, on a date (``""`` when it isn't known)."""
     def do(svc, u: dict) -> None:
-        meta = _meta_args(svc, "", basis, evidence, reason, change)
+        meta = _meta_args(svc, "", basis, evidence, reason, change, field_signature, txid)
         meta.pop("effective")
         svc.milestone(u["id"], milestone, on, txid=txid, **meta)
 
@@ -682,18 +716,18 @@ def unit_milestone(ref: str, milestone: str, *, txid: str, on: str = "", if_even
 
 
 def unit_change_install(ref: str, change: str, *, txid: str, basis: str = "reported", if_events: int | None = None,
-                        effective: str = "", evidence: Iterable[str] = (), reason: str = "", workspace: Path | None = None,
-                        cfg_dir: Path | None = None, cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
+                        effective: str = "", evidence: Iterable[str] = (), reason: str = "", field_signature: str = "",
+                        workspace: Path | None = None, cfg_dir: Path | None = None, cache_dir: Path | None = None,
+                        state_dir: Path | None = None) -> dict:
     """An engineering change made on a unit: its documents move to the change's new revisions in the same entry, ``installed``
     (``reported`` by default) or ``verified`` when the basis is ``verified`` (docs/UNITS.md section 10.2)."""
     from .units import effect
-    from .units.model import parse_evidence
     found: dict = {}
 
     def do(svc, u: dict) -> None:
         found["change"] = effect.order(svc, change).id
-        effect.install(svc, u["id"], found["change"], basis=basis, effective=effective, evidence=parse_evidence(evidence),
-                       reason=reason, txid=txid)
+        effect.install(svc, u["id"], found["change"], basis=basis, effective=effective,
+                       evidence=_evidence(svc, evidence, basis, field_signature, txid), reason=reason, txid=txid)
 
     def extra(svc, unit_id: str) -> dict:
         rec = effect.compliance(svc, found["change"], unit_id) if "change" in found else None
@@ -704,6 +738,48 @@ def unit_change_install(ref: str, change: str, *, txid: str, basis: str = "repor
 
     return _one_unit_action(ref, txid, if_events, do, workspace=workspace, cfg_dir=cfg_dir, cache_dir=cache_dir,
                             state_dir=state_dir, extra=extra)
+
+
+# ------------------------------------------------------------------------- phones enrolled to accounts (feature "field-signatures")
+def list_devices(workspace: Path | None = None, cfg_dir: Path | None = None) -> dict:
+    """Every phone enrolled to an account in a team workspace (ADR-028), revoked ones included, and whether its signatures
+    count now. An empty list in a workspace that isn't set up for a team."""
+    from . import devices
+    from .shared import SharedWorkspace
+    loc = _one_workspace(workspace, cfg_dir)
+    with Workspace.open(loc) as ws:
+        return {"workspace": _ws_summary(ws, loc), "team": isinstance(ws, SharedWorkspace), "devices": devices.listing(ws)}
+
+
+def device_enrol(account: str, device: str, key: str, fingerprint: str, *, name: str = "", workspace: Path | None = None,
+                 cfg_dir: Path | None = None, cache_dir: Path | None = None, state_dir: Path | None = None) -> dict:
+    """Enrol a phone to an account, in the name of the administrator logged in on this computer: ``fingerprint`` is what the
+    person typed from the phone's screen, and must be the key's. Enrolling the same phone to the same account again answers
+    ``already-enrolled`` and writes nothing, so a retry is safe."""
+    from . import devices
+    from .accounts import AccountError
+    from .gui.controller import SavedWithWarning
+    from .workspace import CommittedNotApplied, ConflictError
+    loc = _one_workspace(workspace, cfg_dir)
+    ctl = _controller(loc, cfg_dir=cfg_dir, cache_dir=cache_dir, state_dir=state_dir)
+    warning = ""
+    try:
+        with ctl._write() as ws:
+            out = devices.enrol(ws, account, device, key, fingerprint, name)
+    except devices.DeviceError as exc:
+        raise LinkError(f"{exc}; nothing was written", "refused") from None
+    except AccountError as exc:
+        kind = "not-found" if str(exc).startswith("there is no account") else "refused"
+        raise LinkError(str(exc), kind) from None
+    except ConflictError as exc:
+        raise LinkError(f"{exc}; nothing was written. Try again", "conflict") from None
+    except CommittedNotApplied:
+        out, warning = {"result": "enrolled"}, "saved; the workspace finishes recording it when it is next opened for writing"
+    except SavedWithWarning as w:
+        out, warning = {"result": "enrolled"}, w.warning
+    if "device" not in out:
+        out["device"] = next((r for r in list_devices(loc, cfg_dir)["devices"] if r["device"] == device.strip().lower()), None)
+    return {**out, **({"warning": warning} if warning else {})}
 
 
 def open_in_gui(ref: str | None = None, file: Path | None = None, workspace: Path | None = None,
@@ -754,7 +830,8 @@ def _one_workspace(workspace: Path | None, cfg_dir: Path | None, near: Path | No
 
 # ------------------------------------------------------------------------------------------ command line
 def _record_command(a, ws: Path | None) -> dict:
-    common = {"txid": a.txid, "basis": a.basis, "evidence": a.evidence, "reason": a.reason, "workspace": ws}
+    common = {"txid": a.txid, "basis": a.basis, "evidence": a.evidence, "reason": a.reason,
+              "field_signature": a.field_signature, "workspace": ws}
     guard = {"if_events": a.if_events} if hasattr(a, "if_events") else {}
     if hasattr(a, "change") and a.cmd != "unit-change-install":
         common["change"] = a.change
@@ -815,6 +892,9 @@ def main(argv: list[str], workspace: str | None = None) -> int:
         if change:
             s.add_argument("--change", default="")
         s.add_argument("--evidence", action="append", default=[], metavar="KIND:REF[=LABEL]")
+        s.add_argument("--field-signature", default="", metavar="DEVICE:EVENT:SIG",
+                       help="a field record signed on a phone enrolled to an account (feature field-signatures): checked, "
+                            "then recorded as evidence; needs --basis verified")
 
     s = sub.add_parser("unit-register")
     s.add_argument("--serial", action="append", default=[]); s.add_argument("--issuer", default="")
@@ -839,6 +919,11 @@ def main(argv: list[str], workspace: str | None = None) -> int:
     s.add_argument("--on", default="", help="the date (empty when unknown)"); recording(s, effective=False)
     s = sub.add_parser("unit-change-install"); s.add_argument("ref"); s.add_argument("change")
     recording(s, basis="reported", change=False)
+    sub.add_parser("devices")
+    s = sub.add_parser("device-enrol"); s.add_argument("--account", required=True); s.add_argument("--device", required=True)
+    s.add_argument("--key", required=True, help="the phone's public key, 64 hex digits")
+    s.add_argument("--fingerprint", required=True, help="as the phone shows it, typed by the person enrolling it")
+    s.add_argument("--name", default="", help="what to call the phone, such as Riley's phone")
     try:
         a = p.parse_args(argv)
     except SystemExit as exc:
@@ -871,6 +956,10 @@ def main(argv: list[str], workspace: str | None = None) -> int:
             out = unit(a.ref, ws, a.at, a.on)
         elif a.cmd.startswith("unit-"):
             out = _record_command(a, ws)
+        elif a.cmd == "devices":
+            out = list_devices(ws)
+        elif a.cmd == "device-enrol":
+            out = device_enrol(a.account, a.device, a.key, a.fingerprint, name=a.name, workspace=ws)
         else:
             out = open_in_gui(a.document, Path(a.file) if a.file else None, ws)
     except LinkError as exc:

@@ -852,7 +852,8 @@ and absent from service companies that never use it. A separate database would b
 effectivity and per-unit compliance (`docs/UNITS.md` section 10: change orders are unchanged; an effectivity record beside the
 order, written once, and a compliance record per unit and order); a PDF derivative tied to each native revision; numbering rules; a Units screen (done). 3:
 other programs recording on units (ADR-027, done), accepting FieldWorx records into unit histories (done, through FieldWorx's bridge);
-deviations and concessions (`docs/UNITS.md` section 12: written once with the units they cover, a record per unit, done). 4: transfer between
+deviations and concessions (`docs/UNITS.md` section 12: written once with the units they cover, a record per unit, done); field records
+signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: transfer between
 workspaces, merged identities, journal checkpoints.
 
 **Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
@@ -909,6 +910,58 @@ workspace, crash recovery and `verify`. Each command is the same action as `revi
 
 **Not done.** Accepting a field record is still a person's act in the bridge; nothing on a phone is applied by itself. A program
 can't void what it recorded (a person does, with `unit void`).
+
+### ADR-028 Field records signed on phones enrolled to accounts — IMPLEMENTED; NOT VERIFIED on real phones or between real computers
+
+**Decision (Director, 2026-11-07, gate 3: "keys mapped to accounts").** Before FieldWorx 1.0.0, every phone signs the records it
+makes with its own Ed25519 key, and an administrator of a team workspace enrols the phone to the person's account. A field record
+signed on an enrolled phone can then be accepted as *verified* in that person's name. FieldWorx's side is its ADR-015 and its
+PROTOCOL.md section 12; `revisionworx/devices.py` is this side.
+
+**Why the account.** An account already says who may do what, and disabling one already stops everything in its name (ADR-024). A
+phone enrolled to it signs as that person, and stops when they do. A separate list of trusted keys would be a second register of
+people.
+
+**Shape.**
+- **Enrolled phones are part of the account record:** `devices: {device id: {key, name, added, added_by, revoked, revoked_by,
+  reason}}`. Only an administrator changes an account record (`shared.judge`), so this adds no journal rule and no format version.
+  Everything that rewrites an account record (a password change, a new role, recovery) starts from the record it read, so it keeps
+  the field. A damaged entry is kept and vouches for nothing.
+- **Enrolling** is `revisionworx link device-enrol --account A --device D --key K --fingerprint F [--name N]`, in the logged-in
+  administrator's name. It is refused unless F, typed from the phone's screen, is the key's fingerprint (the first 8 bytes of
+  `SHA-256("fieldworx/key-fingerprint/v1\0" + key)`), and refused for a device or key enrolled anywhere before, revoked ones
+  included: a phone that changes hands starts again as a new device. FieldWorx's bridge runs it (`fieldworx-bridge enrol`),
+  reading D and K from the phone's field log. The same phone to the same account again answers `already-enrolled`.
+- **Accepting** a signed record: `--field-signature DEVICE:EVENT:SIG` on any `link unit-*` record command (feature
+  `field-signatures`), with `--basis verified` and `--evidence fieldworx-event:EVENT`. RevisionWorx checks that the device is
+  enrolled to exactly one account, isn't revoked, its account is active, and SIG holds over `"fieldworx/event-signature/v1\0" +
+  EVENT` with the key enrolled for it. The event then carries `field-signature` (`DEVICE:EVENT`, labelled with the signature) and
+  `field-signer` (the account, labelled with the phone's name). Otherwise the answer is `signature` and nothing is written. The
+  actor is still whoever accepts it in the office: the signature says who made the field record, the actor who accepted it.
+- **Those two evidence kinds are reserved.** `UnitService._meta` refuses them unless `link` has just checked them, so they can't be
+  typed in through `link --evidence`, `revisionworx unit` or the window.
+- **Revoking** (`revisionworx user device revoke NAME DEVICE --reason R`), or disabling the account, refuses the phone's
+  signatures on anything new. A retry of an acceptance already recorded (the same txid) still answers `already-recorded`. What was
+  accepted before stands.
+- **`unit verify` checks each acceptance again,** with the key the signer's account enrolled for the device, revoked or not:
+  `signature-invalid` (malformed; not one signature and one signer; basis not `verified`; it cites another record; it doesn't
+  hold), and `signature-reused` (one field record cited by more than one action).
+
+**Failure modes.**
+
+| What happens | What follows |
+|---|---|
+| A phone is lost or stolen | An administrator revokes it; from then on its signatures are refused. Until then, whoever has it unlocked can make records that pass, and they are still only accepted by a person in the office, who sees them first |
+| Two administrators enrol one phone to two people at the same moment | Both are recorded; the phone counts for neither (`user device list` says so) until one is revoked |
+| A fingerprint is typed wrong, or read from another phone | Refused; nothing is enrolled |
+| A modified program writes signature evidence without the checks | The journal rules accept it, as they do any unit event (ADR-025); `unit verify` reports `signature-invalid` |
+| One signed record accepted under two txids | `unit verify` reports `signature-reused` |
+| The account is renamed or its password changes | Nothing changes: evidence names the account id, and the phone's entry is kept |
+| Computers' clocks disagree | Nothing depends on them: whether a phone was enrolled when it signed isn't judged by times |
+
+**Not done.** Enrolling or listing phones in the desktop window: it is done from the bridge, which reads the phone's field log, and
+listed and revoked with `revisionworx user device`. Verifying is pure Python, about 2 ms a signature, so `unit verify` adds about
+20 s for 10,000 signed events. Nothing here is verified on real phones or between real computers.
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

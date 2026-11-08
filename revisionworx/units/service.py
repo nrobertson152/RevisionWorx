@@ -17,12 +17,12 @@ from typing import Any, Callable, Iterable, Iterator
 from .. import documents as D
 from ..workspace import RecordCheck, RecordDelete, RecordPut, Workspace, new_id, now_iso, register_kind
 from . import history as H
-from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_SCHEMES, STANDARD_SCHEME, STATUSES, UPDATABLE,
-                    VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord, NotFound, ReplayRefused, ValidationError,
-                    actor_record, check_choice, check_date, check_evidence, check_id, check_identifier, check_model,
-                    check_pattern, check_position, check_txid, clean, day_of, derived_id, digest, event_id, is_id, key_id,
-                    load_event, load_key, load_numbering, load_standard, load_unit, norm, numbering_id, pattern_period,
-                    position_key, render_pattern, standard_digest, unit_label)
+from .model import (BASES, CLASSES, DISPOSITIONS, LIMITS, MILESTONES, PERMANENT_SCHEMES, SIGNED_EVIDENCE, STANDARD_SCHEME,
+                    STATUSES, UPDATABLE, VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord, NotFound,
+                    ReplayRefused, ValidationError, actor_record, check_choice, check_date, check_evidence, check_id,
+                    check_identifier, check_model, check_pattern, check_position, check_txid, clean, day_of, derived_id, digest,
+                    event_id, is_id, key_id, load_event, load_key, load_numbering, load_standard, load_unit, norm, numbering_id,
+                    pattern_period, position_key, render_pattern, standard_digest, unit_label)
 
 KIND = {"unit": "unit", "event": "unitevt", "key": "unitkey", "standard": "buildstd", "effectivity": "uniteff",
         "compliance": "unitcmp", "numbering": "unitseq", "deviation": "unitdev", "devunit": "unitdvu"}
@@ -191,6 +191,7 @@ class UnitService:
         self.clock = clock or now_iso
         self.last_replayed = False
         self.expected: dict[str, int] = {}            # unit id -> its event count when the caller decided (``expecting``)
+        self.signed_evidence: list[dict] = []         # field-signature evidence link has checked (devices.signature_evidence)
 
     # ================================================================================================ reading
     def unit(self, unit_id: str) -> dict:
@@ -398,8 +399,12 @@ class UnitService:
     # ================================================================================================ actions
     def _meta(self, effective: str = "", basis: str = "declared", evidence: Iterable = (), reason: str = "",
               change: str = "") -> dict:
+        items = check_evidence(list(evidence))
+        if any(e["kind"] in SIGNED_EVIDENCE and e not in self.signed_evidence for e in items):
+            raise ValidationError("a field signature is added only by 'revisionworx link ... --field-signature', which checks "
+                                  "it against the phone enrolled to the account")
         return {"effective": check_date(effective, "effective date"), "basis": check_choice(basis, BASES, "basis"),
-                "evidence": check_evidence(list(evidence)), "reason": clean(reason, "reason", LIMITS["reason"], multiline=True),
+                "evidence": items, "reason": clean(reason, "reason", LIMITS["reason"], multiline=True),
                 "change": self._change(change)}
 
     def _run(self, op: str, txid: str | None, args: dict, replay: list[str], build: Callable[[_Tx], Any],
