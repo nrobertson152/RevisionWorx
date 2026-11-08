@@ -1153,9 +1153,14 @@ def unit_sections(d: dict) -> list[tuple[str, list[str]]]:
     if d.get("merged_into"):
         head.append(f"Merged into {d['merged_into']['label']} on {d['merged_into']['time'][:10]}: it is recorded there now")
     head += [f"Merged into this unit: {m['label']} ({m['unit']}), on {m['time'][:10]}" for m in d.get("merged_from", [])]
+    head += [f"Received from {r['from']['name'] or r['from']['workspace']} on {r['time'][:10]}"
+             + (" (signed)" if r["key"] else " (unsigned)") for r in d.get("received", [])]
+    if d.get("transferred"):
+        t = d["transferred"]
+        head.append(f"Transferred to {t['to']} on {t['time'][:10]}: it is recorded there now, and nothing more is recorded here")
     head += [f"{name.capitalize()}: {m['date'] or 'date unknown'}" for name, m in d["milestones"].items()]
     due = [c for c in d.get("changes", []) if c["outstanding"]]
-    flagged = [r for r in d["documents"] if r["flags"]]
+    flagged = [r for r in d["documents"] if set(r["flags"]) - {"foreign"}]   # kept from another workspace is no problem
     late = [x for x in d.get("deviations", []) if x["overdue"]]
     allowed = [x for x in d.get("deviations", []) if x["in_effect"]]
     if due:
@@ -1186,7 +1191,9 @@ def unit_sections(d: dict) -> list[tuple[str, list[str]]]:
         notes = [w for w in (_BASIS_WORDS.get(r["basis"], ""),) if w and r["basis"] != "verified"]
         if r["source"] == "unit" and std:
             notes.append("this unit only")
-        notes += [_FLAG_WORDS[f] + (f" (rev {r['released']['label']})" if f == "newer-released" and r["released"] else "")
+        notes += [f"from {r['foreign']['name'] or r['foreign']['workspace']}'s workspace, kept here as a reference"
+                  if f == "foreign" else
+                  _FLAG_WORDS[f] + (f" (rev {r['released']['label']})" if f == "newer-released" and r["released"] else "")
                   for f in r["flags"]]
         docs.append(f"{name}: {what}" + (f"  [{'; '.join(notes)}]" if notes else ""))
     sections.append(("Drawings", docs or ["None recorded."]))

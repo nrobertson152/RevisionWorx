@@ -762,7 +762,8 @@ def drawing_register_csv(rows: list[dict]) -> str:
 
 # ---------------------------------------------------------------------------- content GC
 def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600.0) -> dict:
-    """Find (and with ``apply`` remove) content objects no revision or PDF derivative (ADR-026) references.
+    """Find (and with ``apply`` remove) content objects no revision, PDF derivative (ADR-026), transfer or receipt
+    (docs/UNITS.md section 16) references.
 
     Orphans arise when a check-in stored content but failed before its journal entry. Safety:
     requires the writer lock (no check-in can be storing concurrently); every revision record,
@@ -771,7 +772,8 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
     ws._require_writable()
     store = ContentStore(ws)
     from .derivatives import referenced as derivative_content
-    referenced = {r["sha256"] for r in _all(ws, "revision").values()} | derivative_content(ws)
+    from .units.transfer import content_references as transfer_content
+    referenced = {r["sha256"] for r in _all(ws, "revision").values()} | derivative_content(ws) | transfer_content(ws)
     now = time.time()
     orphans, unrecognised, kept_young = [], [], 0
     if store.root.is_dir():
@@ -794,9 +796,10 @@ def gc_content(ws: Workspace, apply: bool = False, min_age_seconds: float = 3600
     if apply and orphans:
         ws.commit("content.gc", [RecordPut("audit", new_id("aud"), {
             "event": "content-gc", "removed": orphans, "time": now_iso(), "by": ws.actor()})])
+        kept = transfer_content(ws)       # under the writer lock: nothing can start referring to an object meanwhile
         for o in orphans:  # audit first: a crash leaves a record of intent, never an unlogged deletion
             ws.require_authority()        # a deletion cannot be fenced, but it can stop once authority is gone
-            if o["sha256"] not in {r["sha256"] for r in _all(ws, "revision").values()}:
+            if o["sha256"] not in {r["sha256"] for r in _all(ws, "revision").values()} | kept:
                 store.path_for(o["sha256"]).unlink(missing_ok=True)
         report["removed"] = True
     return report

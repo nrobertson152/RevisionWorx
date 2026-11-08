@@ -10,8 +10,8 @@ from __future__ import annotations
 import copy
 from typing import Callable
 
-from .model import (EVENT_TYPES, MERGED, MalformedUnitRecord, SCHEMA, day_of, digest, event_id, load_event, norm,
-                    position_key, unit_label)
+from .model import (EVENT_TYPES, MERGED, TRANSFERRED, MalformedUnitRecord, SCHEMA, day_of, digest, event_id, load_event,
+                    norm, position_key, unit_label)
 
 EVENT_DOMAIN = "revisionworx/units/event/v1"
 
@@ -43,6 +43,27 @@ def _fresh(ev: dict) -> dict:
             "updated": ev["time"]}
 
 
+def _received(ev: dict, before: dict | None) -> dict:
+    """The record a ``unit.received`` event starts (section 16): the state the transfer carried, as this workspace's own
+    record from that event on. A unit received back keeps when it was first recorded here."""
+    st, n = ev["body"]["state"], ev["n"]
+    out = {"schema": SCHEMA, "id": ev["unit"], "class": st["class"], "name": st["name"], "model": dict(st["model"]),
+           "identifiers": [{"scheme": i["scheme"], "issuer": i["issuer"], "value": i["value"], "active": i["active"],
+                            "since": n} for i in st["identifiers"]],
+           "status": st["status"], "project": "", "customer": st["customer"], "site": st["site"], "location": st["location"],
+           "parent": dict(st["parent"]) if st["parent"] else None, "standard": None,
+           "documents": {d: {"revision": e["revision"], "event": n, "basis": e["basis"]} for d, e in st["documents"].items()},
+           "components": {position_key(c["position"]): {"position": c["position"], "part": "", "number": c["number"],
+                                                        "unit": c["unit"], "serial": c["serial"], "lot": c["lot"],
+                                                        "since": c["since"], "event": n, "basis": c["basis"]}
+                          for c in st["components"]},
+           "milestones": {m: {"date": d, "event": n} for m, d in st["milestones"].items()}, "notes": st["notes"],
+           "events": {"count": 0, "head": ""}, "created": before["created"] if before else ev["time"], "updated": ev["time"]}
+    if st["lots"]:
+        out["lots"] = [{**x, "event": n} for x in st["lots"]]
+    return out
+
+
 def _same_identifier(a: dict, b: dict) -> bool:
     return a["scheme"] == b["scheme"] and norm(a["issuer"]) == norm(b["issuer"]) and norm(a["value"]) == norm(b["value"])
 
@@ -57,6 +78,10 @@ def apply(state: dict | None, ev: dict, voided: frozenset | set = frozenset()) -
         if state is not None:
             problems.append(f"event {n} registers a unit that is already registered")
         state = _fresh(ev)
+    elif t == "unit.received":                          # first recorded here, or back from where it was transferred
+        if state is not None and state["status"] != TRANSFERRED:
+            problems.append(f"event {n} receives a unit this workspace hadn't transferred away")
+        state = _received(ev, state)
     elif state is None:
         problems.append(f"event {n} comes before the unit was registered")
         return None, problems
@@ -134,6 +159,8 @@ def _apply_change(s: dict, ev: dict) -> list[str]:
                 s["identifiers"].append({"scheme": moved["scheme"], "issuer": moved["issuer"], "value": moved["value"],
                                          "active": moved["active"], "since": n})
         return problems
+    elif t == "unit.transferred":                       # another workspace keeps it from now on (section 16)
+        s["status"] = TRANSFERRED
     elif t == "lots.used":                              # factory lots: the record has them only once there are some
         s.setdefault("lots", []).extend(
             {"number": x["number"], "lot": x["lot"], "quantity": x["quantity"], "units": b["units"], "event": n,
@@ -216,6 +243,27 @@ def merged_into(events: list[dict]) -> dict | None:
     voids = voided_by(events)
     hits = [e for e in events if e["type"] == "unit.merged" and e["n"] not in voids]
     return {"unit": hits[-1]["body"]["into"], "event": hits[-1]["n"], "time": hits[-1]["time"]} if hits else None
+
+
+def transferred(events: list[dict]) -> dict | None:
+    """The transfer that made this workspace stop keeping the unit, if it is still in force: ``{to, event, time, pack, key,
+    units}``. A unit received back after it is ``None``."""
+    out = None
+    for e in events:
+        if e["type"] == "unit.transferred":
+            b = e["body"]
+            out = {"to": b["to"], "event": e["n"], "time": e["time"], "pack": b["pack"], "key": b["key"],
+                   "units": list(b["units"])}
+        elif e["type"] == "unit.received":
+            out = None
+    return out
+
+
+def receipts(events: list[dict]) -> list[dict]:
+    """Each time this workspace received the unit, oldest first: ``{from, event, time, pack, key, history, aliases}``."""
+    return [{"from": dict(e["body"]["from"]), "event": e["n"], "time": e["time"], "pack": e["body"]["pack"],
+             "key": e["body"]["key"], "history": e["body"]["history"], "aliases": list(e["body"]["state"]["aliases"])}
+            for e in events if e["type"] == "unit.received"]
 
 
 def merged_from(events: list[dict]) -> list[dict]:
@@ -343,6 +391,15 @@ def summary(ev: dict, name: Callable[[str, str], str] = lambda kind, rid: rid) -
     if t == "unit.absorbed":
         moved = ", ".join(f"{i['scheme']} {i['value']}" for i in b["identifiers"]) or "no identifiers"
         return f"{name('unit', b['unit'])} merged into this unit (took over: {moved})"
+    if t == "unit.transferred":
+        others = len(b["units"]) - 1
+        return (f"transferred to {b['to']}" + (f", with the {others} unit{'s' if others > 1 else ''} fitted in it"
+                                               if others > 0 and b["units"][0] == ev["unit"] else
+                                               ", fitted in the unit transferred" if others > 0 else "")
+                + (f", signed with key {b['key']}" if b["key"] else ""))
+    if t == "unit.received":
+        return (f"received from {b['from']['name'] or b['from']['workspace']}"
+                + (f", signed with key {b['key']}" if b["key"] else ", unsigned"))
     if t == "lots.used":                                # one line: the first ten, then how many more (the record has all)
         lots = "; ".join(f"{x['number']} lot {x['lot']}" + (f" ({x['quantity']})" if x["quantity"] else "")
                          for x in b["lots"][:10])
@@ -354,4 +411,5 @@ def summary(ev: dict, name: Callable[[str, str], str] = lambda kind, rid: rid) -
 
 
 __all__ = ["EVENT_DOMAIN", "after", "apply", "event_day", "event_digest", "make_event", "merged_from", "merged_into", "on",
+           "receipts", "transferred",
            "pack_problems", "packs_in", "reduce", "summary", "unit_label", "verify_chain", "voided_by"]

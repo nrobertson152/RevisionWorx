@@ -17,8 +17,8 @@ from typing import Any, Callable, Iterable, Iterator
 from .. import documents as D
 from ..workspace import RecordCheck, RecordDelete, RecordPut, Workspace, new_id, now_iso, register_kind
 from . import history as H
-from .model import (BASES, CLASSES, DISPOSITIONS, KEY_FINGERPRINT_RE, LIMITS, MERGED, MILESTONES, PERMANENT_SCHEMES,
-                    SIGNED_EVIDENCE,
+from .model import (BASES, CLASSES, DISPOSITIONS, KEY_FINGERPRINT_RE, LIMITS, MAX_TRANSFER_UNITS, MERGED, MILESTONES,
+                    PERMANENT_SCHEMES, SIGNED_EVIDENCE, TRANSFERRED, WORKSPACE_ID_RE, check_foreign, check_state,
                     STANDARD_SCHEME, STATUSES, UPDATABLE, VOIDABLE, Ambiguous, Changed, DuplicateIdentifier, MalformedUnitRecord,
                     NotFound,
                     ReplayRefused, ValidationError, actor_record, check_choice, check_date, check_evidence, check_id,
@@ -58,6 +58,7 @@ class _Tx:
         self.numbering_revs: dict[str, int] = {}
         self.key_moves: dict[str, tuple[dict, int]] = {}   # claims given to another owner (a merge), at their revision
         self.merged_ok: set[str] = set()               # merged units this action may touch: only a void of their merge
+        self.transferred_ok: set[str] = set()          # transferred units this action may touch: only receiving them back
 
     # -------------------------------------------------------------------------------------------- units
     def unit(self, unit_id: str) -> dict:
@@ -80,6 +81,11 @@ class _Tx:
                 into = H.merged_into(history)
                 raise ValidationError(f"{unit_label(state)} was merged into "
                                       f"{self.svc.describe(into['unit']) if into else 'another unit'}: record it there")
+            if state["status"] == TRANSFERRED and unit_id not in self.transferred_ok:
+                gone = H.transferred(history)
+                raise ValidationError(f"{unit_label(state)} was transferred to "
+                                      f"{gone['to'] + ' on ' + gone['time'][:10] if gone else 'another workspace'}: it is "
+                                      "recorded in that workspace now")
             self.revs[unit_id] = int(rec.get("_rev", 0))
             self.states[unit_id] = state
             self.order.append(unit_id)
@@ -770,6 +776,91 @@ class UnitService:
         self._run("unit.pack.issue", txid, {"unit": unit_id, "pack": number, "sums": sums, "as_of": as_of, "key": key,
                                             "meta": meta}, [unit_id], build, meta)
         return self.unit(unit_id)
+
+    # ------------------------------------------------------------------------------------- transfers (section 16)
+    def transfer(self, unit_ids: list[str], to: str, number: int, pack: str, key: str, kept: str,
+                 txid: str | None = None) -> list[dict]:
+        """Record that ``unit_ids`` (the unit transferred, then each unit fitted in it) were handed over to another workspace,
+        in one entry. The first unit's handover pack ``number`` is the transfer pack: ``pack`` is the SHA-256 of its
+        SHA256SUMS, ``key`` the key that signed it (``""``: not signed) and ``kept`` the copy this workspace keeps. Each unit
+        becomes ``transferred`` and takes no more actions. ``transfer.issue`` calls this inside ``expecting`` the event counts
+        the pack was made from."""
+        to = clean(to, "who it is transferred to", 200, required=True)
+        for what, value in (("pack", pack), ("kept", kept)):
+            if not isinstance(value, str) or len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+                raise ValidationError(f"a transfer's {what} is a SHA-256 (64 lowercase hex)")
+        if key and not KEY_FINGERPRINT_RE.match(key):
+            raise ValidationError(f"{key!r} isn't a key fingerprint (SHA256: and 43 characters, as ssh-keygen -l shows it)")
+        ids = list(unit_ids)
+        if not 1 <= len(ids) <= MAX_TRANSFER_UNITS or len(set(ids)) != len(ids) or not all(is_id("unit", u) for u in ids):
+            raise ValidationError(f"a transfer names from 1 to {MAX_TRANSFER_UNITS} different units")
+        meta = self._meta()
+
+        def build(tx: _Tx) -> None:
+            root = tx.unit(ids[0])
+            following = len(H.packs_in(self.events(ids[0]))) + 1
+            if number != following:
+                raise Changed(f"the next handover pack of {unit_label(root)} is {following}, not {number}: another was "
+                              "issued since. Nothing was recorded; make the transfer again")
+            tx.emit(ids[0], "pack.issued", {"pack": number, "sums": pack, "as_of": "", "key": key})
+            for uid in ids:
+                tx.unit(uid)
+                tx.emit(uid, "unit.transferred", {"to": to, "pack": pack, "key": key, "kept": kept, "units": ids})
+
+        self._run("unit.transfer", txid, {"units": ids, "to": to, "pack": number, "sums": pack, "key": key, "kept": kept,
+                                          "meta": meta}, ids, build, meta)
+        return [self.unit(uid) for uid in ids]
+
+    def receive(self, units: list[dict], source: dict, pack: str, key: str, txid: str | None = None) -> list[dict]:
+        """Record units another workspace transferred here, in one entry: ``units`` are ``{id, state, foreign, history}`` as
+        ``transfer.receive`` prepared them (``foreign``: what is kept of the documents that aren't this workspace's;
+        ``history``: the SHA-256 of their history before, kept in the content store). A unit new here starts with
+        ``unit.received``; one this workspace transferred away is received back. Identifiers are claimed as at registration;
+        one another unit here holds refuses the whole receipt."""
+        if not isinstance(source, dict) or set(source) != {"workspace", "name"} \
+                or not WORKSPACE_ID_RE.match(str(source.get("workspace", ""))):
+            raise ValidationError("a receipt names the workspace the units came from")
+        if source["workspace"] == self.ws.id:
+            raise ValidationError("these units were transferred from this workspace: they can't be received here")
+        if not isinstance(pack, str) or len(pack) != 64 or any(ch not in "0123456789abcdef" for ch in pack):
+            raise ValidationError("a receipt names its transfer pack by the SHA-256 of its SHA256SUMS")
+        if key and not KEY_FINGERPRINT_RE.match(key):
+            raise ValidationError(f"{key!r} isn't a key fingerprint")
+        if not 1 <= len(units) <= MAX_TRANSFER_UNITS or len({u["id"] for u in units}) != len(units):
+            raise ValidationError(f"a receipt has from 1 to {MAX_TRANSFER_UNITS} different units")
+        for u in units:
+            check_id("unit", u["id"], "unit")
+            check_state(u["state"])
+            for doc, f in u["foreign"].items():
+                check_foreign(doc, f)
+        meta = self._meta()
+
+        def build(tx: _Tx) -> list[str]:
+            for u in units:
+                uid, before = u["id"], None
+                if self.ws.get(KIND["unit"], uid) is not None:
+                    tx.transferred_ok.add(uid)
+                    before = tx.unit(uid)
+                    if before["status"] != TRANSFERRED:
+                        raise ValidationError(f"this workspace has its own record of {unit_label(before)}, with the same id, "
+                                              "so it can't be received as well; nothing was recorded")
+                else:
+                    tx.new_unit(uid)
+                tx.emit(uid, "unit.received", {"from": dict(source), "pack": pack, "key": key, "state": u["state"],
+                                               "foreign": u["foreign"], "history": u["history"]})
+                held = set()
+                for i in u["state"]["identifiers"]:
+                    if i["active"] or i["scheme"] in PERMANENT_SCHEMES:
+                        tx.claim(i["scheme"], i["issuer"], i["value"], uid)
+                        held.add(key_id(i["scheme"], i["issuer"], i["value"]))
+                for i in (before or {}).get("identifiers", []):
+                    if key_id(i["scheme"], i["issuer"], i["value"]) not in held:
+                        tx.release(i["scheme"], i["issuer"], i["value"], uid)
+            return [u["id"] for u in units]
+
+        self._run("unit.receive", txid, {"units": units, "from": source, "pack": pack, "key": key, "meta": meta},
+                  [u["id"] for u in units], build, meta)
+        return [self.unit(u["id"]) for u in units]
 
     def withdraw_pack(self, unit_id: str, number: int, reason: str, txid: str | None = None, **meta_args: Any) -> dict:
         """Record that handover pack ``number`` is withdrawn: it was issued, and is not to be relied on now. A reason is

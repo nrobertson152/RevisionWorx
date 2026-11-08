@@ -166,8 +166,9 @@ def approve(svc: UnitService, kind: str, *, title: str, departure: str, reason: 
     chosen: dict[str, dict] = {}
     for ref in named:
         u = svc.resolve(ref)
-        if u["status"] == "scrapped":
-            raise ValidationError(f"{unit_label(u)} is scrapped")
+        if u["status"] in ("scrapped", "transferred"):
+            raise ValidationError(f"{unit_label(u)} is {u['status']}"
+                                  + (": it is recorded in another workspace now" if u["status"] == "transferred" else ""))
         chosen.setdefault(u["id"], u)
     rows, seen = [], set()
     for ref in doc_refs:
@@ -208,8 +209,9 @@ def add(svc: UnitService, ref: str, unit: str, *, reason: str, txid: str | None 
     """Approve the same departure for one more unit (its own record; the deviation stays as it was). Needs a reason."""
     dev = deviation(svc, ref)
     u = svc.resolve(unit)
-    if u["status"] == "scrapped":
-        raise ValidationError(f"{unit_label(u)} is scrapped")
+    if u["status"] in ("scrapped", "transferred"):
+        raise ValidationError(f"{unit_label(u)} is {u['status']}"
+                              + (": it is recorded in another workspace now" if u["status"] == "transferred" else ""))
     reason = clean(reason, "reason", LIMITS["reason"], multiline=True, required=True)
     rid = devunit_id(dev["id"], u["id"])
     replaying = txid is not None and svc.ws.transaction_outcome(txid)["state"] == "committed"

@@ -246,6 +246,14 @@ that date. A revision with no PDF attached is listed as not included, never repl
   the fingerprint `pack-signing` shows, in a way that doesn't travel with the packs. Making the key, and what to do if it is
   lost: docs/UNITS.md section 13.1. Without signing, someone outside the company confirms a pack by asking you.
 
+**Transferring a unit to another workspace.** When a machine's record is to be kept by someone else from now on (a customer with
+their own RevisionWorx, a service company, another site), `revisionworx unit transfer NH-26-0001 "NH-26-0001 transfer" --to
+"Bayside Service"` makes its transfer pack: its next handover pack, with what their workspace needs. It takes what is fitted in it
+with it. From then on your workspace shows it as *transferred* and records nothing more on it. If the pack goes missing,
+`unit transfer-pack NH-26-0001 FOLDER` writes it again, exactly. In their workspace, `revisionworx unit receive FOLDER --key
+acme-packs.pub` (the key you gave them, if your packs are signed) records it with the same id, history and configuration. Your
+revisions stay yours: they keep each one as a reference, with its PDF. A unit comes back the same way. docs/UNITS.md section 16.
+
 ## Troubleshooting
 
 | You see | What it means | What to do |

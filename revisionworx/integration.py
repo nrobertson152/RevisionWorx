@@ -182,7 +182,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 # ---------------------------------------------------------------------------------------------- commands
 FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations",        # additive commands since API 1:
-            "field-signatures", "unit-where-used", "unit-merges", "unit-lots"]                    # ask before relying on one
+            "field-signatures", "unit-where-used", "unit-merges", "unit-lots", "unit-transfers"]  # ask before relying on one
 
 
 def version() -> dict:
@@ -273,6 +273,33 @@ def document(ref: str, workspace: Path | None = None, project: str | None = None
         return {"workspace": _ws_summary(ws, loc), "document": out}
 
 
+def _fetch_foreign(ws: Workspace, loc: Path, ref: str, dest_dir: Path, revision: str | None, pdf: bool) -> dict | None:
+    """A document from another workspace that a received unit uses (docs/UNITS.md section 16): only its PDF is kept here."""
+    from .content import ContentStore
+    from .units import transfer
+    kept = transfer.find_foreign(_unit_service(ws), ref, revision or "")
+    if not kept:
+        return None
+    first = kept[0]
+    name = first["number"] or ref
+    if not pdf:
+        raise LinkError(f"{name} is from {first['workspace_name'] or 'another workspace'}: only the PDF of the revision a unit "
+                        "uses is kept here; ask for it with --pdf", "not-found")
+    if len(kept) > 1 and not revision:
+        raise LinkError(f"units here use more than one revision of {name}: name one with --revision "
+                        f"({', '.join(sorted(k['label'] for k in kept))})", "ambiguous")
+    if not first["pdf"]:
+        raise LinkError(f"{name} rev {first['label']} came from {first['workspace_name'] or 'another workspace'} without a PDF",
+                        "not-found")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stem = "".join("_" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in name).strip(" .") or "document"
+    out = ContentStore(ws).export(first["pdf"], dest_dir / f"{stem} (rev {first['label']}).pdf", overwrite=True)
+    return {"workspace": _ws_summary(ws, loc), "document_id": ref, "path": str(out), "pdf": True,
+            "revision": {"id": first["revision"], "label": first["label"], "state": first["state"],
+                         "state_name": first["state_name"], "sha256": first["sha256"], "pdf": {"sha256": first["pdf"]},
+                         "foreign": {"workspace": first["workspace"], "name": first["workspace_name"]}}}
+
+
 def fetch(ref: str, dest_dir: Path, revision: str | None = None, workspace: Path | None = None,
           project: str | None = None, released: bool = False, cfg_dir: Path | None = None, pdf: bool = False) -> dict:
     """Copy one revision's verified content to ``dest_dir`` (read-only use: viewing, printing, analysis).
@@ -284,6 +311,9 @@ def fetch(ref: str, dest_dir: Path, revision: str | None = None, workspace: Path
         pid = _find_project(ws, project)["id"] if project else None
         doc = _find_document(ws, ref, pid)
         if doc is None:
+            kept = _fetch_foreign(ws, loc, ref, Path(dest_dir), revision, pdf) if not project else None
+            if kept is not None:
+                return kept
             raise LinkError(f"no document {ref!r}", "not-found")
         hist = documents.history(ws, doc["id"])
         if revision:

@@ -19,6 +19,10 @@
                                            recorded in the unit's history as issued)
     packs REF                             withdraw-pack REF N --reason R      pack-signing [on --key FILE.pub | off]
     check-pack FOLDER [--key FILE.pub]    (is a handover pack whole? needs no workspace; with one, did it issue the pack?)
+    transfer REF FOLDER --to WHO [--sign-with KEYFILE]   (another workspace keeps the unit, and everything fitted in it, from
+                                           now on: a transfer pack, recorded here; the units take no more actions here)
+    transfer-pack REF FOLDER              (the transfer pack again, exactly as it was issued)
+    receive FOLDER [--key FILE.pub | --fingerprint SHA256:...]   (the units of a transfer pack, recorded here with their ids)
     numbering new NAME --pattern 'NH-{yy}-{seq:4}' [--issuer I]       numbering list | numbering next NAME
     new --serial-from NAME ...  (the next serial of a numbering, taken in the same entry)
     change candidates|status ECO          change decide ECO --kind K [--standard STD] [--scope RULE --value V | --unit REF]
@@ -47,7 +51,7 @@ from .model import (BASES, CLASSES, DEVIATION_KINDS, DISPOSITIONS, EFFECTIVITY_K
                     STATUSES, UnitError, ValidationError, parse_evidence, unit_label)
 from .service import UnitService, service_for
 
-READS = {"list", "show", "history", "where-used", "verify", "export", "compliance", "packs"}
+READS = {"list", "show", "history", "where-used", "verify", "export", "compliance", "packs", "transfer-pack"}
 CHANGE_READS = {"candidates", "status"}
 DEVIATION_READS = {"list", "show", "overdue"}
 
@@ -180,6 +184,23 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s.add_argument("ref"); s.add_argument("--json", action="store_true")
     s = sub.add_parser("withdraw-pack", help="record that an issued handover pack is not to be relied on any more")
     s.add_argument("ref"); s.add_argument("number", type=int, help="the pack's number"); s.add_argument("--reason", required=True)
+    s = sub.add_parser("transfer", help="hand a unit, and everything fitted in it, over to another workspace: a transfer "
+                       "pack (the unit's next handover pack, with what the receiving workspace needs), recorded here; the "
+                       "units take no more actions here")
+    s.add_argument("ref"); s.add_argument("folder", help="a new folder for the transfer pack")
+    s.add_argument("--to", required=True, help="who keeps the unit's record from now on: a company, a site, a workspace")
+    s.add_argument("--sign-with", default="", metavar="KEYFILE",
+                   help="where packs are signed: the key file ssh-keygen signs with (a private key, or a security key's handle)")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("transfer-pack", help="write a transferred unit's transfer pack again, exactly as it was issued")
+    s.add_argument("ref"); s.add_argument("folder", help="a new folder"); s.add_argument("--json", action="store_true")
+    s = sub.add_parser("receive", help="record the units of a transfer pack another workspace made for this one, with their "
+                       "ids; the revisions they use stay that workspace's, kept here as references with their PDFs")
+    s.add_argument("folder"); s.add_argument("--json", action="store_true")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--key", default="", metavar="FILE.pub", help="the pack must be signed by this key (the sender's)")
+    g.add_argument("--fingerprint", default="", metavar="SHA256:...", help="the pack must be signed by the key with this "
+                   "fingerprint")
     s = sub.add_parser("check-pack", help="is a handover pack whole? Needs no workspace; given the one it came from "
                        "(revisionworx -w FOLDER unit check-pack ...), also whether that workspace issued it")
     s.add_argument("folder"); s.add_argument("--json", action="store_true")
@@ -277,7 +298,8 @@ def _meta(ws: Workspace, a: argparse.Namespace) -> dict:
 
 def _print_unit(out, svc: UnitService, detail: dict) -> None:
     flags = {"newer-released": "a later revision is released, not applied to this unit",
-             "not-released": "not released", "obsolete": "obsolete", "missing": "MISSING: this reference is damaged"}
+             "not-released": "not released", "obsolete": "obsolete", "missing": "MISSING: this reference is damaged",
+             "foreign": "kept from another workspace"}
     out.write(f"{detail['label']}  {detail['name']}  [{detail['status']}]\n  id {detail['id']}   class {detail['class']}"
               f"   model {detail['model']['number'] or '-'}\n")
     for i in detail["identifiers"]:
@@ -295,6 +317,12 @@ def _print_unit(out, svc: UnitService, detail: dict) -> None:
         out.write(f"  MERGED into {m['label']} ({m['unit']}) on {m['time'][:10]}, event {m['event']}: record on it\n")
     for m in detail.get("merged_from", []):
         out.write(f"  {m['label']} ({m['unit']}) was merged into this unit on {m['time'][:10]}\n")
+    for r in detail.get("received", []):
+        out.write(f"  received from {r['from']['name'] or r['from']['workspace']} on {r['time'][:10]}, event {r['event']}"
+                  + (f", signed with the key {r['key']}" if r["key"] else ", unsigned") + "\n")
+    if detail.get("transferred"):
+        t = detail["transferred"]
+        out.write(f"  TRANSFERRED to {t['to']} on {t['time'][:10]}, event {t['event']}: its record is kept there now\n")
     for name, m in detail["milestones"].items():
         out.write(f"  {name} {m['date'] or '(date unknown)'}\n")
     if "as_of" in detail:
@@ -316,7 +344,9 @@ def _print_unit(out, svc: UnitService, detail: dict) -> None:
             else:
                 what = f"rev {r['revision']['label']} ({r['revision']['state_name']})"
             src = "standard" if r["source"] == "standard" else f"this unit, event {r['event']}"
-            notes = "; ".join(flags[f] + (f" (rev {r['released']['label']})" if f == "newer-released" and r["released"] else "")
+            notes = "; ".join(f"from {r['foreign']['name'] or r['foreign']['workspace']}'s workspace, kept here as a reference"
+                              if f == "foreign" else
+                              flags[f] + (f" (rev {r['released']['label']})" if f == "newer-released" and r["released"] else "")
                               for f in r["flags"])
             out.write(f"    {name:<16} {what:<28} {src}{'   ! ' + notes if notes else ''}\n")
     if detail.get("changes"):
@@ -369,6 +399,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
             return _check_pack(a, out)
         if a.cmd == "pack":                          # put together on a read-only handle, then recorded
             return _make_pack(a, out)
+        if a.cmd == "transfer":                      # the same: put together, then recorded
+            return _transfer(a, out)
         with Workspace.open(Path(a.workspace), writable=writable) as ws:
             svc = service_for(ws)
             return _dispatch(a, ws, svc, out)
@@ -398,10 +430,23 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
     if cmd in ("show", "history"):
         unit = svc.resolve(a.ref)
         if cmd == "history":
+            from . import history as H, transfer
             detail = query.unit_detail(svc, unit)
+            came = H.receipts(svc.events(unit["id"]))
+            # what other workspaces recorded before it came here: the history the latest receipt brought (section 16)
+            before = [c for c in (transfer.read_history(ws, came[-1]["history"])["custodians"] if came else [])
+                      if c["workspace"] != ws.id]          # its own earlier record is the start of what follows
             if a.json:
-                out.write(json.dumps(detail["history"], indent=1, ensure_ascii=False) + "\n")
+                out.write(json.dumps(detail["history"] if not before else
+                                     {"before": before, "here": detail["history"]}, indent=1, ensure_ascii=False) + "\n")
                 return 0
+            for c in before:
+                out.write(f"recorded in {c['name'] or c['workspace']}, before it came here:\n")
+                for e in c["history"]:
+                    out.write(f"{e['n']:>3} {e['time']} {e['effective'] or '':<10} {e['basis']:<8} {e['summary']}"
+                              f"{' (VOID)' if e['voided'] else ''}\n")
+            if before:
+                out.write("recorded here:\n")
             for e in detail["history"]:
                 out.write(f"{e['n']:>3} {e['time']} {e['effective'] or '':<10} {e['basis']:<8} {e['summary']}"
                           f"{' (VOID)' if e['voided'] else ''}\n")
@@ -423,6 +468,17 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
         return 1 if problems else 0
     if cmd == "where-used":
         return _where_used(a, svc, out)
+    if cmd == "receive":
+        return _receive(a, ws, svc, out)
+    if cmd == "transfer-pack":
+        from . import transfer
+        made = transfer.write_again(svc, a.ref, Path(a.folder))
+        if a.json:
+            out.write(json.dumps(made, indent=1, ensure_ascii=False) + "\n")
+        else:
+            out.write(f"the transfer pack of {made['unit']} for {made['to']}, as it was issued, in {made['path']}: "
+                      f"{made['files']} file(s)\n")
+        return 0
     if cmd == "packs":
         unit = svc.resolve(a.ref)
         rows = svc.packs(unit["id"])
@@ -819,6 +875,54 @@ def _make_pack(a: argparse.Namespace, out) -> int:
     out.write("  recorded in its history as issued" + (" (the workspace finishes recording it when next opened for writing)"
                                                       if made["pending"] else "")
               + (f"; signed with the key {made['key']}\n" if made["signed"] else "; not signed\n"))
+    return 0
+
+
+def _transfer(a: argparse.Namespace, out) -> int:
+    from . import transfer
+    with Workspace.open(Path(a.workspace)) as ws:
+        draft = transfer.build(service_for(ws), a.ref, Path(a.folder), to=a.to,
+                               sign_with=Path(a.sign_with) if a.sign_with else None)
+    with draft:
+        with Workspace.open(Path(a.workspace), writable=True) as ws:
+            made = transfer.issue(service_for(ws), draft)
+    if a.json:
+        out.write(json.dumps(made, indent=1, ensure_ascii=False) + "\n")
+        return 0
+    others = made["units"][1:]
+    out.write(f"transfer pack of {made['unit']} for {made['to']} in {made['path']} (its handover pack {made['pack']}): "
+              f"{made['files']} file(s), {made['pdfs']} PDF(s)" + (f"; with {', '.join(others)} fitted in it" if others else "")
+              + "\n")
+    for m in made["missing"]:
+        out.write(f"  not included: {m['document']} rev {m['revision']}: {m['missing']}\n")
+    out.write(f"  recorded here as transferred: {'they take' if others else 'it takes'} no more actions in this workspace"
+              + (" (the workspace finishes recording it when next opened for writing)" if made["pending"] else "")
+              + (f"; signed with the key {made['key']}\n" if made["signed"] else "; not signed\n")
+              + "  the workspace that keeps it now records it with: revisionworx unit receive FOLDER\n")
+    return 0
+
+
+def _receive(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> int:
+    from .. import sshsig
+    from . import transfer
+    key = a.fingerprint
+    if a.key:
+        try:
+            key = sshsig.parse_public_key(Path(a.key).read_text("utf-8")).fingerprint
+        except sshsig.SignatureError as exc:
+            raise ValidationError(f"{a.key}: {exc}") from None
+    got = transfer.receive(svc, Path(a.folder), key=key)
+    if a.json:
+        out.write(json.dumps(got, indent=1, ensure_ascii=False) + "\n")
+        return 0
+    who = got["from"]["name"] or got["from"]["workspace"]
+    out.write(("already received: " if got["already"] else "received: ") + ", ".join(got["units"]) + f" from {who}"
+              + (f", signed with the key {got['key']}" if got["signed"] else ", NOT SIGNED") + "\n")
+    if got["signed"] and not key:
+        out.write("anyone can make a key: next time give the sender's key with --key, or compare this one with theirs\n")
+    if not got["signed"]:
+        out.write(f"the pack is whole, but nothing shows it came from {who}: check that another way\n")
+    out.write("the revisions they use stay that workspace's: kept here as references, with their PDFs\n")
     return 0
 
 

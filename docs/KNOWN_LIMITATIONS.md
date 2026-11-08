@@ -73,6 +73,11 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
 - **Signing packs:** Ed25519 keys only (no RSA or ECDSA, so no `ecdsa-sk` on older YubiKeys); from the command line only, with
   OpenSSH's ssh-keygen installed; a lost or stolen key can't be revoked offline. Signing with a real YubiKey hasn't been tried;
   with a software key it runs in CI on Linux and Windows (docs/UNITS.md section 13.1).
+- **Transfers can't be cancelled, and the receiver keeps only PDFs.** Once a transfer pack exists, the unit is the receiving
+  workspace's: the source takes it back only by receiving it back. The receiver keeps each revision the unit uses as a
+  reference with its PDF, not the native file, and can't know whether the source has released a newer one. Build standards,
+  engineering-change compliance and deviations don't become the receiver's records (they stay in the history). Not tried
+  between two companies' computers (docs/UNITS.md section 16, ADR-031).
 - **An engineering change reaches units through a decision someone records** (`unit change decide`), once the ECO is
   implemented. The candidates are worked out from each unit's recorded configuration; a unit whose configuration isn't recorded
   has to be named. A retrofit's document revisions move automatically; parts it changes are recorded with `unit fit` and

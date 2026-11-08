@@ -256,11 +256,15 @@ def _pdfs(ws, rows: list[dict], folder: Path) -> list[dict]:
             continue
         item = {"document": row["document"]["number"] or row["document"]["id"], "title": row["document"]["title"],
                 "revision": rev["label"], "revision_id": rev["id"], "file": None, "sha256": None, "missing": ""}
-        derivative = derivatives.get(ws, rev["id"])
-        rec = ws.get("revision", rev["id"]) or {}
-        sha = derivative["sha256"] if derivative else (rec.get("sha256") if derivatives.native_is_pdf(ws, rec) else None)
+        if row.get("foreign"):                       # from another workspace: the PDF kept when the unit was received
+            sha = row["foreign"]["pdf"] or None
+        else:
+            derivative = derivatives.get(ws, rev["id"])
+            rec = ws.get("revision", rev["id"]) or {}
+            sha = derivative["sha256"] if derivative else (rec.get("sha256") if derivatives.native_is_pdf(ws, rec) else None)
         if not sha:
-            item["missing"] = "no PDF is attached to this revision"
+            item["missing"] = ("no PDF came with it from " + (row["foreign"]["name"] or "the workspace it came from")
+                               if row.get("foreign") else "no PDF is attached to this revision")
         else:
             name = _file_name(f"{item['document']} rev {item['revision']}", used)
             try:
@@ -457,6 +461,10 @@ def _in_register(svc, record: dict | None, sums: str) -> dict:
     if later:
         out["newer"] = {"pack": later[-1]["pack"], "issued": later[-1]["time"]}
         said += f"; pack {later[-1]['pack']} has been issued since ({later[-1]['time'][:10]})"
+    gone = H.transferred(svc.events(unit["id"]))
+    if gone is not None and gone["pack"] == sums:     # the transfer pack (section 16)
+        out["transferred_to"] = gone["to"]
+        said += f", as the transfer of the unit to {gone['to']}, which keeps its record now"
     return {**out, "state": "issued", "message": said}
 
 
@@ -499,6 +507,13 @@ def render(record: dict) -> str:
                f'issues.{as_of} <b>{SUMS}</b> lists the SHA-256 of every file, so anyone can check that nothing is missing '
                f'or changed (<code>sha256sum -c {SUMS}</code>, or <code>revisionworx unit check-pack FOLDER</code>), and '
                f'{company} can confirm from its record that it issued this pack and that it is still in effect.{sig}</p>')
+    if record.get("transfer"):
+        t = record["transfer"]
+        more = f", with the {t['units'] - 1} unit{'s' if t['units'] > 2 else ''} fitted in it" if t.get("units", 1) > 1 else ""
+        out.append(f'<p class="note"><b>Transferred.</b> {company} handed {e(u["label"])}{e(more)} over to {e(t["to"])} with '
+                   f'this pack. From now on its record is kept there, not by {company}. <b>transfer.json</b> and the '
+                   'histories in <b>history</b> are for the workspace that receives it (<code>revisionworx unit receive '
+                   'FOLDER</code>).</p>')
 
     out.append("<h2>Identity</h2><table><tr><th>Kind</th><th>Value</th><th>Issued by</th><th></th></tr>")
     for i in u["identifiers"]:
@@ -541,6 +556,8 @@ def render(record: dict) -> str:
             pdf = (f'<a href="{quote(p["file"])}">open</a>' if p.get("file")
                    else f'<span class="flag">not included</span>: {e(p.get("missing", ""))}')
             notes = [_FLAGS[f] for f in r.get("flags", []) if f in _FLAGS]
+            if r.get("foreign"):
+                notes.append(f'kept from {r["foreign"]["name"] or "another workspace"}, read-only')
             if "newer-released" in r.get("flags", []) and r.get("released"):
                 notes.append(f'revision {r["released"]["label"]} is released; this unit has {rev["label"]}')
             out.append(f'<tr><td>{e(r["document"]["number"])}</td><td>{e(r["document"]["title"])}</td>'

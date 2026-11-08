@@ -94,7 +94,7 @@ def candidates(svc: UnitService, o: Any, rows: list[dict] | None = None) -> list
     parts, stds, names = _parts(o), _Standards(svc), _names(svc)
     out = []
     for u in svc.units():                            # not merged into another: its identity is the other's now
-        if u["status"] == "scrapped":
+        if u["status"] in ("scrapped", "transferred"):   # nothing more is recorded on either here
             continue
         why = [f"has {names('document', r['document'])} rev {names('revision', r['from'])}" for r in rows
                if applies(u, r["document"], stds) == r["from"]]
@@ -112,8 +112,9 @@ def _scope(svc: UnitService, o: Any, rows: list[dict], rule: str, value: str, na
             u = svc.resolve(ref)
             if u["id"] in seen:
                 continue
-            if u["status"] == "scrapped":
-                raise ValidationError(f"{unit_label(u)} is scrapped")
+            if u["status"] in ("scrapped", "transferred"):
+                raise ValidationError(f"{unit_label(u)} is {u['status']}"
+                                      + (": it is recorded in another workspace now" if u["status"] == "transferred" else ""))
             seen.add(u["id"])
             out.append(u)
         if value:
@@ -317,8 +318,9 @@ def add(svc: UnitService, change: str, unit: str, *, reason: str = "", txid: str
     if eff["kind"] not in ("retrofit-required", "retrofit-optional"):
         raise ValidationError(f"{o.number} is {eff['kind']} effectivity; only a retrofit takes more units")
     u = svc.resolve(unit)
-    if u["status"] == "scrapped":
-        raise ValidationError(f"{unit_label(u)} is scrapped")
+    if u["status"] in ("scrapped", "transferred"):
+        raise ValidationError(f"{unit_label(u)} is {u['status']}"
+                              + (": it is recorded in another workspace now" if u["status"] == "transferred" else ""))
     cid = compliance_id(o.id, u["id"])
     replaying = txid is not None and svc.ws.transaction_outcome(txid)["state"] == "committed"
     if not replaying and svc.ws.get(KIND["compliance"], cid) is not None:

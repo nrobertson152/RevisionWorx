@@ -86,6 +86,14 @@ in effect first, as `{deviation, number, kind ("deviation" | "concession"), titl
 drawings where one in effect allows it is not a mistake in the record. A summary (`units` without `--detail`) is
 `{id, label, class, name, model, status, project, customer, site, location, identifiers, standard, parent, events, rev}`.
 
+**Transferred and received units** (feature `unit-transfers`, docs/UNITS.md section 16). Every `unit` object has `transferred`
+(`{to, event, time, pack, key, units: [{unit, label}]}` or `null`): a transferred unit is recorded in another workspace now,
+and every recording command is refused on it. `received` lists each time this workspace received it: `[{from: {workspace, name},
+event, time, pack, key}]`. A row of `documents` for a document kept from another workspace has the flag `foreign` and
+`foreign: {workspace, name, size, pdf}` (the SHA-256 of the PDF kept here, or `""`); `released` is `null`, because this workspace
+can't know the source's. `fetch DOC --pdf` gives that PDF; without `--pdf` it is `not-found` (the native file stays with the
+source), and `ambiguous` when units here use more than one of its revisions and `--revision` doesn't say which.
+
 **Merged units** (feature `unit-merges`, docs/UNITS.md section 15). Every `unit` object has `merged_into` (`{unit, label, event, time}` or `null`) and
 `merged_from` (`[{unit, label, event, time}]`, oldest first). `aliases` is sorted: the unit's FieldWorx `ast_` ids and the `unt_`
 ids of the units merged into it, the earlier ids a field record or label may name. `units` doesn't list a unit merged into
