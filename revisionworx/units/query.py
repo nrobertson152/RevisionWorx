@@ -10,9 +10,9 @@ from typing import Any, Callable
 
 from .. import documents as D
 from . import history as H
-from .model import (REQUIRED_KINDS, MalformedUnitRecord, NotFound, PERMANENT_SCHEMES, STANDARD_SCHEME, check_date, day_of,
-                    effectivity_digest, is_id, key_id, load_compliance, load_effectivity, load_event, load_key, load_numbering,
-                    load_standard, load_unit, norm, position_key, standard_digest, unit_label)
+from .model import (MERGED, REQUIRED_KINDS, MalformedUnitRecord, NotFound, PERMANENT_SCHEMES, STANDARD_SCHEME, check_date,
+                    day_of, effectivity_digest, is_id, key_id, load_compliance, load_effectivity, load_event, load_key,
+                    load_numbering, load_standard, load_unit, norm, position_key, standard_digest, unit_label)
 from .service import KIND, UnitService
 
 
@@ -151,7 +151,7 @@ def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int |
     names = _Names(svc)
     if on:
         on = day_of(check_date(on, "date"))
-    events = svc.events(unit["id"]) if (history or at or on) else []
+    events = svc.events(unit["id"])
     late: list[int] = []
     shown = unit
     if at:
@@ -176,9 +176,14 @@ def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int |
         "components": [{**c, "label": names("unit", c["unit"]) if c["unit"] else ""}
                        for c in sorted(shown["components"].values(), key=lambda c: norm(c["position"]))],
         "milestones": {k: dict(v) for k, v in shown["milestones"].items()},
-        "notes": shown["notes"], "aliases": [i["value"] for i in shown["identifiers"] if i["scheme"] == "fieldworx"],
+        "notes": shown["notes"],
         "events": dict(shown["events"]), "created": shown["created"], "updated": shown["updated"], "rev": unit.get("_rev", 0),
     }
+    into, merged = H.merged_into(events), H.merged_from(events)
+    out["merged_into"] = None if into is None else {**into, "label": names("unit", into["unit"])}
+    out["merged_from"] = [{**m, "label": names("unit", m["unit"])} for m in merged]
+    out["aliases"] = sorted({i["value"] for i in shown["identifiers"] if i["scheme"] == "fieldworx"}
+                            | {m["unit"] for m in merged})                # earlier ids field records may name
     if docs["standard_problem"]:
         out["problems"] = [docs["standard_problem"]]
     if at or on:
@@ -260,13 +265,15 @@ def units_with_component(svc: UnitService, *, number: str = "", part: str = "", 
     if not (number or part or serial or lot or component):
         raise ValueError("give a part number, part, serial, lot or component")
 
-    def matches(b: dict) -> bool:
-        return all(want == "" or norm(have) == norm(want) for want, have in
-                   ((number, b["number"]), (part, b["part"]), (serial, b["serial"]), (lot, b["lot"]),
-                    (component, b["unit"])))
+    known_as = {component} | {m["unit"] for m in H.merged_from(svc.events(component))} if component else set()
+
+    def matches(b: dict) -> bool:                    # a component merged into another was fitted under its earlier id too
+        return (not component or b["unit"] in known_as) and all(
+            want == "" or norm(have) == norm(want) for want, have in
+            ((number, b["number"]), (part, b["part"]), (serial, b["serial"]), (lot, b["lot"])))
 
     out = []
-    for u in svc.units():
+    for u in (svc.scan()[0] if history else svc.units()):   # history: a unit merged into another was fitted where it was
         if not history:
             for c in u["components"].values():
                 if matches(c):
@@ -357,6 +364,7 @@ def verify(svc: UnitService) -> list[dict]:
     checked: dict = {}                               # a signature on several events of one action is checked once
     signed: dict[str, set] = {}                      # signed field record -> the txids of the actions that cite it
 
+    merges: dict[tuple[str, str], set] = {}         # (duplicate, survivor) -> the units whose history records it
     for uid, u in units.items():
         label = unit_label(u)
         raw = {n: ws.get(KIND["event"], H.event_id(uid, n)) for n in range(1, u["events"]["count"] + 2)}
@@ -374,6 +382,13 @@ def verify(svc: UnitService) -> list[dict]:
                         + (f" ({'; '.join(issues)})" if issues else ""))
             for issue in H.pack_problems(events):
                 problem("pack-register", uid, f"{label}: {issue}")
+            into = H.merged_into(events)
+            if (u["status"] == MERGED) != (into is not None):
+                problem("merge-mismatch", uid, f"{label}: its status and its history disagree about a merge")
+            pairs = [(uid, into["unit"])] if into else []
+            pairs += [(m["unit"], uid) for m in H.merged_from(events)]
+            for dup, survivor in pairs:
+                merges.setdefault((dup, survivor), set()).add(uid)
             for ev in events:
                 wrong = devices.recheck(accounts, ev, checked)
                 if wrong:
@@ -436,6 +451,11 @@ def verify(svc: UnitService) -> list[dict]:
         if len(txids) > 1:
             problem("signature-reused", ref.partition(":")[2] or ref, f"signed field record {ref} is cited by {len(txids)} "
                     "different actions: a field record is accepted once")
+    for (dup, survivor), recorded in sorted(merges.items()):
+        if recorded != {dup, survivor}:                # both halves of a merge are in both histories, or it's damage
+            missing = sorted({dup, survivor} - recorded)
+            problem("merge-mismatch", missing[0] if missing else dup,
+                    f"the merge of {dup} into {survivor} is recorded in only one of their histories")
     _verify_changes(ws, units, standards, problem)
     _verify_deviations(ws, units, problem)
     for nid, rec in ws.list(KIND["numbering"]).items():

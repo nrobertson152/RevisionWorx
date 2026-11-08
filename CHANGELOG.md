@@ -54,6 +54,10 @@ The first release. Everything below is new.
   Signing packs is optional and off by default: an administrator turns it on with the company's Ed25519 key (`unit
   pack-signing on --key COMPANY.pub`), which can live on a YubiKey; packs are then signed with OpenSSH's ssh-keygen
   (`--sign-with`), and anyone can check one with `unit check-pack --key` or with OpenSSH alone.
+- **Two records of one unit.** `revisionworx unit merge DUPLICATE --into UNIT --reason ...` makes two records of the same
+  physical unit one, in one entry: the duplicate's serials, tags and FieldWorx ids move to the unit that stays, and the
+  duplicate takes no more actions. Both histories stay readable; the duplicate's id still finds the unit, for other programs
+  and on FieldWorx labels. Voiding the merge undoes it.
 - **Where used, for other programs.** `revisionworx link where-used` answers what `unit where-used` does: which units use a
   revision or a document, or hold a part number, serial, lot or component, now or ever. Each answer has the unit's status,
   customer, site and location, so a recall put together elsewhere (OpenMeridian tracing a lot, say) knows where every unit is.

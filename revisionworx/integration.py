@@ -181,7 +181,7 @@ def _document_for_path(ws: Workspace, file: Path) -> dict | None:
 
 # ---------------------------------------------------------------------------------------------- commands
 FEATURES = ["units", "unit-changes", "pdf-derivatives", "unit-records", "unit-deviations",        # additive commands since API 1:
-            "field-signatures", "unit-where-used"]                                                # ask before relying on one
+            "field-signatures", "unit-where-used", "unit-merges"]                                 # ask before relying on one
 
 
 def version() -> dict:
@@ -470,8 +470,11 @@ def unit(ref: str, workspace: Path | None = None, at: int | None = None, on: str
     with Workspace.open(loc) as ws:
         svc = _unit_service(ws)
         try:
-            u = svc.resolve(ref)
-            return {"workspace": _ws_summary(ws, loc), "unit": query.unit_detail(svc, u, at=at, on=on)}
+            named, u = svc.resolve(ref), svc.resolve(ref, follow=True)
+            out = {"workspace": _ws_summary(ws, loc), "unit": query.unit_detail(svc, u, at=at, on=on)}
+            if named["id"] != u["id"]:                # an earlier id: the unit it was merged into answers (docs/UNITS.md 15)
+                out["named"] = {"unit": named["id"], "merged_into": u["id"]}
+            return out
         except UnitError as exc:
             raise _unit_error(exc) from None
 
@@ -506,7 +509,7 @@ def where_used(workspace: Path | None = None, *, revision: str = "", document: s
                 rows = query.units_using_document(svc, svc.document_id(document))
             else:
                 rows = query.units_with_component(svc, number=part_number, serial=serial, lot=lot, history=history,
-                                                  component=svc.resolve(component)["id"] if component else "")
+                                                  component=svc.resolve(component, follow=True)["id"] if component else "")
         except UnitError as exc:
             raise _unit_error(exc) from None
         return {"workspace": _ws_summary(ws, loc), "rows": rows, "coverage": WHERE_USED_COVERAGE}
@@ -612,8 +615,9 @@ def _evidence(svc, evidence: Iterable[str], basis: str, field_signature: str, tx
 def _meta_args(svc, effective: str, basis: str, evidence: Iterable[str], reason: str, change: str, field_signature: str = "",
                txid: str = "") -> dict:
     from .units import effect
-    return {"effective": effective, "basis": basis, "evidence": _evidence(svc, evidence, basis, field_signature, txid),
-            "reason": reason, "change": effect.order(svc, change).id if change else ""}
+    items = _evidence(svc, evidence, basis, field_signature, txid) + getattr(svc, "named_as", [])
+    return {"effective": effective, "basis": basis, "evidence": items, "reason": reason,
+            "change": effect.order(svc, change).id if change else ""}
 
 
 def unit_register(*, txid: str, serials: Iterable[str] = (), issuer: str = "", serial_from: str = "", count: int = 1,
@@ -677,7 +681,11 @@ def _one_unit_action(ref: str, txid: str, if_events: int | None, do: Callable[[A
     found: dict = {}
 
     def act(svc) -> list[str]:
-        u = svc.resolve(ref)
+        named, u = svc.resolve(ref), svc.resolve(ref, follow=True)
+        if named["id"] != u["id"]:                   # made against an earlier id: recorded on the survivor, citing it
+            from .units.model import unit_label
+            svc.named_as = [{"kind": "merged-unit", "ref": named["id"],
+                             "label": f"recorded against this earlier id; merged into {unit_label(u)}"[:200]}]
         found["id"] = u["id"]
         if if_events is None:
             do(svc, u)
@@ -703,7 +711,7 @@ def unit_fit(ref: str, position: str, *, txid: str, component: str = "", part_nu
     """Fit something at a position: a part number (with its serial or lot), or a component unit. ``replace`` takes out what is
     there first (``disposition``); without it an occupied position is refused."""
     def do(svc, u: dict) -> None:
-        comp = svc.resolve(component)["id"] if component else ""
+        comp = svc.resolve(component, follow=True)["id"] if component else ""
         svc.install(u["id"], position, number=part_number, component=comp, serial=serial, lot=lot, replace=replace,
                     disposition=disposition, txid=txid,
                     **_meta_args(svc, effective, basis, evidence, reason, change, field_signature, txid))

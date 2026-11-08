@@ -85,6 +85,12 @@ in effect first, as `{deviation, number, kind ("deviation" | "concession"), titl
 drawings where one in effect allows it is not a mistake in the record. A summary (`units` without `--detail`) is
 `{id, label, class, name, model, status, project, customer, site, location, identifiers, standard, parent, events, rev}`.
 
+**Merged units** (feature `unit-merges`, docs/UNITS.md section 15). Every `unit` object has `merged_into` (`{unit, label, event, time}` or `null`) and
+`merged_from` (`[{unit, label, event, time}]`, oldest first). `aliases` is sorted: the unit's FieldWorx `ast_` ids and the `unt_`
+ids of the units merged into it, the earlier ids a field record or label may name. `units` doesn't list a unit merged into
+another. `unit REF`, given a merged unit's id, answers the unit it was merged into and adds `named: {unit, merged_into}`; an action
+recorded through `link` against it is recorded on that unit, with evidence `{kind: "merged-unit", ref: <the id named>}`.
+
 **`file.state`:**
 - `unchanged`: the file is identical to the latest revision.
 - `modified`: edited while checked out.

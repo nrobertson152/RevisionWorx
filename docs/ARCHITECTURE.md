@@ -895,7 +895,8 @@ deviations and concessions (`docs/UNITS.md` section 12: written once with the un
 signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: where-used for other programs
 (`link where-used`, done); journal checkpoints (ADR-022's revision of 2026-11-08 and ADR-029, done); handover packs
 (`docs/UNITS.md` section 13, done), recorded in the unit's history as issued (ADR-030, the Director's decision at gate 4, done);
-signing packs, optional and off by default (ADR-030, done); transfer between workspaces and merged identities (not started).
+signing packs, optional and off by default (ADR-030, done); merged identities (`docs/UNITS.md` section 15, done); transfer
+between workspaces (not started).
 
 **Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
 `unit verify` detects but the journal rules don't refuse (the same holds for deviations, whose digest `verify` checks); making these

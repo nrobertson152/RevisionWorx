@@ -92,9 +92,8 @@ def candidates(svc: UnitService, o: Any, rows: list[dict] | None = None) -> list
     affected parts fitted: ``[{"unit": record, "why": [text]}]``, by label."""
     rows = order_rows(o) if rows is None else rows
     parts, stds, names = _parts(o), _Standards(svc), _names(svc)
-    units, _problems = svc.scan()
     out = []
-    for u in units:
+    for u in svc.units():                            # not merged into another: its identity is the other's now
         if u["status"] == "scrapped":
             continue
         why = [f"has {names('document', r['document'])} rev {names('revision', r['from'])}" for r in rows

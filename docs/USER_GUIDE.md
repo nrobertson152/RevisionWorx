@@ -211,6 +211,14 @@ drawings, record the approval once:
   overdue` lists units with a temporary one past its end date (and exits 1 if there is one). One more unit:
   `unit deviation add DEV-0001 NH-26-0009 --reason ...`. `unit show` and the Units window list a unit's deviations.
 
+**Two records of one machine.** After an import, the same pump can be in the register twice: once under the customer's tag,
+once under the serial a work order gave it. `revisionworx unit merge P-101 --into NH-26-0042 --reason "same pump: the tag is on
+its casting"` makes them one: P-101's tag and FieldWorx id move to NH-26-0042, and the old record takes nothing more ("merged
+into NH-26-0042: record it there"). Both histories stay as they were, and labels printed with the old record's id still find the
+pump. Something fitted in the duplicate, the duplicate fitted somewhere, or a change or deviation recorded on it has to be dealt
+with first, and so do two different serials. A wrong merge is undone by voiding it: `unit void NH-26-0042 N --reason ...`, where N
+is the merge in its history.
+
 **Handover packs.** When a machine goes to its customer, `revisionworx unit pack NH-26-0001 "NH-26-0001 handover pack"` (or
 **Handover pack…** in the Units window) saves its record as a folder anyone can open: a page to read and print, the PDF of each
 revision that applies to it, its record as `unit.json`, and `SHA256SUMS`. `--on 2026-11-01` makes it as the unit was known on

@@ -17,7 +17,9 @@ from typing import Any, Iterable
 SCHEMA = 1
 
 CLASSES = ("product", "component", "instrument", "tool")
-STATUSES = ("planned", "in-build", "built", "in-service", "out-of-service", "retired", "scrapped")
+STATUSES = ("planned", "in-build", "built", "in-service", "out-of-service", "retired", "scrapped")   # what a person sets
+MERGED = "merged"                                        # a duplicate's status once it is merged into another (section 15)
+RECORD_STATUSES = STATUSES + (MERGED,)
 BASES = ("verified", "reported", "declared", "legacy")
 MILESTONES = ("built", "shipped", "installed", "commissioned", "decommissioned")
 DISPOSITIONS = ("scrapped", "returned", "repair", "stock", "reused", "unknown")
@@ -27,9 +29,11 @@ STANDARD_SCHEME = "standard"                             # a build standard's nu
 UPDATABLE = ("class", "name", "model", "project", "customer", "site", "location", "notes")
 EVENT_TYPES = ("unit.registered", "unit.updated", "identifier.added", "identifier.retired", "identifier.removed",
                "status.changed", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-               "component.removed", "parent.set", "note", "verified", "void", "pack.issued", "pack.withdrawn")
+               "component.removed", "parent.set", "note", "verified", "void", "pack.issued", "pack.withdrawn", "unit.merged",
+               "unit.absorbed")
 VOIDABLE = ("unit.updated", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-            "component.removed", "note", "verified")   # a pack that was issued stays issued: it is withdrawn, never voided
+            "component.removed", "note", "verified", "unit.merged", "unit.absorbed")
+# a pack that was issued stays issued: it is withdrawn, never voided
 
 # Engineering changes reaching units (docs/UNITS.md section 10)
 EFFECTIVITY_KINDS = ("production", "retrofit-required", "retrofit-optional", "unit", "documentation")
@@ -415,7 +419,7 @@ def load_unit(record: Any) -> dict:
         if not is_id("unit", r["id"]):
             raise MalformedUnitRecord(f"{what}: bad id")
         check_choice(r["class"], CLASSES, "class")
-        check_choice(r["status"], STATUSES, "status")
+        check_choice(r["status"], RECORD_STATUSES, "status")
         check_model(r["model"])
         for k in ("name", "customer", "site", "location", "notes", "created", "updated"):
             _str(r[k], f"{what} {k}")
@@ -499,6 +503,8 @@ BODY_KEYS = {
     "void": {"events"},
     "pack.issued": {"pack", "sums", "as_of", "key"},
     "pack.withdrawn": {"pack"},
+    "unit.merged": {"into", "identifiers"},
+    "unit.absorbed": {"unit", "identifiers"},
 }
 
 
@@ -520,6 +526,13 @@ def _check_body(t: str, b: dict, what: str) -> None:
         if not isinstance(b["events"], list) or not b["events"] or not all(
                 isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in b["events"]):
             raise MalformedUnitRecord(f"{what}: a {t} event names event numbers")
+    elif t in ("unit.merged", "unit.absorbed"):
+        other = b["into"] if t == "unit.merged" else b["unit"]
+        fields = {"scheme", "issuer", "value"} | ({"active"} if t == "unit.absorbed" else set())
+        if not is_id("unit", other) or not isinstance(b["identifiers"], list) or not all(
+                isinstance(i, dict) and set(i) == fields and all(isinstance(i[k], str) for k in ("scheme", "issuer", "value"))
+                and isinstance(i.get("active", True), bool) for i in b["identifiers"]):
+            raise MalformedUnitRecord(f"{what}: a {t} event has the wrong shape")
     elif t in ("pack.issued", "pack.withdrawn"):
         if isinstance(b["pack"], bool) or not isinstance(b["pack"], int) or b["pack"] < 1:
             raise MalformedUnitRecord(f"{what}: a {t} event names a handover pack by its number")
