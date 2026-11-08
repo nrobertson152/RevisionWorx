@@ -63,9 +63,11 @@ NFS works, more slowly: a client can take as long as its attribute cache lasts t
 
 ## The unit register (new, docs/UNITS.md)
 
-- **The Units window only reads.** It finds units and shows their drawings, changes due and history; registering units,
-  recording changes and deciding effectivity are done with `revisionworx unit` (and `revisionworx link units` for other
-  programs).
+- **The Units window only reads.** It finds units, shows their drawings, changes due and history, and makes handover packs;
+  registering units, recording changes and deciding effectivity are done with `revisionworx unit` (and `revisionworx link
+  units` for other programs).
+- **Handover packs aren't signed.** `SHA256SUMS` shows that a pack is whole, not who made it; anyone can make a folder that
+  checks. Who vouches for a pack is still to be decided (docs/UNITS.md section 13).
 - **An engineering change reaches units through a decision someone records** (`unit change decide`), once the ECO is
   implemented. The candidates are worked out from each unit's recorded configuration; a unit whose configuration isn't recorded
   has to be named. A retrofit's document revisions move automatically; parts it changes are recorded with `unit fit` and

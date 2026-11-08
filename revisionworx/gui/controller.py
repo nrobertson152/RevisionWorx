@@ -531,6 +531,13 @@ class Controller:
             svc = service_for(ws)
             return query.unit_detail(svc, svc.unit(unit_id))
 
+    def unit_pack(self, unit_id: str, folder: Path) -> dict:
+        """A handover pack for one unit in the new folder ``folder`` (docs/UNITS.md section 13). Reads only: nothing is
+        written to the workspace."""
+        from ..units import pack, service_for
+        with self._read() as ws:
+            return pack.make(service_for(ws), unit_id, Path(folder))
+
     def state_names(self) -> dict[str, str]:
         """Lifecycle state id -> display name (the workspace's lifecycle)."""
         with self._read() as ws:
