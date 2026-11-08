@@ -124,7 +124,7 @@ def _apply_change(s: dict, ev: dict) -> list[str]:
             s["standard"]["basis"], hit = "verified", True
         if not hit:
             return [f"event {n} verifies events {sorted(named)}, which set nothing the unit still has"]
-    return []                                           # note, void: history only
+    return []                                           # note, void, pack.*: history only
 
 
 def voided_by(events: list[dict]) -> set[int]:
@@ -143,6 +143,49 @@ def reduce(events: list[dict], voided: set[int] | None = None) -> tuple[dict | N
         state, p = apply(state, ev, voids)
         problems += p
     return state, problems
+
+
+def packs_in(events: list[dict]) -> list[dict]:
+    """The handover packs a history records as issued, in the order they were issued (docs/UNITS.md section 13): number,
+    event, time, who, the date it shows the unit on, the SHA-256 of its SHA256SUMS, the key that signed it, and its
+    withdrawal if there is one. ``voided`` is true for one a void names: no RevisionWorx writes that (a pack is withdrawn,
+    never voided), so it is never vouched for."""
+    voids = voided_by(events)
+    out: list[dict] = []
+    for e in events:
+        b = e["body"]
+        if e["type"] == "pack.issued":
+            out.append({"pack": b["pack"], "event": e["n"], "time": e["time"], "actor": e["actor"], "as_of": b["as_of"],
+                        "sums": b["sums"], "key": b["key"], "withdrawn": None, "voided": e["n"] in voids})
+        elif e["type"] == "pack.withdrawn":
+            for p in out:
+                if p["pack"] == b["pack"] and p["withdrawn"] is None:
+                    p["withdrawn"] = {"event": e["n"], "time": e["time"], "actor": e["actor"], "reason": e["reason"]}
+    return out
+
+
+def pack_problems(events: list[dict]) -> list[str]:
+    """What is wrong with the packs a history records: they are numbered 1, 2, 3 in the order issued, a withdrawal names a
+    pack issued before it and not yet withdrawn, and no void names a pack event. RevisionWorx never writes any of these."""
+    problems: list[str] = []
+    issued: set[int] = set()
+    withdrawn: set[int] = set()
+    by_n = {e["n"]: e for e in events}
+    for e in events:
+        t, b = e["type"], e["body"]
+        if t == "pack.issued":
+            if b["pack"] != len(issued) + 1 or b["pack"] in issued:
+                problems.append(f"event {e['n']} issues handover pack {b['pack']}, but the next pack is {len(issued) + 1}")
+            issued.add(b["pack"])
+        elif t == "pack.withdrawn":
+            if b["pack"] not in issued or b["pack"] in withdrawn:
+                problems.append(f"event {e['n']} withdraws handover pack {b['pack']}, which isn't issued and in effect")
+            withdrawn.add(b["pack"])
+        elif t == "void":
+            for n in b["events"]:
+                if by_n.get(n, {}).get("type", "").startswith("pack."):
+                    problems.append(f"event {e['n']} voids event {n}, a handover pack event, which is never voided")
+    return problems
 
 
 def after(events: list[dict], n: int) -> dict | None:
@@ -252,8 +295,13 @@ def summary(ev: dict, name: Callable[[str, str], str] = lambda kind, rid: rid) -
         return "verified event " + ", ".join(str(n) for n in b["events"]) + cited
     if t == "void":
         return "voided event " + ", ".join(str(n) for n in b["events"])
+    if t == "pack.issued":
+        return (f"handover pack {b['pack']} issued" + (f", as known on {b['as_of']}" if b["as_of"] else "")
+                + (f", signed with key {b['key']}" if b["key"] else ""))
+    if t == "pack.withdrawn":
+        return f"handover pack {b['pack']} withdrawn"
     return t  # pragma: no cover
 
 
-__all__ = ["EVENT_DOMAIN", "after", "apply", "event_day", "event_digest", "make_event", "on", "reduce", "summary",
-           "unit_label", "verify_chain", "voided_by"]
+__all__ = ["EVENT_DOMAIN", "after", "apply", "event_day", "event_digest", "make_event", "on", "pack_problems", "packs_in",
+           "reduce", "summary", "unit_label", "verify_chain", "voided_by"]

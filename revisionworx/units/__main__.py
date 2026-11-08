@@ -14,8 +14,10 @@
     fit REF POSITION (--component REF | --part-number PN) [--serial S] [--lot L] [--replace [--disposition D]]
     remove REF POSITION [--disposition D]                               void REF N [N ...] --reason R
     history REF                                                         where-used ...        verify
-    pack REF FOLDER [--on DATE]           (a handover pack: a page, the PDFs that apply, the record, SHA256SUMS)
-    check-pack FOLDER                     (is a handover pack whole? needs no workspace)
+    pack REF FOLDER [--on DATE]           (a handover pack: a page, the PDFs that apply, the record, SHA256SUMS; recorded
+                                           in the unit's history as issued)
+    packs REF                             withdraw-pack REF N --reason R
+    check-pack FOLDER                     (is a handover pack whole? needs no workspace; with one, did it issue the pack?)
     numbering new NAME --pattern 'NH-{yy}-{seq:4}' [--issuer I]       numbering list | numbering next NAME
     new --serial-from NAME ...  (the next serial of a numbering, taken in the same entry)
     change candidates|status ECO          change decide ECO --kind K [--standard STD] [--scope RULE --value V | --unit REF]
@@ -44,7 +46,7 @@ from .model import (BASES, CLASSES, DEVIATION_KINDS, DISPOSITIONS, EFFECTIVITY_K
                     STATUSES, UnitError, ValidationError, parse_evidence, unit_label)
 from .service import UnitService, service_for
 
-READS = {"list", "show", "history", "where-used", "verify", "export", "compliance", "pack"}
+READS = {"list", "show", "history", "where-used", "verify", "export", "compliance", "packs"}
 CHANGE_READS = {"candidates", "status"}
 DEVIATION_READS = {"list", "show", "overdue"}
 
@@ -158,11 +160,17 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("verify", help="check every unit's history and references"); s.add_argument("--json", action="store_true")
     s = sub.add_parser("pack", help="a handover pack for one unit: a page to read and print, the PDFs of the revisions that "
-                       "apply to it, its record, and the SHA-256 of every file")
+                       "apply to it, its record, and the SHA-256 of every file. It is recorded in the unit's history "
+                       "as issued, with its number")
     s.add_argument("ref"); s.add_argument("folder", help="a new folder for the pack")
     s.add_argument("--on", default="", help="the unit as known on this date (default: now)")
     s.add_argument("--json", action="store_true")
-    s = sub.add_parser("check-pack", help="is a handover pack whole? (needs no workspace)")
+    s = sub.add_parser("packs", help="the handover packs issued for a unit")
+    s.add_argument("ref"); s.add_argument("--json", action="store_true")
+    s = sub.add_parser("withdraw-pack", help="record that an issued handover pack is not to be relied on any more")
+    s.add_argument("ref"); s.add_argument("number", type=int, help="the pack's number"); s.add_argument("--reason", required=True)
+    s = sub.add_parser("check-pack", help="is a handover pack whole? Needs no workspace; given the one it came from "
+                       "(revisionworx -w FOLDER unit check-pack ...), also whether that workspace issued it")
     s.add_argument("folder"); s.add_argument("--json", action="store_true")
 
     ch = sub.add_parser("change", help="which units an engineering change reaches, and where each one stands"
@@ -325,13 +333,15 @@ def _units(svc: UnitService, refs: list[str]) -> list[str]:
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     a = build_parser(prog or "python -m revisionworx.units").parse_args(argv)
     out = sys.stdout
-    if a.cmd == "check-pack":                        # a pack is checked anywhere, with no workspace
-        return _check_pack(a, out)
     sub = getattr(a, "sub", None)
     writable = a.cmd not in READS and not (a.cmd in ("standard", "numbering") and sub in ("list", "show", "next")) and \
         not (a.cmd == "import" and a.dry_run) and not (a.cmd == "change" and sub in CHANGE_READS) and \
         not (a.cmd == "deviation" and sub in DEVIATION_READS)
     try:
+        if a.cmd == "check-pack":                    # a pack is checked anywhere; the workspace '-' is none
+            return _check_pack(a, out)
+        if a.cmd == "pack":                          # put together on a read-only handle, then recorded
+            return _make_pack(a, out)
         with Workspace.open(Path(a.workspace), writable=writable) as ws:
             svc = service_for(ws)
             return _dispatch(a, ws, svc, out)
@@ -386,16 +396,24 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
         return 1 if problems else 0
     if cmd == "where-used":
         return _where_used(a, svc, out)
-    if cmd == "pack":
-        from . import pack
-        made = pack.make(svc, a.ref, Path(a.folder), on=a.on)
+    if cmd == "packs":
+        unit = svc.resolve(a.ref)
+        rows = svc.packs(unit["id"])
         if a.json:
-            out.write(json.dumps(made, indent=1, ensure_ascii=False) + "\n")
+            out.write(json.dumps({"unit": unit_label(unit), "packs": rows}, indent=1, ensure_ascii=False) + "\n")
             return 0
-        out.write(f"handover pack for {made['unit']} in {made['path']}: {made['files']} file(s), {made['pdfs']} PDF(s)\n")
-        for m in made["missing"]:
-            out.write(f"  not included: {m['document']} rev {m['revision']}: {m['missing']}\n")
-        out.write("  not signed: it shows that it is whole, not who made it\n")
+        for r in rows:
+            who = r["actor"].get("name") or r["actor"].get("account") or r["actor"].get("user") or ""
+            shows = f"as known on {r['as_of']}" if r["as_of"] else "as it stood then"
+            state = "in effect" if r["withdrawn"] is None else \
+                f"withdrawn {r['withdrawn']['time'][:10]}: {r['withdrawn']['reason']}"
+            out.write(f"pack {r['pack']:<3} {r['time'][:10]} {who:<20} {shows:<26} {state}\n")
+        out.write(f"{len(rows)} handover pack(s) of {unit_label(unit)}\n")
+        return 0
+    if cmd == "withdraw-pack":
+        unit = svc.resolve(a.ref)
+        svc.withdraw_pack(unit["id"], a.number, a.reason)
+        out.write(f"handover pack {a.number} of {unit_label(unit)} withdrawn: checking it now says so\n")
         return 0
     if cmd == "export":
         from ..bom.fileio import write_file
@@ -742,19 +760,53 @@ def _where_used(a: argparse.Namespace, svc: UnitService, out) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def _make_pack(a: argparse.Namespace, out) -> int:
+    """Put the pack together on a read-only handle (exporting PDFs can take a while, and nobody need wait for it), then record
+    it on a writable one, which refuses if anything was recorded on the unit in between. Nothing is left if it isn't."""
+    from . import pack
+    with Workspace.open(Path(a.workspace)) as ws:
+        draft = pack.build(service_for(ws), a.ref, Path(a.folder), on=a.on)
+    with draft:
+        with Workspace.open(Path(a.workspace), writable=True) as ws:
+            made = pack.issue(service_for(ws), draft)
+    if a.json:
+        out.write(json.dumps(made, indent=1, ensure_ascii=False) + "\n")
+        return 0
+    out.write(f"handover pack {made['pack']} of {made['unit']} in {made['path']}: {made['files']} file(s), "
+              f"{made['pdfs']} PDF(s)\n")
+    for m in made["missing"]:
+        out.write(f"  not included: {m['document']} rev {m['revision']}: {m['missing']}\n")
+    out.write("  recorded in its history as issued" + (" (the workspace finishes recording it when next opened for writing)"
+                                                      if made["pending"] else "") + "; not signed\n")
+    return 0
 
 
 def _check_pack(a: argparse.Namespace, out) -> int:
     from . import pack
-    report = pack.check(Path(a.folder))
+    if a.workspace == "-":
+        report = pack.check(Path(a.folder))
+    else:
+        with Workspace.open(Path(a.workspace)) as ws:
+            report = pack.check(Path(a.folder), service_for(ws))
     if a.json:
         out.write(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
-    else:
-        for problem in report["problems"]:
+        return 0 if report["ok"] else 1
+    reg = report["register"]
+    for problem in report["problems"]:
+        if reg is None or problem != reg["message"]:
             out.write(f"{problem}\n")
-        what = f"the handover pack of {report['unit']}" if report["unit"] else "this folder"
-        out.write(f"{what}: {report['files']} file(s), " + ("whole" if report["ok"] else f"{len(report['problems'])} "
-                                                             "problem(s)") + "; not signed\n")
+    what = f"the handover pack of {report['unit']}" if report["unit"] else "this folder"
+    if report["pack"]:
+        what += f" (pack {report['pack']})"
+    whole = len(report["problems"]) - (1 if reg is not None and reg["state"] != "issued" else 0)
+    out.write(f"{what}: {report['files']} file(s), " + ("whole" if not whole else f"{whole} problem(s)") + "; not signed\n")
+    if reg is not None:
+        out.write(("issued: " if reg["state"] == "issued" else "NOT CONFIRMED: ") + reg["message"] + "\n")
+    elif report["pack"]:
+        out.write("not checked against the register of the workspace that made it: to confirm it issued this pack, run "
+                  "'revisionworx -w WORKSPACE unit check-pack FOLDER'\n")
     return 0 if report["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

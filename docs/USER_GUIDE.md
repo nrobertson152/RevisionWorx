@@ -214,9 +214,18 @@ drawings, record the approval once:
 **Handover packs.** When a machine goes to its customer, `revisionworx unit pack NH-26-0001 "NH-26-0001 handover pack"` (or
 **Handover pack…** in the Units window) saves its record as a folder anyone can open: a page to read and print, the PDF of each
 revision that applies to it, its record as `unit.json`, and `SHA256SUMS`. `--on 2026-11-01` makes it as the unit was known on
-that date. Whoever receives it can check nothing is missing or changed with `sha256sum -c SHA256SUMS`, or
-`revisionworx unit check-pack FOLDER`. A revision with no PDF attached is listed as not included, never replaced by another
-revision's. Packs aren't signed yet: they show that they are whole, not who made them.
+that date. A revision with no PDF attached is listed as not included, never replaced by another revision's.
+- **Each pack is recorded.** Packs of a unit are numbered 1, 2, 3, and making one records it in the unit's history as issued.
+  It is recorded only if nothing was recorded on the unit while it was being put together; if something was, nothing is made:
+  make it again. `unit packs NH-26-0001` lists them.
+- **Checking a pack.** Whoever receives it can check that nothing is missing or changed with `sha256sum -c SHA256SUMS`, or
+  `revisionworx unit check-pack FOLDER`. To confirm that your company issued it, and that it is still in effect, check it
+  against the workspace: `revisionworx -w WORKSPACE unit check-pack FOLDER`. That answers *issued* (by whom and when, and whether a
+  newer pack has been issued since), *withdrawn*, or *not issued*, which is what a pack someone changed and made whole again
+  is.
+- **Withdrawing a pack.** `unit withdraw-pack NH-26-0001 2 --reason "sent to the wrong customer"`. The pack stays recorded,
+  and checking it says it was withdrawn, when, by whom and why.
+- Packs aren't signed: someone outside the company confirms one by asking you.
 
 ## Troubleshooting
 

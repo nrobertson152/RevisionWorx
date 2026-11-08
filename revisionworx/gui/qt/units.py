@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The Units window (ADR-025): find a unit, see the drawings that apply to it, the engineering changes due on it, what is fitted
-in it and its history, and make its handover pack. Read-only: units are recorded with ``revisionworx unit``
-(docs/USER_GUIDE.md)."""
+in it and its history, and make its handover pack. Units are recorded with ``revisionworx unit`` (docs/USER_GUIDE.md); the
+one thing this window records is a handover pack, which goes in the unit's history as issued when it is made (ADR-030)."""
 from __future__ import annotations
 
 import html
@@ -16,6 +16,10 @@ from ..viewmodels import UNIT_COLUMNS, unit_row, unit_sections
 
 EMPTY = ("No units are registered in this workspace yet. Register them with 'revisionworx unit new', or import a "
          "register with 'revisionworx unit import'.")
+PACK_TIP = ("Save this unit's record as a folder anyone can open: a page to read and print, the PDFs of the revisions that "
+            "apply to it, and a checksum of every file. The pack is numbered and recorded in the unit's history as issued, "
+            "so this workspace can later confirm that it issued it.")
+PACK_TIP_READ_ONLY = "Handover packs are recorded in the unit's history when they are made, and this workspace is read-only now."
 
 
 class UnitsWindow(QDialog):
@@ -61,9 +65,7 @@ class UnitsWindow(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
         buttons.rejected.connect(self.reject)
         self.pack_button = buttons.addButton("Handover pack…", QDialogButtonBox.ButtonRole.ActionRole)
-        self.pack_button.setToolTip("Save this unit's record as a folder anyone can open: a page to read and print, the PDFs "
-                                    "of the revisions that apply to it, and a checksum of every file. Nothing is changed "
-                                    "in the workspace.")
+        self.pack_button.setToolTip(PACK_TIP)
         self.pack_button.clicked.connect(self.make_pack)
         layout = QVBoxLayout(self)
         layout.addLayout(top)
@@ -125,7 +127,8 @@ class UnitsWindow(QDialog):
 
     def show_selected(self) -> None:
         unit_id = self.selected_id()
-        self.pack_button.setEnabled(unit_id is not None)
+        self.pack_button.setEnabled(unit_id is not None and not self.ctl.read_only)
+        self.pack_button.setToolTip(PACK_TIP_READ_ONLY if self.ctl.read_only else PACK_TIP)
         if unit_id is None:
             self.detail.clear()
             return
@@ -162,9 +165,11 @@ class UnitsWindow(QDialog):
             return
         missing = ", ".join(m["document"] + " rev " + m["revision"] for m in made["missing"])
         plural = "s" if made["pdfs"] != 1 else ""
-        self.status.setText(f"Handover pack of {made['unit']} saved in {made['path']}, with {made['pdfs']} PDF{plural}."
+        self.show_selected()                         # its history now says the pack was issued
+        self.status.setText(f"Handover pack {made['pack']} of {made['unit']} saved in {made['path']}, with {made['pdfs']} "
+                            f"PDF{plural}, and recorded in its history as issued."
                             + (f" Not included, with the reason on its first page: {missing}." if missing else "")
-                            + " It isn't signed: it shows that it is whole, not who made it.")
+                            + " It isn't signed.")
 
 
 def _new_folder(parent: Path, name: str) -> Path:

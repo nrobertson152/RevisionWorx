@@ -22,7 +22,7 @@ The first release. Everything below is new.
   get the same one, and a serial already in use is skipped.
 - **Units window.** View → Units… (Ctrl+Shift+U) finds a unit by serial, tag, model, customer or site, and shows the drawings
   that apply to it (flagged when a later revision is released), the engineering changes due on it, what's fitted and its
-  history. It only reads.
+  history. It only reads, except that making a handover pack records it.
 - **Engineering changes reach units.** Beside an implemented ECO, record once which units it reaches: future production only,
   a required or optional retrofit, one unit's own modification, or a documentation correction. Candidates are the units that
   still have the revision it replaces; a scope picks them by customer, serial range, build standard or by name. Each unit in a
@@ -48,8 +48,10 @@ The first release. Everything below is new.
   `unit verify` checks every signed acceptance again.
 - **Handover packs.** `revisionworx unit pack NH-26-0001 FOLDER`, or **Handover pack…** in the Units window, saves one unit's
   record as a folder anyone can open: a page to read and print, the PDF of each revision that applies to it (never another
-  revision's), the record as JSON and `SHA256SUMS`. `unit check-pack FOLDER` checks one anywhere, with no workspace. Nothing
-  is written to the workspace. Packs aren't signed yet.
+  revision's), the record as JSON and `SHA256SUMS`. `unit check-pack FOLDER` checks one anywhere, with no workspace. Each pack
+  is numbered and recorded in the unit's history as issued, so `revisionworx -w WORKSPACE unit check-pack FOLDER` confirms
+  that the workspace issued it and that it is still in effect; `unit withdraw-pack` withdraws one and `unit packs` lists them.
+  Packs aren't signed.
 - **Where used, for other programs.** `revisionworx link where-used` answers what `unit where-used` does: which units use a
   revision or a document, or hold a part number, serial, lot or component, now or ever. Each answer has the unit's status,
   customer, site and location, so a recall put together elsewhere (OpenMeridian tracing a lot, say) knows where every unit is.

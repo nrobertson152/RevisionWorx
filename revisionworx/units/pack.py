@@ -3,8 +3,10 @@
 network. A page to read and print, the PDFs of the revisions that apply to the unit, the record as JSON, and the SHA-256 of
 every file in the format ``sha256sum -c`` reads.
 
-Made from what a read-only handle sees; nothing is written to the workspace. Until the Director decides who vouches for a
-pack (gate 4), a pack proves that it is whole, not who made it, and its first page says so.
+A pack is put together from what a read-only handle sees (``build``), then recorded in the unit's history as issued, with its
+number and the SHA-256 of its SHA256SUMS, and only then moved into place (``issue``): the workspace is the company's record
+of every pack it issued (ADR-030, the Director's decision at gate 4). ``check`` says whether a pack is whole and, given the
+workspace, whether that workspace issued it.
 """
 from __future__ import annotations
 
@@ -22,12 +24,12 @@ from urllib.parse import quote
 
 from .. import atomicio, derivatives
 from ..content import ContentStore
-from ..workspace import WorkspaceCorruptError, now_iso
-from . import query
-from .model import UnitError
+from ..workspace import CommittedNotApplied, WorkspaceCorruptError
+from . import history as H, query
+from .model import NotFound, UnitError, actor_record, check_date, day_of, is_id
 
 PACK_FORMAT = "revisionworx-unit-pack"
-PACK_VERSION = 1
+PACK_VERSION = 2                    # 2: numbered, and recorded in the unit's history as issued (ADR-030)
 SUMS = "SHA256SUMS"
 RECORD = "unit.json"
 PAGE = "index.html"
@@ -40,23 +42,54 @@ class PackError(UnitError):
 
 
 # ---------------------------------------------------------------------------------------------------------- making
+class Draft:
+    """A pack put together beside its folder and not yet issued. ``issue`` records it and moves it into place; leaving a
+    ``with`` block without issuing it removes it, so a pack that wasn't recorded is never left behind."""
+
+    def __init__(self, work: Path, dest: Path, unit_id: str, label: str, count: int, number: int, sums: str, as_of: str,
+                 files: int, pdfs: list[dict]):
+        self.work, self.dest, self.unit_id, self.label = work, dest, unit_id, label
+        self.count, self.number, self.sums, self.as_of = count, number, sums, as_of
+        self.files, self.pdfs = files, pdfs
+        self.issued = False
+
+    def __enter__(self) -> "Draft":
+        return self
+
+    def __exit__(self, *_exc: Any) -> bool:
+        self.discard()
+        return False
+
+    def discard(self) -> None:
+        if not self.issued:
+            shutil.rmtree(self.work, ignore_errors=True)
+
+
 def make(svc, ref: str, dest: Path, *, on: str = "") -> dict:
-    """Write the handover pack of unit ``ref`` to the new folder ``dest``, as the unit stands now or ``on`` a date. All of it
-    or nothing: it is put together beside ``dest`` and moved into place at the end. Refused if ``dest`` exists and isn't
-    an empty folder."""
+    """Make the handover pack of unit ``ref`` in the new folder ``dest``, as the unit stands now or ``on`` a date, and
+    record it as issued, on one writable handle. All of it or nothing: see ``build`` and ``issue``."""
+    with build(svc, ref, dest, on=on) as draft:
+        return issue(svc, draft)
+
+
+def build(svc, ref: str, dest: Path, *, on: str = "") -> Draft:
+    """Put the handover pack of unit ``ref`` together beside the new folder ``dest``, numbered as the unit's next pack.
+    Reads only: nothing is written to the workspace, and nothing is in ``dest`` yet. Refused if ``dest`` exists and isn't an
+    empty folder."""
     unit = svc.resolve(ref)
+    on = day_of(check_date(on, "date")) if on else ""
+    number = len(H.packs_in(svc.events(unit["id"]))) + 1
     detail = _public(query.unit_detail(svc, unit, on=on))
     dest = Path(dest)
-    if dest.exists():
-        if not dest.is_dir() or any(dest.iterdir()):
-            raise PackError(f"{dest} already exists and isn't an empty folder; choose a new one")
+    _free(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     work = dest.parent / f".{dest.name}.{secrets.token_hex(6)}.tmp"
     work.mkdir()
     try:
         (work / PDF_DIR).mkdir()
         pdfs = _pdfs(svc.ws, detail["documents"], work / PDF_DIR)
-        record = {"format": PACK_FORMAT, "version": PACK_VERSION, "made": now_iso(), "signed": False,
+        record = {"format": PACK_FORMAT, "version": PACK_VERSION, "pack": number, "made": svc.clock(),
+                  "made_by": _person(actor_record(svc.actor())), "signed": False,
                   "workspace": {"id": svc.ws.id, "name": svc.ws.info.get("name", "")}, "as_of": on or None,
                   "unit": detail, "pdfs": pdfs}
         atomicio.atomic_write_bytes(work / RECORD, (json.dumps(record, indent=1, sort_keys=True, ensure_ascii=False)
@@ -65,26 +98,66 @@ def make(svc, ref: str, dest: Path, *, on: str = "") -> dict:
         if not any((work / PDF_DIR).iterdir()):
             (work / PDF_DIR).rmdir()                 # no PDFs: no empty folder to wonder about
         files = _listing(work)
-        atomicio.atomic_write_bytes(work / SUMS, "".join(f"{files[name]}  {name}\n" for name in sorted(files))
-                                    .encode("utf-8"))
-        if dest.exists():
-            dest.rmdir()                             # empty, checked above
-        os.replace(work, dest)
+        listing = "".join(f"{files[name]}  {name}\n" for name in sorted(files)).encode("utf-8")
+        atomicio.atomic_write_bytes(work / SUMS, listing)
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise
-    included = [p for p in pdfs if p["file"]]
-    return {"path": str(dest), "unit": detail["label"], "files": len(files) + 1, "pdfs": len(included),
-            "missing": [p for p in pdfs if not p["file"]], "signed": False}
+    return Draft(work, dest, unit["id"], detail["label"], unit["events"]["count"], number,
+                 hashlib.sha256(listing).hexdigest(), on, len(files) + 1, pdfs)
+
+
+def issue(svc, draft: Draft) -> dict:
+    """Record ``draft`` in its unit's history as issued (``pack.issued``: its number and the SHA-256 of its SHA256SUMS),
+    then move it into place. Recorded only if nothing has been recorded on the unit since the pack was put together, so a
+    pack always shows the unit as it stood when it was issued; otherwise ``Changed``. If it isn't recorded, it is removed."""
+    if draft.issued:
+        raise PackError("this pack has already been issued")
+    pending = False
+    try:
+        _free(draft.dest)
+        with svc.expecting({draft.unit_id: draft.count}):
+            svc.issue_pack(draft.unit_id, draft.number, draft.sums, as_of=draft.as_of)
+    except CommittedNotApplied:
+        pending = True                               # recorded: the workspace finishes applying it when next opened
+    except BaseException:
+        draft.discard()
+        raise
+    draft.issued = True
+    try:
+        if draft.dest.exists():
+            draft.dest.rmdir()                       # empty, checked above
+        os.replace(draft.work, draft.dest)
+    except OSError as exc:
+        raise PackError(f"handover pack {draft.number} of {draft.label} is recorded as issued, but it couldn't be moved to "
+                        f"{draft.dest} ({exc}). It is complete in {draft.work}: rename that folder") from exc
+    included = [p for p in draft.pdfs if p["file"]]
+    return {"path": str(draft.dest), "unit": draft.label, "pack": draft.number, "files": draft.files,
+            "pdfs": len(included), "missing": [p for p in draft.pdfs if not p["file"]], "signed": False, "recorded": True,
+            "pending": pending}
+
+
+def _free(dest: Path) -> None:
+    if dest.exists() and (not dest.is_dir() or any(dest.iterdir())):
+        raise PackError(f"{dest} already exists and isn't an empty folder; choose a new one")
+
+
+def _person(actor: Any) -> Any:
+    """Who, as it leaves the company: the person, not the computer they used."""
+    return {k: v for k, v in actor.items() if k != "host"} if isinstance(actor, dict) else actor
+
+
+def _who(actor: Any) -> str:
+    if not isinstance(actor, dict):
+        return ""
+    return str(actor.get("name") or actor.get("account") or actor.get("user") or "")
 
 
 def _public(detail: dict) -> dict:
     """The record as it leaves the company: who did what stays (a quality record says who verified), the computer's name
     doesn't."""
-    def person(actor: Any) -> Any:
-        return {k: v for k, v in actor.items() if k != "host"} if isinstance(actor, dict) else actor
     out = dict(detail)
-    out["history"] = [{**e, "actor": person(e.get("actor"))} for e in detail.get("history", [])]
+    out["history"] = [{**e, "actor": _person(e.get("actor"))} for e in detail.get("history", [])]
     return out
 
 
@@ -149,18 +222,23 @@ def _sha256(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------- checking
-def check(folder: Path) -> dict:
+def check(folder: Path, svc=None) -> dict:
     """Is the pack whole? Every file listed in SHA256SUMS is there with that SHA-256, nothing else is, and the record is one
-    this version can read. It can't say who made the pack: packs aren't signed yet."""
+    this version can read. Given ``svc`` (the workspace the pack says it came from), also: did that workspace issue it, and
+    is it still in effect? ``register`` answers that, or is ``None`` when no workspace was given."""
     folder = Path(folder)
     problems: list[str] = []
+    report: dict = {"ok": False, "problems": problems, "unit": None, "pack": None, "files": 0, "signed": False,
+                    "register": None}
     try:
-        lines = (folder / SUMS).read_text("utf-8").splitlines()
+        raw = (folder / SUMS).read_bytes()
+        lines = raw.decode("utf-8").splitlines()
     except FileNotFoundError:
-        return {"ok": False, "problems": [f"there's no {SUMS} here: this isn't a handover pack, or it's incomplete"],
-                "unit": None, "files": 0, "signed": False}
+        problems.append(f"there's no {SUMS} here: this isn't a handover pack, or it's incomplete")
+        return report
     except (OSError, UnicodeDecodeError) as exc:
-        return {"ok": False, "problems": [f"{SUMS} can't be read: {exc}"], "unit": None, "files": 0, "signed": False}
+        problems.append(f"{SUMS} can't be read: {exc}")
+        return report
     listed: dict[str, str] = {}
     for n, line in enumerate(lines, 1):
         m = _SUM_LINE.match(line)
@@ -178,19 +256,83 @@ def check(folder: Path) -> dict:
             problems.append(f"{rel} has been changed since the pack was made")
     for rel in sorted(set(present) - set(listed)):
         problems.append(f"{rel} isn't part of the pack")
-    label = None
+    report["files"] = len(listed) + 1
+    record = None
     try:
         record = json.loads((folder / RECORD).read_text("utf-8"))
         if not isinstance(record, dict) or record.get("format") != PACK_FORMAT:
             problems.append(f"{RECORD} isn't a handover pack's record")
-        elif not isinstance(record.get("version"), int) or record["version"] > PACK_VERSION:
+            record = None
+        elif isinstance(record.get("version"), bool) or not isinstance(record.get("version"), int) \
+                or record["version"] > PACK_VERSION:
             problems.append(f"{RECORD} was made by a newer RevisionWorx (pack version {record.get('version')!r}); "
                             "update RevisionWorx to check it")
+            record = None
+        elif record["version"] >= 2 and (isinstance(record.get("pack"), bool) or not isinstance(record.get("pack"), int)
+                                         or record["pack"] < 1):
+            problems.append(f"{RECORD} isn't a handover pack's record (it has no pack number)")
+            record = None
         else:
-            label = (record.get("unit") or {}).get("label")
+            report["unit"] = (record.get("unit") or {}).get("label")
+            report["pack"] = record.get("pack")
     except (OSError, ValueError, RecursionError) as exc:
         problems.append(f"{RECORD} can't be read: {exc}")
-    return {"ok": not problems, "problems": problems, "unit": label, "files": len(listed) + 1, "signed": False}
+    if svc is not None:
+        report["register"] = _in_register(svc, record, hashlib.sha256(raw).hexdigest())
+        if report["register"]["state"] != "issued":
+            problems.append(report["register"]["message"])
+    report["ok"] = not problems
+    return report
+
+
+def _in_register(svc, record: dict | None, sums: str) -> dict:
+    """What the workspace's register says about the pack whose SHA256SUMS has SHA-256 ``sums``. The pack's own record only
+    says which unit to look at: the register decides. ``state`` is ``issued``, ``withdrawn``, ``not-issued`` or
+    ``unknown``."""
+    name = svc.ws.info.get("name", "") or "this workspace"
+    if record is None:
+        return {"state": "unknown", "workspace": name,
+                "message": f"the pack's record can't be read, so it can't be looked up in the register of {name}"}
+    if record["version"] < 2:
+        return {"state": "not-issued", "workspace": name,
+                "message": f"this pack was made before RevisionWorx recorded the packs it issues, so {name} can't confirm "
+                           "that it issued it"}
+    unit_id = (record.get("unit") or {}).get("id")
+    try:
+        unit = svc.unit(unit_id) if isinstance(unit_id, str) and is_id("unit", unit_id) else None
+    except NotFound:
+        unit = None
+    if unit is None:
+        return {"state": "not-issued", "workspace": name,
+                "message": f"{name} has no unit {unit_id!s}, so it didn't issue this pack"}
+    label = query.unit_summary(unit)["label"]
+    try:
+        packs = H.packs_in(svc.events(unit["id"]))
+    except UnitError as exc:
+        return {"state": "unknown", "workspace": name,
+                "message": f"the history of {label} in {name} can't be read, so the pack can't be confirmed ({exc})"}
+    hits = [p for p in packs if p["sums"] == sums]
+    if not hits:
+        return {"state": "not-issued", "workspace": name,
+                "message": f"{name} has no record of issuing this pack: no pack of {label} it issued has this {SUMS}"}
+    p = hits[-1]
+    out = {"workspace": name, "unit": label, "pack": p["pack"], "event": p["event"], "issued": p["time"],
+           "by": _who(p["actor"]), "key": p["key"], "withdrawn": None, "newer": None}
+    said = f"{label} handover pack {p['pack']}, issued by {name} on {p['time'][:10]}" + (f" by {out['by']}" if out["by"] else "")
+    if p["voided"] or p["pack"] != record.get("pack"):
+        return {**out, "state": "unknown",
+                "message": f"{said}, but its register entry isn't one RevisionWorx writes; run 'revisionworx unit verify'"}
+    if p["withdrawn"] is not None:
+        w = p["withdrawn"]
+        out["withdrawn"] = {"time": w["time"], "by": _who(w["actor"]), "reason": w["reason"], "event": w["event"]}
+        return {**out, "state": "withdrawn",
+                "message": f"{said}, was withdrawn on {w['time'][:10]}" + (f" by {_who(w['actor'])}" if _who(w["actor"]) else "")
+                           + (f": {w['reason']}" if w["reason"] else "")}
+    later = [q for q in packs if q["pack"] > p["pack"] and q["withdrawn"] is None and not q["voided"]]
+    if later:
+        out["newer"] = {"pack": later[-1]["pack"], "issued": later[-1]["time"]}
+        said += f"; pack {later[-1]['pack']} has been issued since ({later[-1]['time'][:10]})"
+    return {**out, "state": "issued", "message": said}
 
 
 # ---------------------------------------------------------------------------------------------------------- the page
@@ -209,17 +351,22 @@ def render(record: dict) -> str:
     """The pack's first page: plain HTML and CSS, no scripts, nothing fetched from anywhere."""
     u = record["unit"]
     e = html.escape
+    n = record.get("pack")
+    pack_name = f"handover pack {n}" if n else "handover pack"
     out = ['<!DOCTYPE html>', '<html lang="en"><head><meta charset="utf-8">',
-           f'<title>{e(u["label"])}: handover pack</title><style>{_CSS}</style></head><body>']
+           f'<title>{e(u["label"])}: {pack_name}</title><style>{_CSS}</style></head><body>']
     model = " ".join(x for x in (u["model"].get("number", ""), u["name"]) if x)
     out.append(f'<h1>{e(u["label"])}</h1><p class="muted">{e(model)}{" · " if model else ""}{e(u["class"])} · '
                f'status: {e(u["status"])}</p>')
     as_of = f' It shows the unit as known on {e(record["as_of"])}.' if record.get("as_of") else ""
-    out.append(f'<p class="note">Handover pack made on {e(record["made"][:10])} from the RevisionWorx workspace '
-               f'{e(record["workspace"]["name"])}.{as_of} <b>{SUMS}</b> lists the SHA-256 of every file, so you can '
-               f'check that nothing is missing or changed (<code>sha256sum -c {SUMS}</code>, or '
-               f'<code>revisionworx unit check-pack FOLDER</code>). The pack is not signed: it shows that it is whole, '
-               f'not who made it.</p>')
+    company = e(record["workspace"]["name"]) or "the workspace"
+    by = _who(record.get("made_by"))
+    out.append(f'<p class="note">{e(pack_name.capitalize())} of {e(u["label"])}, made on {e(record["made"][:10])}'
+               f'{" by " + e(by) if by else ""} from the RevisionWorx workspace {company}, which records every pack it '
+               f'issues.{as_of} <b>{SUMS}</b> lists the SHA-256 of every file, so anyone can check that nothing is missing '
+               f'or changed (<code>sha256sum -c {SUMS}</code>, or <code>revisionworx unit check-pack FOLDER</code>), and '
+               f'{company} can confirm from its record that it issued this pack and that it is still in effect. The pack '
+               f'is not signed.</p>')
 
     out.append("<h2>Identity</h2><table><tr><th>Kind</th><th>Value</th><th>Issued by</th><th></th></tr>")
     for i in u["identifiers"]:
@@ -295,8 +442,7 @@ def render(record: dict) -> str:
     if u.get("history"):
         out.append("<h2>History</h2><table><tr><th>#</th><th>When</th><th>What</th><th>Basis</th><th>By</th></tr>")
         for h in u["history"]:
-            who = h.get("actor") or {}
-            by = who.get("name") or who.get("account") or who.get("user") or "" if isinstance(who, dict) else ""
+            by = _who(h.get("actor"))
             what = e(h["summary"]) + (' <span class="flag">(recorded in error)</span>' if h.get("voided") else "")
             out.append(f'<tr><td>{h["n"]}</td><td>{e(h.get("effective") or h["time"][:10])}</td><td>{what}</td>'
                        f'<td>{e(h["basis"])}</td><td>{e(by)}</td></tr>')

@@ -866,7 +866,7 @@ cursor with different entries, and the cache kept serving records that exist in 
 
 **Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed before every file change, simulated client caches. `.github/workflows/shares.yml` runs the same races against real file servers on one hosted machine: Windows SMB 3.1.1 (client and server, by three server names, which makes three connections), the Linux kernel's SMB client against Samba (two mounts), and NFS 4.2 and 3 (two kernel clients). That found behaviour no simulation had, which the design now handles: a Linux SMB client answering EBUSY or EIO for a moment about a file that's fine, a client told a folder exists and then that it doesn't, and NFS taking seconds to show a change. Two NFS 4 mounts, being one client to the server, never heard about each other's changes at all, which is why that job mixes versions. **None of that is evidence across computers:** it's one machine and one network path, with no cable pulled and no server rebooted. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
 
-### ADR-025 Units: serial-numbered units and their configuration live in this journal — IMPLEMENTED (phases 1 and 2 of 4; phase 3 in progress)
+### ADR-025 Units: serial-numbered units and their configuration live in this journal — IMPLEMENTED (phases 1 to 3 of 4; phase 4 in progress)
 
 **Decision (2026-11-06).** Every physical unit a company builds, sells or looks after gets one permanent identity and one append-only
 configuration history in the workspace journal, as a subsystem (`revisionworx/units/`, design and data contract in `docs/UNITS.md`)
@@ -893,9 +893,10 @@ order, written once, and a compliance record per unit and order); a PDF derivati
 other programs recording on units (ADR-027, done), accepting FieldWorx records into unit histories (done, through FieldWorx's bridge);
 deviations and concessions (`docs/UNITS.md` section 12: written once with the units they cover, a record per unit, done); field records
 signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: where-used for other programs
-(`link where-used`, done); journal checkpoints (ADR-022's revision of 2026-11-08 and ADR-029, done); handover packs, not yet
-signed (`docs/UNITS.md` section 13, done); who signs a pack (gate 4, the Director's), transfer between workspaces and merged
-identities (not started).
+(`link where-used`, done); journal checkpoints (ADR-022's revision of 2026-11-08 and ADR-029, done); handover packs
+(`docs/UNITS.md` section 13, done), recorded in the unit's history as issued (ADR-030, the Director's decision at gate 4, done);
+signing packs, optional and off by default (ADR-030, in progress); transfer between workspaces and merged identities (not
+started).
 
 **Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
 `unit verify` detects but the journal rules don't refuse (the same holds for deviations, whose digest `verify` checks); making these
@@ -1051,6 +1052,41 @@ The checkpoint for 20,000 units is 3.5 MB.
 
 **Not done:** writable handles starting from one; a checkpoint shared between computers (it would need signing, like the
 team journal); and the journal listing on opening, which is still O(n) names.
+
+### ADR-030 The workspace records every handover pack it issues; signing one is optional — IMPLEMENTED (the register; signing in progress)
+
+**Problem.** A handover pack (`docs/UNITS.md` section 13) leaves the company as a folder of files. `SHA256SUMS` shows that it is
+whole, but anyone can make a folder that is whole: change a page, write `SHA256SUMS` afresh, and it checks. A customer, an
+auditor or a buyer of a used machine has no way to learn whether the company issued it, or whether it still stands behind it.
+Gate 4 asked who vouches for a pack.
+
+**Decision** (Director, gate 4, 2026-11-08): *"make the company record automatic but make the package signing and yubikey stuff
+optional (default off)."*
+- **The record is automatic.** Making a pack records it in the unit's history: a `pack.issued` event with the pack's number
+  (1, 2, 3 for that unit), the date it shows the unit on, and the SHA-256 of its `SHA256SUMS`, which holds the SHA-256 of every
+  other file. No setting turns it off. The record is in the journal, so it is fenced, signed in a team workspace, replayed after
+  a crash and checked by `verify` like any entry, and `unit verify` checks that packs are numbered in order (`pack-register`).
+- **Asked, the workspace answers.** `revisionworx -w WORKSPACE unit check-pack FOLDER` looks the pack up in the register by the
+  unit's id and the SHA-256 of its `SHA256SUMS`: issued (by whom and when, and whether a newer pack has been issued since),
+  withdrawn (when, by whom and why), or not issued. The pack's own record only says which unit to look at.
+- **A pack is withdrawn, never voided.** `unit withdraw-pack REF N --reason ...` records that pack N isn't to be relied on now. A
+  pack that left the company was issued, so `pack.*` events can't be voided.
+- **Signing is optional, and off by default.** A company that wants packs a customer can check without asking turns it on and
+  signs with a key it holds, a hardware key (YubiKey) if it likes; not yet built. Off, nothing about signing appears anywhere.
+
+**Order of a pack.** Put together beside its folder from a read-only handle, recorded on a writable handle only if nothing was
+recorded on the unit since (`expecting` the event count it was made from), then moved into place. Two people can't issue the
+same number, a pack always shows the unit as it stood when it was issued, and a pack that wasn't recorded is removed. The writer
+lock isn't held while PDFs are exported.
+
+**Alternatives.** Signing every pack with a company key, always: the Director chose optional and off by default, having
+raised that a stolen key can't be revoked offline (customers would have to be told not to trust that key). The issuing
+person's account key: only team workspaces have accounts, and a signature in a person's name means little once they leave. A
+register in a separate file or database: a second source of truth.
+
+**Consequences.** Making a pack writes to the workspace, so it needs the writer lock (briefly) and a workspace that isn't
+read-only; the Units window's **Handover pack…** follows the window's read-only state. Packs made before this (format version 1)
+are whole but can't be confirmed. Confirming a pack needs the workspace: someone outside the company asks the company.
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

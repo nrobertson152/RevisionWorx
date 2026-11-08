@@ -27,9 +27,9 @@ STANDARD_SCHEME = "standard"                             # a build standard's nu
 UPDATABLE = ("class", "name", "model", "project", "customer", "site", "location", "notes")
 EVENT_TYPES = ("unit.registered", "unit.updated", "identifier.added", "identifier.retired", "identifier.removed",
                "status.changed", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-               "component.removed", "parent.set", "note", "verified", "void")
+               "component.removed", "parent.set", "note", "verified", "void", "pack.issued", "pack.withdrawn")
 VOIDABLE = ("unit.updated", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-            "component.removed", "note", "verified")
+            "component.removed", "note", "verified")   # a pack that was issued stays issued: it is withdrawn, never voided
 
 # Engineering changes reaching units (docs/UNITS.md section 10)
 EFFECTIVITY_KINDS = ("production", "retrofit-required", "retrofit-optional", "unit", "documentation")
@@ -69,6 +69,7 @@ ID_PATTERNS = {"unit": "unt", "event": "uev", "key": "uky", "standard": "bst", "
 _ID_RES = {k: re.compile(rf"^{p}_[0-9a-f]{{32}}$") for k, p in ID_PATTERNS.items()}
 _TXID_RE = re.compile(r"^[0-9a-f]{32}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+KEY_FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")   # an SSH key's fingerprint, as ssh-keygen -l prints it
 _EVIDENCE_KIND_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATETIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?Z$")
@@ -496,6 +497,8 @@ BODY_KEYS = {
     "parent.set": {"parent", "position"},
     "note": {"text"},
     "void": {"events"},
+    "pack.issued": {"pack", "sums", "as_of", "key"},
+    "pack.withdrawn": {"pack"},
 }
 
 
@@ -517,8 +520,16 @@ def _check_body(t: str, b: dict, what: str) -> None:
         if not isinstance(b["events"], list) or not b["events"] or not all(
                 isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in b["events"]):
             raise MalformedUnitRecord(f"{what}: a {t} event names event numbers")
+    elif t in ("pack.issued", "pack.withdrawn"):
+        if isinstance(b["pack"], bool) or not isinstance(b["pack"], int) or b["pack"] < 1:
+            raise MalformedUnitRecord(f"{what}: a {t} event names a handover pack by its number")
+        if t == "pack.issued" and not (isinstance(b["sums"], str) and _HEX64_RE.match(b["sums"])
+                                       and isinstance(b["as_of"], str) and (not b["as_of"] or _DATE_RE.match(b["as_of"]))
+                                       and isinstance(b["key"], str)
+                                       and (not b["key"] or KEY_FINGERPRINT_RE.match(b["key"]))):
+            raise MalformedUnitRecord(f"{what}: a pack.issued event has the wrong shape")
     for k, v in b.items():
-        if k not in ("identifiers", "model", "fields", "cleared", "events") and not isinstance(v, str):
+        if k not in ("identifiers", "model", "fields", "cleared", "events", "pack") and not isinstance(v, str):
             raise MalformedUnitRecord(f"{what}: {k} must be text")
 
 
