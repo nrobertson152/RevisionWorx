@@ -667,6 +667,22 @@ exists. Adding more token re-checks only narrows the window.
   it to `writer.lock` (fail closed, lock stays held), so a program holding that file for > 5 s leaves the
   lock held until an administrator breaks it.
 
+- **Orphan clears on Windows (issue #74, `main` CI run 42510465131, 2026-11-08).**
+  - *Defect.* Rev. 3's clear read lock files with Python's `open()`, which doesn't share delete access, and
+    moved them without ADR-016's retry. Four administrators raced on one orphan. The winner's move into
+    custody failed with WinError 32 while a competitor was reading the orphan, and the winner's command died
+    with a raw `PermissionError` (exit codes `[1, 3, 3, 3]`).
+  - *Effect.* Nothing was lost. The authorisation was recorded, the orphan stayed at its name and kept
+    blocking writers, and re-running the command finished the clear.
+  - *Fix.* Every read in the clear goes through `atomicio.read_bytes`, which shares delete access, so
+    RevisionWorx's own processes never block each other there. Every move and delete of a lock file now has
+    the bounded retry; the re-quarantine in fencing had been the other one without it.
+  - *Something outside RevisionWorx holds a file past the bound.* An open is refused as
+    `LockReleaseBusyError` ("retry"). `lock clear-orphan` says the clear is authorised, still blocks writers,
+    and that the same command, with the same reason, finishes it.
+  - *Tests.* `tests/test_orphan_clear_windows.py` emulates Windows' share modes. Its five tests all fail on
+    `e5ded07`. **Not claimed:** Windows beyond hosted CI.
+
 **Preserved:**
 - ADR-015 journal-first revocation, now shared via `Workspace._publish_revocation`.
 - ADR-016 bounded retry on Windows sharing violations (`PermissionError` on the rename).

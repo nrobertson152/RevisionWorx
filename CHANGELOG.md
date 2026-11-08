@@ -100,7 +100,9 @@ The first release. Everything below is new.
 - Single writer lock with fencing: a writer whose lock was broken or revoked cannot publish (ADR-015/019).
   Administrative lock break and orphan clearing are audited.
 - Windows sharing violations (virus scanners, backup tools) are retried within a bound, never reported as
-  damage; a busy lock release asks you to retry.
+  damage; a busy lock release asks you to retry. Clearing an orphaned lock file follows the same rule.
+  Administrators racing to clear one orphan no longer block each other. Before, the winner's command could
+  die with WinError 32 (issue #74).
 - Fail closed: damaged or unreadable metadata makes the workspace read-only with a plain explanation, never a
   guess.
 - `revisionworx doctor` (read-only whole-workspace integrity check) and `revisionworx verify [--repair]`.
