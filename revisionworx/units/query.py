@@ -315,6 +315,7 @@ def verify(svc: UnitService) -> list[dict]:
     """Everything wrong with the register, as ``{"code", "subject", "message"}``; an empty list means intact
     (docs/UNITS.md section 7). Nothing is repaired."""
     ws = svc.ws
+    ws.check_from_journal()
     out: list[dict] = []
 
     def problem(code: str, subject: str, message: str) -> None:

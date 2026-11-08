@@ -101,7 +101,7 @@ def test_recheck_is_not_attempted_while_a_job_holds_the_workspace(started, monke
     opened = []
     real_open = Workspace.open
     monkeypatch.setattr(Workspace, "open", classmethod(
-        lambda cls, loc, writable=False: (opened.append(writable), real_open(loc, writable))[1]))
+        lambda cls, loc, writable=False, **kw: (opened.append(writable), real_open(loc, writable, **kw))[1]))
     assert c._busy.acquire(blocking=False)  # ...but a background job holds the slot
     try:
         h = c.health()

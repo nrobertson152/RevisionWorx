@@ -198,6 +198,7 @@ def referenced(ws: Workspace) -> set[str]:
 def verify(ws: Workspace) -> list[dict]:
     """Problems with derivatives: malformed records, a revision that doesn't exist or whose content isn't the one the PDF was
     attached to, missing or damaged content. Nothing is repaired."""
+    ws.check_from_journal()
     store, out = ContentStore(ws), []
     for did, rec in ws.list(KIND).items():
         try:

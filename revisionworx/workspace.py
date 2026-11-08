@@ -46,8 +46,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import atomicio
+from . import atomicio, clientstate
 from .atomicio import ExclusiveCreateError
+
+CHECKPOINT_FORMAT = "revisionworx-view-checkpoint"
+CHECKPOINT_VERSION = 1
+CHECKPOINT_EVERY = 256                               # entries a view must be past its checkpoint before a new one is written,
+CHECKPOINT_RECORDS = 4096                            # or records read since it, whichever comes first: one import can be large
+
+
+def view_checkpoint_path(meta: Path, workspace_id: str, state_dir: Path | str | None = None) -> Path:
+    """Where this computer keeps its checked summary of a workspace's journal (ADR-029). One per folder, like the team
+    replica: a backup or a copy of a workspace has the same id and its own history."""
+    base = Path(state_dir) if state_dir else clientstate.default_state_dir()
+    where = hashlib.sha256(_folder_key(meta).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    return base / "views" / clientstate.safe_name(workspace_id) / f"view-{where}.json"
+
+
+def _folder_key(meta: Path) -> str:
+    return os.path.normcase(os.path.abspath(meta))
+
+
+def _checkpoint_check(data: dict) -> str:
+    return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                          .encode("utf-8")).hexdigest()
 
 FORMAT_NAME = "RevisionWorx Workspace"
 FORMAT_VERSION = 1
@@ -392,6 +414,9 @@ class Workspace:
         self._closed = False
         self._view_lock = threading.Lock()
         self._view: dict | None = None
+        self._checkpoint: Path | None = None         # set by open(): this computer's checked summary (ADR-029)
+        self._checkpoint_seen = 0                    # the entry the stored summary reaches, as far as this handle knows
+        self._checkpoint_records = 0                 # records read since then
 
     # ------------------------------------------------------------------ lifecycle
     @property
@@ -493,6 +518,7 @@ class Workspace:
         if writable:
             token = cls._acquire_writer_lock(meta)
         ws = cls(meta, info, writable, token)
+        ws._checkpoint = view_checkpoint_path(meta, ws.id, team_options.get("state_dir"))
         try:
             ws._check_journal()
             if writable:
@@ -1227,6 +1253,74 @@ class Workspace:
         view["anchor_stat"] = stat
         return True
 
+    def _load_checkpoint(self, seqs: list[int]) -> dict | None:
+        """The view as this computer last checked it (ADR-029), if it still describes this journal; None otherwise, and the
+        view is built from the journal as before. Only a read-only handle starts from one: a write is always decided on a
+        view this handle built itself."""
+        if self.writable or self._checkpoint is None or not seqs:
+            return None
+        try:
+            data = json.loads(self._checkpoint.read_bytes().decode("utf-8"))
+            if not isinstance(data, dict) or data.get("format") != CHECKPOINT_FORMAT \
+                    or data.get("version") != CHECKPOINT_VERSION:
+                return None
+            check = data.pop("check", None)
+            if check != _checkpoint_check(data) or data.get("workspace") != self.id \
+                    or data.get("folder") != _folder_key(self.meta_dir):
+                return None
+            seen, anchor = data["seen"], data["anchor"]
+            if type(seen) is not int or not 1 <= seen <= seqs[-1] or not isinstance(anchor, str):
+                return None
+            stat = self._entry_stat(seen)                # looked at before it is read, as in _anchor_holds
+            if stat is None:
+                return None
+            if list(stat) != data.get("anchor_stat") and self.read_entry(seen).get("digest") != anchor:
+                return None                              # not the entry this summary ends at: a restore, or another copy
+            view = {"seen": seen, "anchor": anchor, "anchor_stat": stat, "revocations": [], "revoked": set(),
+                    "latest": {}, "attempts": {}}
+            for kind, rid, s, deleted in data["latest"]:
+                if not (isinstance(kind, str) and isinstance(rid, str) and type(s) is int and 1 <= s <= seen
+                        and type(deleted) is bool):
+                    return None
+                view["latest"][(kind, rid)] = (s, deleted)
+            for s, token in data["revocations"]:
+                if type(s) is not int or not 1 <= s <= seen or not isinstance(token, str):
+                    return None
+                view["revocations"].append((s, token))
+                view["revoked"].add(token)
+            for txid, effective, fenced in data["attempts"]:
+                if not isinstance(txid, str) or not all(v is None or (type(v) is int and 1 <= v <= seen)
+                                                        for v in (effective, fenced)):
+                    return None
+                view["attempts"][txid] = {"effective": effective, "fenced": fenced}
+        except (OSError, ValueError, KeyError, TypeError, RecursionError, WorkspaceCorruptError):
+            return None
+        self._checkpoint_seen, self._checkpoint_records = seen, 0
+        return view
+
+    def check_from_journal(self) -> None:
+        """From here on, this handle's view comes from the journal alone, never from this computer's checkpoint (ADR-029).
+        Integrity checks call it first: what they report must not depend on what was checked before."""
+        with self._view_lock:
+            self._checkpoint, self._view = None, None
+
+    def _save_checkpoint(self, view: dict) -> None:
+        """Keep this view for the next handle on this computer. A cache: a failure to write it changes nothing, except that
+        this handle stops trying."""
+        data = {"format": CHECKPOINT_FORMAT, "version": CHECKPOINT_VERSION, "workspace": self.id,
+                "folder": _folder_key(self.meta_dir), "seen": view["seen"], "anchor": view["anchor"],
+                "anchor_stat": list(view["anchor_stat"]) if view.get("anchor_stat") else None,
+                "latest": sorted([k, i, s, d] for (k, i), (s, d) in view["latest"].items()),
+                "revocations": [[s, t] for s, t in view["revocations"]],
+                "attempts": sorted([t, a["effective"], a["fenced"]] for t, a in view["attempts"].items())}
+        data["check"] = _checkpoint_check(data)
+        try:
+            clientstate.write_private(self._checkpoint, data, compact=True)
+        except (OSError, ValueError):
+            self._checkpoint = None                  # can't be kept here (a read-only profile?): don't try again
+            return
+        self._checkpoint_seen, self._checkpoint_records = view["seen"], 0
+
     def _journal_view(self, look: bool = False, strict: bool = False) -> dict:
         """What the journal says, extended to the current head (ADR-022). Per handle, in memory, built
         only from digest-verified entries, and only ever read forward: entries are immutable, so each
@@ -1258,8 +1352,11 @@ class Workspace:
                 if not anchored:
                     view = None
             if view is None:
-                view = {"seen": 0, "anchor": None, "anchor_stat": None, "revocations": [], "revoked": set(),
-                        "latest": {}, "attempts": {}}
+                view = self._load_checkpoint(seqs)
+                if view is None:
+                    self._checkpoint_seen = self._checkpoint_records = 0
+                    view = {"seen": 0, "anchor": None, "anchor_stat": None, "revocations": [], "revoked": set(),
+                            "latest": {}, "attempts": {}}
             for s in seqs:
                 if s <= view["seen"]:
                     continue
@@ -1272,6 +1369,7 @@ class Workspace:
                     # Without this, changing workspace.json by hand would switch off every signature check (ADR-024).
                     raise WorkspaceCorruptError(f"journal entry {s} set this workspace up for a team, but workspace.json "
                                                 "no longer says so. It has been changed; restore it from a backup")
+                self._checkpoint_records += len(entry["records"])
                 tok = entry.get("writer_token")
                 fenced = bool(tok) and tok in view["revoked"]
                 if not fenced:
@@ -1291,6 +1389,9 @@ class Workspace:
                             view["revoked"].add(revoked)
                 view["seen"], view["anchor"], view["anchor_stat"] = s, entry.get("digest"), stat
             self._view = view
+            if self._checkpoint is not None and (view["seen"] - self._checkpoint_seen >= CHECKPOINT_EVERY
+                                                 or self._checkpoint_records >= CHECKPOINT_RECORDS):
+                self._save_checkpoint(view)
             return view
 
     def _revocations(self) -> list[tuple[int, str]]:
@@ -1515,6 +1616,7 @@ class Workspace:
         record files the journal never wrote. With ``repair`` (writable only), rewrites records from
         the journal, moves unexplained files to ``quarantine/`` (never deletes them) and journals an
         audit record of what was repaired."""
+        self.check_from_journal()
         if repair:
             self.require_authority()                 # repair moves files, and a commit cannot fence that
             self.recover()

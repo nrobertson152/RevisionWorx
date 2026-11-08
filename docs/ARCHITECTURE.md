@@ -803,8 +803,8 @@ the entry again, so a write never decides on such a view, and `verify` and `doct
 shares cache attributes and negative lookups for a few seconds, as they cache listings, so a reader there can be
 that much behind, as before.
 
-**Still O(n):** the first read on a fresh handle reads every entry once, so each command line call does.
-Checkpoints that let a fresh handle start from a checked summary are the next step for very long journals.
+**Still O(n):** the first read on a fresh handle reads every entry once, so each command line call does. A read-only
+handle now starts from this computer's checkpoint instead (ADR-029).
 
 **Not claimed:** power loss, SMB/NFS, or outside actors. Independent QA and Distributed Systems review is pending.
 
@@ -1003,6 +1003,53 @@ The window lists each account's phones and revokes one (Team › Accounts… ›
 is pure Python, about 2 ms a signature, so `unit verify` adds about 20 s for 10,000 signed events. Nothing here is verified on
 real phones or between real computers.
 
+### ADR-029 A fresh read-only handle starts from what this computer already checked — IMPLEMENTED
+
+**Problem.** A fresh handle reads every journal entry once to build its view (ADR-022). Each command-line call is a fresh
+handle, and other programs ask RevisionWorx through the command line (OpenMeridian's recall asks three questions, FieldWorx's
+bridge many more), so every question read the whole journal: 154 ms at 5,000 entries on a local disk, and one file read per
+entry on a share. A team workspace doesn't pay this: its replica keeps what each computer checked (ADR-024). A workspace not
+set up for a team had nothing like it.
+
+**Decision.** Each computer keeps a checkpoint of each workspace folder's view, and a fresh **read-only** handle starts from
+it, reading only the entries after it.
+- **What it holds:** the view at entry K (`latest`, revocations, txid attempts), K's digest, and K's file attributes (size,
+  modification time, file id), plus the workspace id and folder, a format version and a SHA-256 of the rest.
+- **Where:** `<state folder>/views/<workspace id>/view-<16 hex of the folder path>.json` (Windows `%LOCALAPPDATA%\RevisionWorx\state`,
+  Linux `~/.local/state/revisionworx`), private to the user, written whole by replacing. One per folder, like the replica:
+  a backup or a copy of a workspace has the same id and its own history.
+- **Used only if it describes this journal exactly:** it parses, its format, version, workspace, folder and SHA-256 match,
+  K is within the journal, and entry K is the one it ends at: the same file (attributes as recorded), or, if the file
+  changed, an entry whose digest is K's. Anything else, and the view is built from the journal as before.
+- **Written** by any handle, read-only or not, whose view has read 256 entries, or 4,096 records, since the checkpoint it
+  started from: an import of thousands of units is one entry, and counting entries alone would never keep it. A failure
+  to write is ignored, and that handle stops trying.
+- **Writes never start from one.** A writable handle builds its view from the journal, and `commit` looks strictly
+  (ADR-022, revision of 2026-11-08). So a checkpoint can only make reads quicker: no write is decided on it, and an
+  integration that asks `transaction_outcome` and retries goes through `commit`, whose txid check reads the journal.
+- **Integrity checks don't use one.** `verify`, `unit verify`, `doc verify` and `change verify` call
+  `check_from_journal()` first, so their view comes from the journal alone; `doctor` builds its own handle, which has
+  no checkpoint.
+
+**Trust.** A checkpoint is what this computer already checked, the same footing as the team replica ("checked once per
+computer"). A program that can write the user's own state folder can also replace RevisionWorx; that is outside the Tier 1
+threat model (ADR-019). Damage is caught by the SHA-256. An entry before K changed in the folder after the checkpoint was
+written isn't noticed by reads that start from it; the integrity checks read everything.
+
+**Cost** (Linux, Python 3.13.18, local disk, one run each):
+
+| | before | after |
+|---|---|---|
+| fresh read-only handle, first read, 5,000 entries | 154 ms | 14 ms (the first handle builds and keeps the checkpoint) |
+| `unit show`, 20,000 units imported (one large entry) | 1.5 s | 0.82 s |
+| `unit where-used --lot`, 20,000 units | 1.55 s | 0.81 s |
+
+What remains at 20,000 units is reading each unit's record file to find one: queries read every unit (ADR-025, no index yet).
+The checkpoint for 20,000 units is 3.5 MB.
+
+**Not done:** writable handles starting from one; a checkpoint shared between computers (it would need signing, like the
+team journal); and the journal listing on opening, which is still O(n) names.
+
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 
 Phase 1 workspaces run in **single-writer** mode (`settings.collaboration_mode = "single-writer"`).
@@ -1041,8 +1088,9 @@ Distinguish a part *identity* from a document file and from a specific revision.
 - Dependency graph (forward/reverse edges, revision-specific references, cycle-safe traversal,
   coverage and verification states): PROPOSED (Phase 4).
 - Journal compaction/segmentation for very long journals: PROPOSED. An open handle no longer lists the journal on
-  each read (ADR-022, revision of 2026-11-08), but opening still lists it and a fresh handle reads every entry once,
-  which is adequate for thousands of entries, not millions.
+  each read (ADR-022, revision of 2026-11-08), and a fresh read-only handle starts from this computer's checkpoint
+  (ADR-029). Opening still lists the journal's names, and a writable handle still reads every entry once, which is
+  adequate for tens of thousands of entries, not millions.
 
 ## CAD compatibility
 Recognition by extension only (`capability: recognized-only`). No Inventor/SolidWorks reference

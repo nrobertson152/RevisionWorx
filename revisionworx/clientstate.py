@@ -7,6 +7,7 @@ this file only means an administrator must release the checkout (audited).
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -33,16 +34,18 @@ def safe_name(value: str) -> str:
 _safe_name = safe_name
 
 
-def write_private(path: Path, obj: dict) -> None:
+def write_private(path: Path, obj: dict, compact: bool = False) -> None:
     """Write a file only this operating-system user can read: it holds a key that signs in their name. On Windows the profile's
-    own permissions do this; the mode here is for Linux. It's created private, and never exists with looser permissions."""
+    own permissions do this; the mode here is for Linux. It's created private, and never exists with looser permissions.
+    ``compact`` leaves out the indentation, for a large file nobody reads by eye."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
     try:
         with os.fdopen(fd, "wb") as fh:
-            fh.write(atomicio.dumps_json(obj))
+            fh.write(json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                     if compact else atomicio.dumps_json(obj))
             fh.flush()
             os.fsync(fh.fileno())
         atomicio.retry_sharing(lambda: os.replace(tmp, path))
