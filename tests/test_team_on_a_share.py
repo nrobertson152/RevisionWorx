@@ -13,6 +13,7 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -29,6 +30,8 @@ SHARES = [p for p in os.environ.get("REVISIONWORX_TEST_SHARES", "").split(os.pat
 pytestmark = pytest.mark.skipif(not SHARES, reason="REVISIONWORX_TEST_SHARES isn't set: there's no real share to test on")
 A = "prj_" + "a" * 32
 TIMEOUT = 600
+RACE_SECONDS = 20
+RACE_PATIENCE = 180          # a runner races for RACE_SECONDS: one still going long after that is stuck, and says where (#66)
 
 
 @pytest.fixture
@@ -62,15 +65,42 @@ def test_every_client_finds_the_folder_fit_for_team_use(clients):
         assert report["ok"], report
 
 
+def _finish_or_say_where(procs, patience) -> list[str]:
+    """Wait for every process, ``patience`` seconds in all. One still running then is asked for its Python stack (faulthandler,
+    on SIGABRT where there is one) and stopped, so a hang fails the test saying where it hung, instead of the CI job timing out
+    with nothing (#66). Each process keeps what it printed as ``.printed``."""
+    deadline, stuck = time.monotonic() + patience, []
+    for i, proc in enumerate(procs):
+        try:
+            proc.printed = proc.communicate(timeout=max(0.0, deadline - time.monotonic()))
+            continue
+        except subprocess.TimeoutExpired:
+            pass
+        if os.name != "nt":
+            proc.send_signal(signal.SIGABRT)
+        try:
+            proc.printed = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.printed = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:           # stuck inside the kernel: even a kill waits for the call to return
+                proc.printed = ("", "(it couldn't be stopped: stuck in a call to the file system)")
+        stuck.append(f"runner {i} was still going after {patience} s; where it was:\n{proc.printed[1][-6000:]}")
+    return stuck
+
+
 def test_clients_racing_for_names_each_get_a_different_one(clients, tmp_path):
     """The same race as `share test`. It measures how stale a listing and a "not found" get between these clients."""
     env = process_env()
-    procs = [subprocess.Popen([sys.executable, "-m", "revisionworx", "--json", "share", "test", str(path), "--seconds", "20"],
-                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    procs = [subprocess.Popen([sys.executable, "-X", "faulthandler", "-m", "revisionworx", "--json", "share", "test", str(path),
+                               "--seconds", str(RACE_SECONDS)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True)
              for path in clients for _ in range(2)]
+    stuck = _finish_or_say_where(procs, RACE_PATIENCE)
+    assert not stuck, "\n\n".join(stuck)
     for proc in procs:
-        _out, err = proc.communicate(timeout=TIMEOUT)
-        assert proc.returncode == 0, err
+        assert proc.returncode == 0, proc.printed[1]
     report = sharecheck.read_report(clients[0])
     note("race", {k: v for k, v in report.items() if k != "problems"})
     assert report["runners"] == len(procs) and report["problems"] == [], report
