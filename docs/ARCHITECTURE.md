@@ -892,8 +892,10 @@ effectivity and per-unit compliance (`docs/UNITS.md` section 10: change orders a
 order, written once, and a compliance record per unit and order); a PDF derivative tied to each native revision; numbering rules; a Units screen (done). 3:
 other programs recording on units (ADR-027, done), accepting FieldWorx records into unit histories (done, through FieldWorx's bridge);
 deviations and concessions (`docs/UNITS.md` section 12: written once with the units they cover, a record per unit, done); field records
-signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: transfer between
-workspaces, merged identities, journal checkpoints.
+signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: where-used for other programs
+(`link where-used`, done); journal checkpoints (ADR-022's revision of 2026-11-08 and ADR-029, done); handover packs, not yet
+signed (`docs/UNITS.md` section 13, done); who signs a pack (gate 4, the Director's), transfer between workspaces and merged
+identities (not started).
 
 **Costs and limits.** Queries read every unit (no index yet). A modified program in a team workspace can overwrite a unit event, which
 `unit verify` detects but the journal rules don't refuse (the same holds for deviations, whose digest `verify` checks); making these

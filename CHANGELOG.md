@@ -46,6 +46,10 @@ The first release. Everything below is new.
   the signature against the phone enrolled to the account, and refuses it, writing nothing, if it can't. Team › Accounts… ›
   Phones… (or `revisionworx user device list` and `revoke`) lists each person's phones and revokes a lost or stolen one;
   `unit verify` checks every signed acceptance again.
+- **Handover packs.** `revisionworx unit pack NH-26-0001 FOLDER`, or **Handover pack…** in the Units window, saves one unit's
+  record as a folder anyone can open: a page to read and print, the PDF of each revision that applies to it (never another
+  revision's), the record as JSON and `SHA256SUMS`. `unit check-pack FOLDER` checks one anywhere, with no workspace. Nothing
+  is written to the workspace. Packs aren't signed yet.
 - **Where used, for other programs.** `revisionworx link where-used` answers what `unit where-used` does: which units use a
   revision or a document, or hold a part number, serial, lot or component, now or ever. Each answer has the unit's status,
   customer, site and location, so a recall put together elsewhere (OpenMeridian tracing a lot, say) knows where every unit is.

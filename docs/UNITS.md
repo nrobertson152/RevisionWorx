@@ -418,11 +418,35 @@ allowed, a cleared permanent one, step events that aren't on the unit, a unit ap
 --detail` give each unit's `deviations` (feature `unit-deviations`; `docs/INTEGRATION.md`), in effect first. The Units window
 shows them and says when one is past its end date.
 
-## 13. Not done, and costs
+## 13. Handover packs
+
+A **handover pack** is one unit's record as a folder anyone can open, with no RevisionWorx and no network: for a customer at
+handover, a service company, or the file of a machine that is sold. `revisionworx unit pack NH-26-0001 FOLDER` (or the Units
+window's **Handover pack…**) writes it into a new folder:
+
+| File | What it is |
+|---|---|
+| `index.html` | The page to read and print: identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
+| `documents/<number> rev <label>.pdf` | The PDF of each revision that applies: the revision's own PDF (ADR-026), or the revision itself when it is a PDF. Never another revision's: one without a PDF is listed on the page as not included, with why |
+| `unit.json` | The record, as `revisionworx link unit` answers it but without computer names, with `format` `revisionworx-unit-pack`, `version` 1 and the PDFs included or not |
+| `SHA256SUMS` | The SHA-256 of every other file, in the format `sha256sum -c SHA256SUMS` reads |
+
+- **Made from what a read-only handle sees.** Nothing is written to the workspace. The pack is put together beside the folder
+  and moved into place at the end, so a failure leaves nothing; a folder that exists and isn't empty is refused.
+- **`--on DATE`** makes the pack of the unit as known on that date (section 4), so the revisions are the ones that applied then.
+- **The computer's name stays behind.** History entries keep who recorded each event (a quality record says who verified it),
+  but not the computer they used.
+- **`revisionworx unit check-pack FOLDER`** checks a pack anywhere, with no workspace. Every file listed has that SHA-256, nothing
+  else is there, and the record is one this version can read. Exit 1 if not.
+- **Not signed.** A pack shows that it is whole, not who made it, and its first page says so. Who vouches for a pack (a
+  company key, or the issuing person's account) is the Director's decision (gate 4); a signature would be added beside
+  `SHA256SUMS`.
+
+## 14. Not done, and costs
 
 - Queries read every unit (`ws.list`): fine for thousands, no index yet. The local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
-- Transfers between workspaces and merged identities are a later phase (ADR-025).
+- Transfers between workspaces and merged identities are a later phase (ADR-025). Handover packs aren't signed yet (section 13).
 - Approval of a deviation is recording it; there is no review workflow for deviations like change control's for ECOs.
 - Effectivity rows cover documents only; parts a retrofit changes are recorded by hand, citing the change.
 - Candidates read every unit's configuration: fine for thousands of units.

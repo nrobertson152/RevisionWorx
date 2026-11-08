@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The Units window (ADR-025): find a unit, see the drawings that apply to it, the engineering changes due on it, what is fitted
-in it and its history. Read-only: units are recorded with ``revisionworx unit`` (docs/USER_GUIDE.md)."""
+in it and its history, and make its handover pack. Read-only: units are recorded with ``revisionworx unit``
+(docs/USER_GUIDE.md)."""
 from __future__ import annotations
 
 import html
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView,
+                               QLabel, QLineEdit, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout)
 
 from ..controller import Controller, describe_error
 from ..viewmodels import UNIT_COLUMNS, unit_row, unit_sections
@@ -58,6 +60,11 @@ class UnitsWindow(QDialog):
         split.setSizes([520, 560])
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
         buttons.rejected.connect(self.reject)
+        self.pack_button = buttons.addButton("Handover pack…", QDialogButtonBox.ButtonRole.ActionRole)
+        self.pack_button.setToolTip("Save this unit's record as a folder anyone can open: a page to read and print, the PDFs "
+                                    "of the revisions that apply to it, and a checksum of every file. Nothing is changed "
+                                    "in the workspace.")
+        self.pack_button.clicked.connect(self.make_pack)
         layout = QVBoxLayout(self)
         layout.addLayout(top)
         layout.addWidget(split, 1)
@@ -118,6 +125,7 @@ class UnitsWindow(QDialog):
 
     def show_selected(self) -> None:
         unit_id = self.selected_id()
+        self.pack_button.setEnabled(unit_id is not None)
         if unit_id is None:
             self.detail.clear()
             return
@@ -136,3 +144,34 @@ class UnitsWindow(QDialog):
 
     def detail_text(self) -> str:
         return self.detail.toPlainText()
+
+    def make_pack(self) -> None:
+        """Ask where, then make the selected unit's handover pack in a new folder there, named after the unit."""
+        unit_id = self.selected_id()
+        if unit_id is None:
+            return
+        label = next((r["label"] for r in self.rows if r["id"] == unit_id), unit_id)
+        where = QFileDialog.getExistingDirectory(self, f"Where should the handover pack of {label} go?")
+        if not where:
+            return
+        folder = _new_folder(Path(where), f"{label} handover pack")
+        try:
+            made = self.ctl.unit_pack(unit_id, folder)
+        except Exception as exc:  # noqa: BLE001 - shown, never raised into Qt
+            self.status.setText(describe_error(exc))
+            return
+        missing = ", ".join(m["document"] + " rev " + m["revision"] for m in made["missing"])
+        plural = "s" if made["pdfs"] != 1 else ""
+        self.status.setText(f"Handover pack of {made['unit']} saved in {made['path']}, with {made['pdfs']} PDF{plural}."
+                            + (f" Not included, with the reason on its first page: {missing}." if missing else "")
+                            + " It isn't signed: it shows that it is whole, not who made it.")
+
+
+def _new_folder(parent: Path, name: str) -> Path:
+    """``parent/name``, or ``name (2)`` and so on if that is taken: a pack never goes into a folder already in use."""
+    safe = "".join("_" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in name).strip(" .") or "handover pack"
+    folder, n = parent / safe, 1
+    while folder.exists():
+        n += 1
+        folder = parent / f"{safe} ({n})"
+    return folder

@@ -14,6 +14,8 @@
     fit REF POSITION (--component REF | --part-number PN) [--serial S] [--lot L] [--replace [--disposition D]]
     remove REF POSITION [--disposition D]                               void REF N [N ...] --reason R
     history REF                                                         where-used ...        verify
+    pack REF FOLDER [--on DATE]           (a handover pack: a page, the PDFs that apply, the record, SHA256SUMS)
+    check-pack FOLDER                     (is a handover pack whole? needs no workspace)
     numbering new NAME --pattern 'NH-{yy}-{seq:4}' [--issuer I]       numbering list | numbering next NAME
     new --serial-from NAME ...  (the next serial of a numbering, taken in the same entry)
     change candidates|status ECO          change decide ECO --kind K [--standard STD] [--scope RULE --value V | --unit REF]
@@ -42,7 +44,7 @@ from .model import (BASES, CLASSES, DEVIATION_KINDS, DISPOSITIONS, EFFECTIVITY_K
                     STATUSES, UnitError, ValidationError, parse_evidence, unit_label)
 from .service import UnitService, service_for
 
-READS = {"list", "show", "history", "where-used", "verify", "export", "compliance"}
+READS = {"list", "show", "history", "where-used", "verify", "export", "compliance", "pack"}
 CHANGE_READS = {"candidates", "status"}
 DEVIATION_READS = {"list", "show", "overdue"}
 
@@ -155,6 +157,13 @@ def build_parser(prog: str) -> argparse.ArgumentParser:
     s.add_argument("--history", action="store_true", help="where it has ever been, not only now")
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("verify", help="check every unit's history and references"); s.add_argument("--json", action="store_true")
+    s = sub.add_parser("pack", help="a handover pack for one unit: a page to read and print, the PDFs of the revisions that "
+                       "apply to it, its record, and the SHA-256 of every file")
+    s.add_argument("ref"); s.add_argument("folder", help="a new folder for the pack")
+    s.add_argument("--on", default="", help="the unit as known on this date (default: now)")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("check-pack", help="is a handover pack whole? (needs no workspace)")
+    s.add_argument("folder"); s.add_argument("--json", action="store_true")
 
     ch = sub.add_parser("change", help="which units an engineering change reaches, and where each one stands"
                         ).add_subparsers(dest="sub", required=True)
@@ -316,6 +325,8 @@ def _units(svc: UnitService, refs: list[str]) -> list[str]:
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     a = build_parser(prog or "python -m revisionworx.units").parse_args(argv)
     out = sys.stdout
+    if a.cmd == "check-pack":                        # a pack is checked anywhere, with no workspace
+        return _check_pack(a, out)
     sub = getattr(a, "sub", None)
     writable = a.cmd not in READS and not (a.cmd in ("standard", "numbering") and sub in ("list", "show", "next")) and \
         not (a.cmd == "import" and a.dry_run) and not (a.cmd == "change" and sub in CHANGE_READS) and \
@@ -375,6 +386,17 @@ def _dispatch(a: argparse.Namespace, ws: Workspace, svc: UnitService, out) -> in
         return 1 if problems else 0
     if cmd == "where-used":
         return _where_used(a, svc, out)
+    if cmd == "pack":
+        from . import pack
+        made = pack.make(svc, a.ref, Path(a.folder), on=a.on)
+        if a.json:
+            out.write(json.dumps(made, indent=1, ensure_ascii=False) + "\n")
+            return 0
+        out.write(f"handover pack for {made['unit']} in {made['path']}: {made['files']} file(s), {made['pdfs']} PDF(s)\n")
+        for m in made["missing"]:
+            out.write(f"  not included: {m['document']} rev {m['revision']}: {m['missing']}\n")
+        out.write("  not signed: it shows that it is whole, not who made it\n")
+        return 0
     if cmd == "export":
         from ..bom.fileio import write_file
         write_file(Path(a.file), csvio.units_to_csv(svc).encode("utf-8-sig"), overwrite=a.overwrite)
@@ -722,3 +744,17 @@ def _where_used(a: argparse.Namespace, svc: UnitService, out) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _check_pack(a: argparse.Namespace, out) -> int:
+    from . import pack
+    report = pack.check(Path(a.folder))
+    if a.json:
+        out.write(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
+    else:
+        for problem in report["problems"]:
+            out.write(f"{problem}\n")
+        what = f"the handover pack of {report['unit']}" if report["unit"] else "this folder"
+        out.write(f"{what}: {report['files']} file(s), " + ("whole" if report["ok"] else f"{len(report['problems'])} "
+                                                             "problem(s)") + "; not signed\n")
+    return 0 if report["ok"] else 1
