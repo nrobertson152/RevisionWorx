@@ -1,7 +1,11 @@
-# RevisionWorx 1.0.0 release checklist (Director)
+# RevisionWorx 1.0.0 release checklist
 
-Releases, tags and licensing are the Director's alone (AGENTS.md). Everything up to the decision has been
-prepared on `main`; this page lists what is done, what needs you, and the exact steps.
+Releases, tags and licensing are the Director's (AGENTS.md). For 1.0.0 the Director decided on 2026-11-08 that Claude
+issues the release (*"you can issue the release when you're ready"*), with transfers between workspaces and factory lots
+in it. Claude follows the steps below and records the candidate, its runs and the release on the release pull request.
+
+What that decision doesn't change: the two boxes under *Needs you* weren't done separately. Nobody has followed
+`docs/GUI_ACCEPTANCE.md` by hand, and the release notes say so, as `docs/KNOWN_LIMITATIONS.md` does (*Not verified*, 3).
 
 ## Release candidate
 
@@ -39,9 +43,9 @@ runs are both green (Actions tab, filter by branch `main`). Record that SHA belo
 
 ## Release steps (after the boxes above)
 
-1. In `CHANGELOG.md`, replace "(unreleased: awaiting the Director's release decision)" with the release date
-   (or ask Claude to). That is a new commit on `main`; wait for its CI and Package runs to go green and use it as
-   the candidate.
+1. In `CHANGELOG.md`, replace "(unreleased: awaiting the Director's release decision)" with the release date. That
+   is a new commit on `main`; wait for its CI and Package runs to go green and use it as the candidate. (Done for
+   1.0.0 by the release pull request.)
 2. Tag the candidate and push the tag. The tag triggers a **Package** run that builds the release files from
    exactly that commit:
    ```bash

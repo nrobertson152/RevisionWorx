@@ -2,7 +2,7 @@
 
 All notable changes to RevisionWorx. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 1.0.0 (unreleased: awaiting the Director's release decision)
+## 1.0.0 (2026-11-08)
 
 The first release. Everything below is new.
 
