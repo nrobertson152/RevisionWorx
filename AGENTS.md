@@ -16,7 +16,8 @@ until the Director changes it.
 
 **RevisionWorx 1.0.0 (Director decision, 2026-11-08):** Claude issues the 1.0.0 release, its `v1.0.0` tag and GitHub
 Release, when it is ready, with transfers between workspaces and factory lots in it, following
-`docs/RELEASE_CHECKLIST.md`. Every other release, tag and licensing change stays the Director's.
+`docs/RELEASE_CHECKLIST.md`. Every other release, tag and licensing change stays the Director's. A version tag's Package
+run drafts that tag's release with the files it built; whoever pushed the tag writes the notes and publishes it.
 
 ## Roles and authority
 

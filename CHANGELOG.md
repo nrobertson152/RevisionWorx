@@ -149,3 +149,5 @@ The first release. Everything below is new.
 ### Packaging
 - Standalone builds for Windows x64 (zip) and Linux x86-64 (tar.gz) with SHA-256 checksums; wheel and sdist.
   Every build is self-tested in CI before it is kept.
+- A version tag's Package run drafts its GitHub Release with those files, each checked against the SHA-256 recorded when
+  it was built; a person publishes it.
