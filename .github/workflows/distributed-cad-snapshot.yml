@@ -1,0 +1,42 @@
+# Distributed Systems independent immutable source capture test
+# Exact source under test is NOT branch floating head; pinned to SHA below.
+name: Distributed CAD Source Snapshot Identity
+
+on:
+  push:
+    branches:
+      - research/shared-filesystem-protocol
+    paths:
+      - 'prototype/test_core_96f9_cad_atomic_save_identity.py'
+      - '.github/workflows/distributed-cad-snapshot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    name: CAD rename identity (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: research
+      - uses: actions/checkout@v4
+        with:
+          ref: 96f9c368a11fd43c0440d404c7258c7dfeacabf6
+          path: phase2-documents
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Execute OS-backed save-by-rename race and positive safety oracle
+        working-directory: research
+        env:
+          REVISIONWORX_PHASE2_CHECKOUT: ${{ github.workspace }}/phase2-documents
+        run: python -m unittest -v prototype.test_core_96f9_cad_atomic_save_identity

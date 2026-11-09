@@ -1,0 +1,226 @@
+"""Reproducible local SQLite / independent-process authority tests; NOT share certification."""
+import multiprocessing as mp
+import os
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+
+from prototype.authority import Authority, Fenced
+
+
+def contender(path, gate, queue, name):
+    authority = Authority(path)
+    gate.wait()
+    try:
+        queue.put(("won", name, authority.acquire("drawing", name)))
+    except Fenced:
+        queue.put(("lost", name, None))
+
+
+def publisher(path, ready, proceed, queue, name, generation):
+    authority = Authority(path)
+    ready.set()
+    proceed.wait(20)
+    try:
+        queue.put(("committed", authority.publish("drawing", name, generation,
+                                                 "tx-from-paused-worker", "data", expected_revision=0)))
+    except Fenced:
+        queue.put(("fenced", None))
+
+
+def crash_before_transaction_commit(path, ready):
+    authority = Authority(path)
+    with authority._transaction() as db:
+        db.execute("UPDATE authority SET generation=generation+1, owner=NULL WHERE resource=?",
+                   ("drawing",))
+        ready.set()
+        os._exit(31)  # simulate process death with uncommitted SQLite transaction
+
+
+def crash_after_transaction_commit(path, generation):
+    authority = Authority(path)
+    authority.publish("drawing", "alice", generation, "committed-but-unacknowledged",
+                      "content", expected_revision=0)
+    os._exit(32)  # commit succeeded but response was never delivered
+
+
+class AuthorityTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "authority.db"
+        self.authority = Authority(self.path)
+
+    def test_revoked_active_writer_cannot_publish(self):
+        old = self.authority.acquire("drawing", "alice")
+        self.assertGreater(self.authority.override("drawing", "operator recovery", "unverified actor"), old)
+        with self.assertRaises(Fenced):
+            self.authority.publish("drawing", "alice", old, "tx-old", "old", expected_revision=0)
+        fresh = self.authority.acquire("drawing", "bob")
+        self.assertGreater(fresh, old)
+        self.assertEqual(self.authority.publish("drawing", "bob", fresh, "tx-new", "new", expected_revision=0), "committed")
+
+    def test_idempotency_and_replay_after_override(self):
+        generation = self.authority.acquire("drawing", "alice")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data", expected_revision=0), "committed")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data", expected_revision=0), "already-committed")
+        with self.assertRaises(Fenced):
+            self.authority.publish("drawing", "alice", generation, "tx1", "changed", expected_revision=0)
+        self.authority.override("drawing", "administrative recovery", "unverified actor")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation, "tx1", "data", expected_revision=0), "already-committed")
+        with self.assertRaises(Fenced):
+            self.authority.publish("drawing", "alice", generation, "tx2", "new", expected_revision=1)
+        self.assertEqual(self.authority.outcome("tx1")["state"], "committed")
+        self.assertEqual(self.authority.outcome("tx2")["state"], "not-found")
+
+    def test_process_contention(self):
+        ctx = mp.get_context("spawn")
+        gate, queue = ctx.Event(), ctx.Queue()
+        ps = [ctx.Process(target=contender, args=(str(self.path), gate, queue, str(i)))
+              for i in range(6)]
+        for p in ps:
+            p.start()
+        gate.set()
+        results = [queue.get(timeout=25) for _ in ps]
+        for p in ps:
+            p.join(25)
+            self.assertEqual(p.exitcode, 0)
+        self.assertEqual(sum(x[0] == "won" for x in results), 1)
+
+    def test_paused_writer_revoked_across_processes(self):
+        generation = self.authority.acquire("drawing", "alice")
+        ctx = mp.get_context("spawn")
+        ready, proceed, queue = ctx.Event(), ctx.Event(), ctx.Queue()
+        p = ctx.Process(target=publisher,
+                        args=(str(self.path), ready, proceed, queue, "alice", generation))
+        p.start()
+        self.assertTrue(ready.wait(20))
+        self.authority.override("drawing", "operator recovery", "unverified actor")
+        proceed.set()
+        self.assertEqual(queue.get(timeout=25)[0], "fenced")
+        p.join(25)
+        self.assertEqual(p.exitcode, 0)
+        self.assertEqual(self.authority.outcome("tx-from-paused-worker")["state"], "not-found")
+
+    def test_override_serializes_with_publication(self):
+        generation = self.authority.acquire("drawing", "alice")
+        self.authority.publish("drawing", "alice", generation, "tx-before", "old", expected_revision=0)
+        self.authority.override("drawing", "operator recovery", "unverified actor")
+        with self.assertRaises(Fenced):
+            self.authority.publish("drawing", "alice", generation, "tx-after", "new", expected_revision=1)
+        self.assertEqual(self.authority.outcome("tx-before")["revision"], 1)
+        self.assertEqual(self.authority.snapshot("drawing")[2], 1)
+
+    def test_stale_record_precondition_rejected(self):
+        generation = self.authority.acquire("drawing", "alice")
+        self.authority.publish("drawing", "alice", generation, "tx1", "first", expected_revision=0)
+        with self.assertRaises(Fenced):
+            self.authority.publish("drawing", "alice", generation, "tx2", "second", expected_revision=0)
+        self.assertEqual(self.authority.outcome("tx2")["state"], "not-found")
+
+    def test_restart_persists_revocation_generation_and_audit(self):
+        generation = self.authority.acquire("drawing", "alice")
+        self.authority.override("drawing", "restart recovery", "operator-claim")
+        recovered = Authority(self.path)
+        with self.assertRaises(Fenced):
+            recovered.publish("drawing", "alice", generation, "tx-old", "invalid", expected_revision=0)
+        newer = recovered.acquire("drawing", "bob")
+        self.assertGreater(newer, generation)
+        self.assertEqual(recovered.audits("drawing"),
+                         [(generation, generation+1, "alice", "restart recovery", "operator-claim")])
+
+    def test_no_reason_rejected_without_revocation(self):
+        generation = self.authority.acquire("drawing", "alice")
+        with self.assertRaises(ValueError):
+            self.authority.override("drawing", "", "actor")
+        self.assertEqual(self.authority.snapshot("drawing")[:2], (generation, "alice"))
+
+    def test_failed_commit_rolls_back_authority_revision(self):
+        generation = self.authority.acquire("drawing", "alice")
+        with self.assertRaises(sqlite3.IntegrityError):
+            # txid uniqueness is checked before insert, so instead violate NOT NULL payload.
+            self.authority.publish("drawing", "alice", generation, "bad", None, expected_revision=0)
+        self.assertEqual(self.authority.snapshot("drawing")[2], 0)
+        self.assertEqual(self.authority.outcome("bad")["state"], "not-found")
+
+    def test_process_crash_before_commit_rolls_back(self):
+        generation = self.authority.acquire("drawing", "alice")
+        ctx = mp.get_context("spawn")
+        ready = ctx.Event()
+        child = ctx.Process(target=crash_before_transaction_commit,
+                            args=(str(self.path), ready))
+        child.start()
+        self.assertTrue(ready.wait(20))
+        child.join(20)
+        self.assertEqual(child.exitcode, 31)
+        self.assertEqual(self.authority.snapshot("drawing")[:2], (generation, "alice"))
+        self.assertEqual(self.authority.audits("drawing"), [])
+
+    def test_process_crash_after_commit_is_idempotent(self):
+        generation = self.authority.acquire("drawing", "alice")
+        ctx = mp.get_context("spawn")
+        child = ctx.Process(target=crash_after_transaction_commit,
+                            args=(str(self.path), generation))
+        child.start()
+        child.join(20)
+        self.assertEqual(child.exitcode, 32)
+        self.assertEqual(self.authority.outcome("committed-but-unacknowledged")["state"],
+                         "committed")
+        self.assertEqual(self.authority.publish("drawing", "alice", generation,
+                         "committed-but-unacknowledged", "content", expected_revision=0),
+                         "already-committed")
+        self.assertEqual(self.authority.snapshot("drawing")[2], 1)
+
+    def test_required_expected_revision(self):
+        generation = self.authority.acquire("drawing", "alice")
+        with self.assertRaises(TypeError):
+            self.authority.publish("drawing", "alice", generation, "unconditional", "payload")
+        with self.assertRaises(ValueError):
+            self.authority.publish("drawing", "alice", generation, "invalid", "payload",
+                                   expected_revision=-1)
+        self.assertEqual(self.authority.outcome("unconditional")["state"], "not-found")
+
+    def test_override_races_publish_in_threads(self):
+        import threading
+        generation = self.authority.acquire("drawing", "alice")
+        start = threading.Barrier(3)
+        outcomes = []
+
+        def write():
+            start.wait()
+            try:
+                outcomes.append(self.authority.publish("drawing", "alice", generation,
+                                                      "simultaneous", "payload", expected_revision=0))
+            except Fenced:
+                outcomes.append("fenced")
+
+        def revoke():
+            start.wait()
+            self.authority.override("drawing", "race", "operator-claim")
+
+        a = threading.Thread(target=write)
+        b = threading.Thread(target=revoke)
+        a.start(); b.start(); start.wait()
+        a.join(15); b.join(15)
+        self.assertFalse(a.is_alive() or b.is_alive())
+        self.assertEqual(len(outcomes), 1)
+        self.assertIn(outcomes[0], ("committed", "fenced"))
+        self.assertEqual(self.authority.outcome("simultaneous")["state"],
+                         "committed" if outcomes[0] == "committed" else "not-found")
+        with self.assertRaises(Fenced):
+            self.authority.publish("drawing", "alice", generation, "late", "payload",
+                                   expected_revision=self.authority.snapshot("drawing")[2])
+
+    def test_sequence_order_follows_serialized_publications(self):
+        generation = self.authority.acquire("drawing", "alice")
+        for i in range(5):
+            self.authority.publish("drawing", "alice", generation, f"tx{i}", str(i),
+                                   expected_revision=i)
+        sequences = [self.authority.outcome(f"tx{i}")["sequence"] for i in range(5)]
+        self.assertEqual(sequences, sorted(sequences))
+        self.assertEqual(self.authority.snapshot("drawing")[2], 5)
+
+
+if __name__ == "__main__":
+    unittest.main()
