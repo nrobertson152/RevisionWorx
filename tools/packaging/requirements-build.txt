@@ -1,0 +1,6 @@
+# Experimental top-level build pins, not a hashed transitive lock.
+# Actual resolved versions are saved to dependencies.txt with each bundle.
+PyInstaller==6.13.0
+PySide6-Essentials==6.8.3
+setuptools==75.8.2
+wheel==0.45.1

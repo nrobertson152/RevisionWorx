@@ -1,0 +1,52 @@
+name: OpenSchematix adapter regression
+on:
+  push:
+    branches:
+      - integration/openschematix
+    paths:
+      - '.github/workflows/openschematix-adapter.yml'
+      - 'revisionworx_integrations/**'
+      - 'tests/test_openschematix_*.py'
+      - 'tests/fixtures/openschematix/**'
+  workflow_dispatch:
+concurrency:
+  group: openschematix-adapter-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  adapter:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify standalone OpenSchematix adapter
+        run: python -m unittest discover -s tests -p 'test_openschematix_adapter.py' -v
+      - name: Checkout pinned OpenSchematix 1.1.0 native source
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/OpenSchematix
+          ref: 74e4c79053721997ae899eb9817ddbcb76eec5a0
+          path: external/openschematix
+          persist-credentials: false
+      - name: Compare exact native BOM against real fixtures
+        env:
+          OPENSCHEMATIX_ORACLE_SOURCE: ${{ github.workspace }}/external/openschematix
+        run: python -m unittest discover -s tests -p 'test_openschematix_native_oracle.py' -v
+      - name: Checkout pinned RevisionWorx Phase 2 draft source
+        uses: actions/checkout@v4
+        with:
+          repository: nrobertson152/RevisionWorx
+          ref: d656884b39401134149273dd0121ef620b76eb8e
+          path: external/revisionworx-phase2
+          persist-credentials: false
+      - name: Verify immutable revision adapter boundary against Phase 2
+        if: runner.os == 'Linux'
+        env:
+          REVISIONWORX_PHASE2_SOURCE: ${{ github.workspace }}/external/revisionworx-phase2
+        run: python -m unittest discover -s tests -p 'test_openschematix_phase2_contract.py' -v
