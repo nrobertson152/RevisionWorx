@@ -11,8 +11,13 @@ Engineering Coordinator. The Director has waived the independent-Reviewer requir
 merge its own pull requests without separate review. Every other safeguard below still applies: exact-SHA green
 CI before merging, regression tests for every behaviour change, no weakened tests, fail-closed integrity, no
 unverified multi-user claims, and evidence recorded on the PR. **Releases, release/version tags and licensing
-remain Director-only.** Where this section and the three-role text below differ, this section governs until the
-Director changes it.
+remain Director-only,** except as below. Where this section and the three-role text below differ, this section governs
+until the Director changes it.
+
+**RevisionWorx 1.0.0 (Director decision, 2026-11-08):** Claude issues the 1.0.0 release, its `v1.0.0` tag and GitHub
+Release, when it is ready, with transfers between workspaces and factory lots in it, following
+`docs/RELEASE_CHECKLIST.md`. Every other release, tag and licensing change stays the Director's. A version tag's Package
+run drafts that tag's release with the files it built; whoever pushed the tag writes the notes and publishes it.
 
 ## Roles and authority
 

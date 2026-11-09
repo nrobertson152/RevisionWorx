@@ -1,8 +1,9 @@
 # Standalone RevisionWorx builds (no Python needed by the user): a zip for Windows x64 and a tar.gz for
 # Linux x86-64, each with the command line and the desktop window. Every build is started and checked here
 # before it is kept: `revisionworx --version`, a workspace created and checked from the CLI, and the desktop
-# window's --self-test (create a project, import a file, reopen). Artifacts only: this workflow never
-# creates a GitHub Release or a tag (Director-only, AGENTS.md).
+# window's --self-test (create a project, import a file, reopen). On a version tag, pushed by whoever AGENTS.md allows,
+# it also drafts that tag's GitHub Release with these files, each checked against the SHA-256 recorded when it was
+# built; a person writes the notes and publishes it (docs/RELEASE_CHECKLIST.md). It never creates or moves a tag.
 name: Package
 
 on:
@@ -158,10 +159,60 @@ jobs:
       - run: python -m pip install build
       - run: python -m build
       - name: Checksums
-        run: cd dist && sha256sum * | tee SHA256SUMS
+        run: |
+          cd dist
+          sums="$(sha256sum -- *)"
+          printf '%s\n' "$sums" | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: python-packages
           path: dist/*
           retention-days: 30
           if-no-files-found: error
+
+  draft-release:
+    # Only a version tag's run drafts a release, and only this job can write. A draft is seen by people with write access
+    # to the repository and by no one else, until a person publishes it.
+    name: "draft release (version tags only)"
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, python-packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: The tag names this version, the changelog dates it, and every file matches its recorded SHA-256
+        shell: bash
+        run: |
+          version=$(python3 -c "import revisionworx; print(revisionworx.__version__)")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::the tag $GITHUB_REF_NAME doesn't name this commit's version, $version"; exit 1
+          fi
+          if ! grep -Eq "^## $version \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no dated section for $version"; exit 1
+          fi
+          cd release
+          ls -l
+          for f in "RevisionWorx-$version-windows-x64.zip" "RevisionWorx-$version-linux-x86_64.tar.gz" \
+                   "revisionworx-$version-py3-none-any.whl" "revisionworx-$version.tar.gz" SHA256SUMS; do
+            test -s "$f" || { echo "::error::$f wasn't built"; exit 1; }
+          done
+          sha256sum -c -- *.sha256
+          sha256sum -c SHA256SUMS
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Draft the release with the files (a person publishes it)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf 'Drafted by the Package workflow from %s (%s), run %s. Notes are written before it is published.\n' \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "$GITHUB_RUN_ID" > notes.md
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "RevisionWorx $VERSION" --notes-file notes.md release/*

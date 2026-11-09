@@ -1,7 +1,11 @@
-# RevisionWorx 1.0.0 release checklist (Director)
+# RevisionWorx 1.0.0 release checklist
 
-Releases, tags and licensing are the Director's alone (AGENTS.md). Everything up to the decision has been
-prepared on `main`; this page lists what is done, what needs you, and the exact steps.
+Releases, tags and licensing are the Director's (AGENTS.md). For 1.0.0 the Director decided on 2026-11-08 that Claude
+issues the release (*"you can issue the release when you're ready"*), with transfers between workspaces and factory lots
+in it. Claude follows the steps below and records the candidate, its runs and the release on the release pull request.
+
+What that decision doesn't change: the two boxes under *Needs you* weren't done separately. Nobody has followed
+`docs/GUI_ACCEPTANCE.md` by hand, and the release notes say so, as `docs/KNOWN_LIMITATIONS.md` does (*Not verified*, 3).
 
 ## Release candidate
 
@@ -39,27 +43,24 @@ runs are both green (Actions tab, filter by branch `main`). Record that SHA belo
 
 ## Release steps (after the boxes above)
 
-1. In `CHANGELOG.md`, replace "(unreleased: awaiting the Director's release decision)" with the release date
-   (or ask Claude to). That is a new commit on `main`; wait for its CI and Package runs to go green and use it as
-   the candidate.
+1. In `CHANGELOG.md`, replace "(unreleased: awaiting the Director's release decision)" with the release date. That
+   is a new commit on `main`; wait for its CI and Package runs to go green and use it as the candidate. (Done for
+   1.0.0 by the release pull request.)
 2. Tag the candidate and push the tag. The tag triggers a **Package** run that builds the release files from
    exactly that commit:
    ```bash
    git tag -a v1.0.0 <candidate-sha> -m "RevisionWorx 1.0.0"
    git push origin v1.0.0
    ```
-3. When that Package run is green, download its artifacts: `standalone-windows-x64`,
-   `standalone-linux-x86_64`, `python-packages`.
-4. Create the GitHub Release for `v1.0.0` (Releases › Draft a new release). Title "RevisionWorx 1.0.0"; notes:
-   the 1.0.0 section of `CHANGELOG.md` plus a link to `docs/KNOWN_LIMITATIONS.md`. Attach:
+3. That Package run builds and checks the release files from exactly that commit, then its **draft release** job
+   drafts the GitHub Release for the tag, titled "RevisionWorx 1.0.0", with the files attached:
    `RevisionWorx-1.0.0-windows-x64.zip` and `.sha256`, `RevisionWorx-1.0.0-linux-x86_64.tar.gz` and `.sha256`,
-   `revisionworx-1.0.0-py3-none-any.whl`, `revisionworx-1.0.0.tar.gz`, `SHA256SUMS`.
-   With the GitHub CLI, the same in one step:
-   ```bash
-   gh release create v1.0.0 --title "RevisionWorx 1.0.0" --notes-file <notes.md> \
-     RevisionWorx-1.0.0-windows-x64.zip* RevisionWorx-1.0.0-linux-x86_64.tar.gz* \
-     revisionworx-1.0.0-py3-none-any.whl revisionworx-1.0.0.tar.gz SHA256SUMS
-   ```
+   `revisionworx-1.0.0-py3-none-any.whl`, `revisionworx-1.0.0.tar.gz` and `SHA256SUMS`. It refuses to draft unless
+   the tag names the version the commit carries, the changelog dates that version, and every file matches the SHA-256
+   recorded when it was built. Only that job can write to the repository, and it never publishes.
+4. Write the notes on the draft (Releases, then the draft's *Edit*): what isn't verified first, from
+   `docs/KNOWN_LIMITATIONS.md`, then the 1.0.0 section of `CHANGELOG.md`, with its links made absolute at the tag,
+   and each file's SHA-256. Check the files against the Package run's log, then **Publish release**.
 5. Optional: publish the wheel to PyPI (`twine upload revisionworx-1.0.0*`). The name `revisionworx` must be
    available to you there.
 
