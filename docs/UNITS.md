@@ -21,8 +21,8 @@ day it was built through decades of repairs and modifications, without copying a
 - **No silent substitution.** A unit's drawings are what its history says. A newer released revision is shown *beside* it, flagged,
   never in its place.
 
-What it doesn't do yet (planned; see `docs/ARCHITECTURE.md` ADR-025): transfer of a unit between workspaces, and merging two
-records that turn out to be one machine.
+One workspace keeps a unit's record at a time. When a unit goes to another company or site that keeps its own records, it is
+transferred (section 16): the record goes with it, and the revisions it uses stay the source's, referred to and never copied.
 
 ## 2. Words
 
@@ -54,7 +54,7 @@ allow newline and tab. Times are UTC ISO 8601 as the core writes them. Dates (`e
 | `name` | short description, ≤ 200 |
 | `model` | `{"part": "" or prt_…, "number": ≤ 100}`: the design it is an instance of. `number` is enough; `part` names a catalog part when there is one |
 | `identifiers` | `[{"scheme", "issuer", "value", "active", "since"}]` in the order they were added; `since` is the event that added it |
-| `status` | `planned`, `in-build`, `built`, `in-service`, `out-of-service`, `retired`, `scrapped`; or `merged`, which only a merge sets (section 15) |
+| `status` | `planned`, `in-build`, `built`, `in-service`, `out-of-service`, `retired`, `scrapped`; or `merged`, which only a merge sets (section 15), or `transferred`, which only a transfer sets (section 16) |
 | `project` | `""` or a `prj_` id |
 | `customer`, `site`, `location` | text, ≤ 200 each: who has it, where, and where on the site |
 | `parent` | `null` or `{"unit": unt_…, "position"}`: the unit this one is fitted in |
@@ -62,6 +62,7 @@ allow newline and tab. Times are UTC ISO 8601 as the core writes them. Dates (`e
 | `documents` | unit differences: `{doc_id: {"revision": rev_… or "" (doesn't apply), "event", "basis"}}` |
 | `components` | `{position key: {"position", "part", "number", "unit", "serial", "lot", "since", "event", "basis"}}`; the key is the position casefolded |
 | `milestones` | `{"built" \| "shipped" \| "installed" \| "commissioned" \| "decommissioned": {"date", "event"}}` |
+| `lots` | only once the unit has factory lots (`lots.used`, section 4): `[{"number", "lot", "quantity", "units", "event", "since", "basis"}]`, in the order recorded. A unit without them has no `lots` field, so its record reads as it always did |
 | `notes` | ≤ 4000 |
 | `events` | `{"count", "head"}`: how many events, and the digest of the last |
 | `created`, `updated` | the recorded times of the first and last events |
@@ -133,9 +134,13 @@ superseded need an explicit choice (`allow_unreleased`), as an unreleased BOM do
 | `pack.withdrawn` | `pack` | none: that pack isn't to be relied on now; the reason is required |
 | `unit.merged` | `into` (the unit that stays), `identifiers: [{scheme, issuer, value}]` | the duplicate, in the entry of a merge (section 15): those identifiers leave it, `status` becomes `merged` |
 | `unit.absorbed` | `unit` (the duplicate), `identifiers: [{scheme, issuer, value, active}]` | the unit that stays, in the same entry: it takes them over, active or not as they were |
+| `unit.transferred` | `to` (who keeps it now, as the person transferring it wrote it), `pack` (SHA-256 of the transfer pack's `SHA256SUMS`), `key` (`""`, or the key that signed it), `kept` (SHA-256 of this workspace's copy of the pack), `units` (the units transferred together: the one transferred, then each fitted in it) | `status` becomes `transferred` (section 16) |
+| `unit.received` | `from: {workspace, name}`, `pack`, `key` (as above, the key that signed it), `state` (the unit as the transfer carried it, section 16), `foreign` (what is kept of each document it uses that isn't this workspace's: `{doc id: {workspace, workspace_name, number, title, revision, label, state, state_name, sha256, size, pdf}}`), `history` (SHA-256 of its history before, kept in the content store) | the record is the state the transfer carried, from this event on: event 1 of a unit new here, or a later one of a unit this workspace transferred away and receives back |
+| `lots.used` | `lots: [{number, lot, quantity}]` (1 to 1000: a part number and its lot, both required, and how much of the lot was used, as text or `""`), `units` (how many units were built with these lots, 1 or more) | `lots` gains them. The work that built the unit used them: a completion of a work order, recorded when it registers its units (section 8). With `units` more than 1 the unit holds some of them, not necessarily all, and nothing records a lot leaving the unit |
 
 **Voiding** corrects a record, it doesn't undo a physical change. It applies to `unit.updated`, `milestone`, `standard.set`,
-`document.*`, `note`, `verified`, `component.*` and `unit.merged`/`unit.absorbed` (which takes its other half with it: section 15). Voiding a component event also voids the matching `parent.set` on the component unit in the same
+`document.*`, `note`, `verified`, `component.*`, `lots.used` and `unit.merged`/`unit.absorbed` (which takes its other half with it:
+section 15). Voiding a component event also voids the matching `parent.set` on the component unit in the same
 entry, and is refused if a later event on either unit touches that position or that component (record the correction by hand then).
 Identifiers are corrected with `identifier.removed`; a status is corrected by setting it again. A void can't be voided. A pack
 that was issued stays issued: `pack.*` events are never voided, and a pack is withdrawn instead.
@@ -190,6 +195,9 @@ checked by `revisionworx verify`, exactly as the core guarantees for any entry.
 | `withdraw_pack` | no reason; the unit has no pack with that number; it is already withdrawn |
 | `merge` | no reason; the same unit; either is merged; the duplicate has something fitted, is fitted in something, or has engineering-change or deviation records; both hold the same identifier, or different serials or tags from the same issuer (section 15) |
 | any action on a merged unit | always, but voiding its merge: "merged into …: record it there" |
+| `transfer` (section 16) | the unit is fitted in another (transfer that one), merged or transferred; a document it uses can't be found; something was recorded on any of the units since the pack was put together |
+| `receive` (section 16) | the pack isn't whole, its signature doesn't hold or isn't by the key given; it was made by this workspace; this workspace has its own record of one of its units (the same id) that isn't one it transferred away; another unit here holds one of its identifiers |
+| any action on a transferred unit | always, but receiving it back: "transferred to …: it is recorded in that workspace now" |
 
 **Retries.** Every action takes a `txid` (32 lowercase hex, one per user action). If the outcome of an earlier attempt is unknown, the
 same call with the same txid returns the result without writing again; a txid used for different input raises `ReplayRefused`, and so
@@ -210,6 +218,9 @@ does one whose attempt was fenced (start again with a new txid). New units take 
 | `signature-reused` | one signed field record is cited by more than one action (txid) |
 | `pack-register` | packs aren't numbered 1, 2, 3 in the order issued, a withdrawal names a pack that isn't issued and in effect, or a void names a `pack.*` event |
 | `merge-mismatch` | a unit's status and history disagree about a merge, or a merge is recorded in one of the two histories only |
+| `transfer-mismatch` | a unit's status and history disagree about a transfer |
+| `received-content` | the history a receipt brought, or the PDF of a document kept from another workspace, is missing or damaged in the content store |
+| `kept-content` | this workspace's copy of a transfer pack it issued, or a file in it, is missing or damaged |
 
 Problems are reported, never repaired: the journal holds every entry, and a person decides.
 
@@ -219,7 +230,9 @@ Problems are reported, never repaired: the journal holds every entry, and a pers
 `REF` is a unit id, a FieldWorx `ast_` id, or an identifier's value. FieldWorx packs units from these; nothing reads unit records
 directly. A unit merged into another (section 15) isn't listed; its id answers as the unit it was merged into, with
 `named: {unit, merged_into}`, and is among that unit's `aliases`. An action another program records against it is recorded on that
-unit, with evidence `merged-unit:<the id it named>`.
+unit, with evidence `merged-unit:<the id it named>`. A transferred unit (section 16) answers with `transferred`; a received one with
+`received`, and a document it uses from another workspace with `foreign` (the workspace, and the SHA-256 of the PDF kept here);
+`link fetch DOC --pdf` gives that PDF (feature `unit-transfers`).
 
 Other programs **record** through `link unit-register`, `unit-fit`, `unit-remove`, `unit-note`, `unit-milestone` and
 `unit-change-install` (feature `unit-records`): the actions of section 6 and 10.2, one entry each, through the same writer as the
@@ -249,7 +262,11 @@ They are reserved: nothing records them except `link` after checking, so typing 
 refused. Revoking the phone stops its signatures being accepted on anything new; `unit verify` still checks those accepted before.
 
 The Director decided (2026-11-07) that OpenMeridian may register the units its own work orders build, and nothing else; FieldWorx
-records only what someone in the office accepts. Proposals from phones are never applied by themselves.
+records only what someone in the office accepts. Proposals from phones are never applied by themselves. On 2026-11-08 the Director
+decided that OpenMeridian also records the lots each completion used: `link unit-register --lots` (feature `unit-lots`) registers the
+completion's units and their `lots.used` in one entry, under the completion's txid. `unit show`, `link unit` (`factory_lots`), the
+Units window, the handover pack and where-used (as *built from*, saying how many units were built with the lot) show them, and a
+FieldWorx package carries them in the unit's history (its line names the first ten and says how many more).
 
 ## 9. Failure modes
 
@@ -439,7 +456,7 @@ window's **Handover pack…**) writes it into a new folder:
 
 | File | What it is |
 |---|---|
-| `index.html` | The page to read and print: the pack's number, identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
+| `index.html` | The page to read and print: the pack's number, identity, where the unit is, milestones, the documents that apply with their revisions and a link to each PDF, what's fitted, the lots it was built from, approved departures (deviations and concessions), the engineering changes that reach it, and its history. Plain HTML and CSS, no scripts, nothing fetched from anywhere |
 | `documents/<number> rev <label>.pdf` | The PDF of each revision that applies: the revision's own PDF (ADR-026), or the revision itself when it is a PDF. Never another revision's: one without a PDF is listed on the page as not included, with why |
 | `unit.json` | The record, as `revisionworx link unit` answers it but without computer names, with `format` `revisionworx-unit-pack`, `version` 2, the pack's number (`pack`), who made it (`made_by`, without the computer), the PDFs included or not, and `signed`: `false`, or the key that signs it (`key`, its fingerprint; `type`; `namespace`) |
 | `SHA256SUMS` | The SHA-256 of every other file, in the format `sha256sum -c SHA256SUMS` reads |
@@ -517,7 +534,11 @@ while it is off.
 - Queries read every unit (`ws.list`): finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000 (ADR-025). No index
   yet; the local search index covers documents only.
 - Batch actions are one journal entry each; an import of 1,000 units is one large entry.
-- Transfers between workspaces are a later phase (ADR-025). Signing packs is optional and off by default (section 13.1).
+- A transfer can't be cancelled: once the pack exists, the receiving workspace may record it, so the source never takes the unit
+  back but by receiving it back (section 16). A lost pack is written again, exactly, with `unit transfer-pack`.
+- What a transfer doesn't carry as records of the receiver's own: build standards (the documents that apply are carried
+  instead), engineering-change compliance and deviations (they are in the history, and on the transfer pack's page), catalog
+  parts (part numbers are carried). Signing packs is optional and off by default (section 13.1).
 - A merge (section 15) moves identifiers only: the duplicate's documents, milestones and notes stay in its own history, and are
   recorded on the unit that stays by hand where they matter.
 - Approval of a deviation is recording it; there is no review workflow for deviations like change control's for ECOs.
@@ -551,3 +572,62 @@ one entry:
   right instead).
 
 The duplicate's documents, milestones and notes stay in its own history; the merge doesn't copy them.
+
+## 16. Transfers between workspaces
+
+A machine sold to a customer that keeps its own RevisionWorx workspace, handed over to a service company, or moved to another
+site: from then on its record is kept there. **One workspace keeps a unit at a time.** A transfer hands the record over; the
+revisions the unit uses stay where they are. The Director decided (2026-11-08) that the receiver **refers** to them: it keeps
+each one as a reference, read-only, with its number, revision, SHA-256 and PDF, and never as a document of its own (ADR-031).
+
+**Sending.** `revisionworx unit transfer NH-26-0001 FOLDER --to "Bayside Service"` (in the source workspace):
+
+- **What goes.** The unit, and every unit fitted in it, with their ids. A unit fitted in another is refused: transfer that one.
+- **The transfer pack** is the unit's next handover pack (section 13), with two more things for the receiving workspace:
+  `transfer.json` (each unit as the receiver starts from it, and what it keeps of each document) and `history/UNIT.json` (each
+  unit's history in every workspace that has kept it, without computer names, as in a handover pack). Its page says the unit
+  was transferred, to whom. Signed like any pack where packs are signed (section 13.1).
+- **Recorded in one entry**, only if nothing was recorded on any of the units since the pack was put together: the pack issued
+  (`pack.issued`), and `unit.transferred` on each unit. Their status is `transferred`; every action on them is refused from then
+  on: "transferred to Bayside Service on 2026-11-08: it is recorded in that workspace now". They stay listed, with that status,
+  and where-used still finds them; a change's candidates don't include them.
+- **Kept.** The workspace keeps a copy of the pack in its content store (`kept`), so `unit transfer-pack NH-26-0001 FOLDER`
+  writes it again exactly, the same `SHA256SUMS`, if the first is lost. `unit check-pack -w` confirms it as issued, as the
+  transfer to Bayside Service.
+- **What it hands over.** Identity (the same `unt_` id; this organization's serials and tags name it as their issuer, by the
+  workspace's name), class, name, model number, status, customer, site, location, notes, milestones, factory lots, what is
+  fitted (part numbers, serials, lots, the units fitted) and, for each document that applies to it, the revision it uses (or
+  that it doesn't apply). Not as records of the receiver's: build standards (the documents that apply go instead), catalog part
+  ids, projects, engineering-change compliance and deviations, which stay in the history and on the pack's page.
+
+**Receiving.** `revisionworx unit receive FOLDER [--key SENDER.pub | --fingerprint SHA256:...]` (in the receiving workspace):
+
+- **Checked first.** The pack must be whole. If it is signed, the signature must hold; with `--key` it must be by that key, so
+  a receiver given the sender's key knows who sent it. An unsigned pack is received with a warning that nothing shows who made
+  it. A pack made by this workspace, or one that isn't a transfer pack, is refused.
+- **Recorded in one entry**, all the units or none: each with the same id, starting with `unit.received` (event 1). Their
+  identifiers are claimed as at registration; one another unit here holds refuses the whole receipt (settle it, then receive
+  again). The PDFs and the histories it brought are kept in the content store first. The same pack received again records
+  nothing more.
+- **References, not copies.** A document that isn't this workspace's is kept as `foreign` in the receipt: number, title,
+  revision, state, SHA-256 and, if one came, the PDF. It is shown as *kept from Acme Engineering* (flag `foreign`), never with a
+  newer revision beside it (this workspace can't know of one), and only its PDF can be fetched (`link fetch DOC --pdf`); the
+  native file stays with Acme. A handover pack made here includes that PDF.
+- **From then on** the unit is this workspace's: anything is recorded on it as on any unit, and its own documents can be set
+  on it beside the kept ones. `unit history` shows what other workspaces recorded before, then what was recorded here.
+- **Back where it came from.** A unit this workspace transferred away and receives back takes up where it left off: the state
+  the transfer carried replaces its record (event `unit.received`), its own documents are its own again, and its serials are
+  this organization's again.
+
+**What can go wrong.**
+
+| What happens | What follows |
+|---|---|
+| The pack is lost on the way | `unit transfer-pack` writes it again, exactly. The unit stays transferred: a transfer can't be cancelled, because the receiver may still record the first copy |
+| A file of the pack is changed, or the signature isn't the expected key | Refused; nothing recorded |
+| The receiver already has its own record of the unit (registered from the same work order, say) | An identifier is held, or the same id is there: refused. Retire or remove the identifier on the receiver's record, receive, then merge the old record into the received one (section 15) |
+| Someone records on the unit at the source while the pack is being made | Nothing is recorded and the pack isn't made: make it again |
+| A PDF, a history or the kept copy goes missing from a content store | `unit verify` reports `received-content` or `kept-content`; content clean-up never removes them |
+
+**Not verified:** between two companies' computers. The tests make both workspaces on one computer, as for everything else.
+

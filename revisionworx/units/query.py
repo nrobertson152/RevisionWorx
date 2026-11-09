@@ -9,9 +9,11 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .. import documents as D
+from ..content import ContentStore
 from . import history as H
-from .model import (MERGED, REQUIRED_KINDS, MalformedUnitRecord, NotFound, PERMANENT_SCHEMES, STANDARD_SCHEME, check_date,
-                    day_of, effectivity_digest, is_id, key_id, load_compliance, load_effectivity, load_event, load_key,
+from .model import (MERGED, REQUIRED_KINDS, TRANSFERRED, MalformedUnitRecord, NotFound, PERMANENT_SCHEMES, STANDARD_SCHEME,
+                    check_date, day_of, effectivity_digest, event_id, is_id, key_id, load_compliance, load_effectivity,
+                    load_event, load_key,
                     load_numbering, load_standard, load_unit, norm, position_key, standard_digest, unit_label)
 from .service import KIND, UnitService
 
@@ -56,6 +58,18 @@ class _Names:
 
     def revision(self, rid: str) -> dict | None:
         return self._get("revision", rid)
+
+    def foreign(self, unit_id: str, n: int, doc: str) -> dict | None:
+        """What this workspace kept of a document from another workspace (section 16): the ``foreign`` entry of the receipt,
+        event ``n``, that brought it."""
+        key = ("unitevt", f"{unit_id}#{n}")
+        if key not in self._cache:
+            try:
+                ev = load_event(self.ws.get(KIND["event"], event_id(unit_id, n)))
+                self._cache[key] = ev["body"]["foreign"] if ev["type"] == "unit.received" else {}
+            except Exception:  # noqa: BLE001 - verify reports a damaged event; here it is a document that can't be found
+                self._cache[key] = {}
+        return self._cache[key].get(doc)
 
     def __call__(self, kind: str, rid: str) -> str:
         if not rid:
@@ -113,6 +127,16 @@ def applicable_documents(svc: UnitService, unit: dict, names: _Names | None = No
     rows = []
     for doc_id, c in chosen.items():
         doc = names.document(doc_id)
+        f = names.foreign(unit["id"], c["event"], doc_id) if doc is None and c["source"] == "unit" else None
+        if f is not None and f["revision"] == c["revision"]:   # from another workspace: kept as a reference, read-only
+            rows.append({
+                "document": {"id": doc_id, "number": f["number"], "title": f["title"]},
+                "revision": {"id": f["revision"], "label": f["label"], "number": 0, "state": f["state"],
+                             "state_name": f["state_name"], "sha256": f["sha256"]} if f["revision"] else None,
+                "applies": bool(c["revision"]), "source": c["source"], "event": c["event"], "basis": c["basis"],
+                "released": None, "flags": ["foreign"],
+                "foreign": {"workspace": f["workspace"], "name": f["workspace_name"], "size": f["size"], "pdf": f["pdf"]}})
+            continue
         rev = names.revision(c["revision"]) if c["revision"] else None
         flags = []
         released = None
@@ -184,6 +208,13 @@ def unit_detail(svc: UnitService, unit: dict, *, history: bool = True, at: int |
     out["merged_from"] = [{**m, "label": names("unit", m["unit"])} for m in merged]
     out["aliases"] = sorted({i["value"] for i in shown["identifiers"] if i["scheme"] == "fieldworx"}
                             | {m["unit"] for m in merged})                # earlier ids field records may name
+    out["factory_lots"] = [dict(x) for x in shown.get("lots", [])]   # the lots the work that built it used
+    gone, came = H.transferred(events), H.receipts(events)
+    out["transferred"] = None if gone is None else {**{k: gone[k] for k in ("to", "event", "time", "pack", "key")},
+                                                    "units": [{"unit": x, "label": names("unit", x)} for x in gone["units"]]}
+    out["received"] = [{k: r[k] for k in ("from", "event", "time", "pack", "key")} for r in came]
+    for r in came:                                   # earlier ids a label may name, from where it was before
+        out["aliases"] = sorted(set(out["aliases"]) | set(r["aliases"]))
     if docs["standard_problem"]:
         out["problems"] = [docs["standard_problem"]]
     if at or on:
@@ -273,7 +304,16 @@ def units_with_component(svc: UnitService, *, number: str = "", part: str = "", 
             ((number, b["number"]), (part, b["part"]), (serial, b["serial"]), (lot, b["lot"])))
 
     out = []
+    lot_wanted = not (part or serial or component)          # a factory lot is only a part number and a lot
     for u in (svc.scan()[0] if history else svc.units()):   # history: a unit merged into another was fitted where it was
+        if lot_wanted:
+            # The lots the work that built it used: nothing records one leaving the unit, so it is always listed, as built
+            # from rather than fitted at a position, saying how many units were built with it.
+            for x in u.get("lots", []):
+                if matches({"number": x["number"], "part": "", "serial": "", "lot": x["lot"], "unit": ""}):
+                    out.append({"unit": unit_summary(u), "position": "", "fitted": x["event"], "fitted_on": x["since"],
+                                "removed": None, "current": True, "serial": "", "lot": x["lot"],
+                                "built_from": {"units": x["units"], "quantity": x["quantity"]}})
         if not history:
             for c in u["components"].values():
                 if matches(c):
@@ -365,6 +405,7 @@ def verify(svc: UnitService) -> list[dict]:
     signed: dict[str, set] = {}                      # signed field record -> the txids of the actions that cite it
 
     merges: dict[tuple[str, str], set] = {}         # (duplicate, survivor) -> the units whose history records it
+    foreign_names = _Names(svc)
     for uid, u in units.items():
         label = unit_label(u)
         raw = {n: ws.get(KIND["event"], H.event_id(uid, n)) for n in range(1, u["events"]["count"] + 2)}
@@ -408,10 +449,34 @@ def verify(svc: UnitService) -> list[dict]:
             problem("dangling-reference", uid, f"{label}: project {u['project']} doesn't exist")
         if u["standard"] is not None and u["standard"]["id"] not in standards:
             problem("dangling-reference", uid, f"{label}: build standard {u['standard']['id']} doesn't exist")
+        store = ContentStore(ws)
         for doc, d in u["documents"].items():
             r = ws.get("revision", d["revision"]) if d["revision"] else None
             if ws.get("document", doc) is None or (d["revision"] and (r is None or r.get("document_id") != doc)):
-                problem("dangling-reference", uid, f"{label}: {doc}@{d['revision'] or '-'} doesn't exist")
+                f = foreign_names.foreign(uid, d["event"], doc) if ws.get("document", doc) is None else None
+                if f is None or f["revision"] != d["revision"]:
+                    problem("dangling-reference", uid, f"{label}: {doc}@{d['revision'] or '-'} doesn't exist")
+                elif f["pdf"] and not store.verify(f["pdf"]):
+                    problem("received-content", uid, f"{label}: the PDF of {f['number'] or doc} rev {f['label']}, kept "
+                                                     "when it was received, is missing or damaged")
+        if not chain:
+            gone = H.transferred(events)
+            if (u["status"] == TRANSFERRED) != (gone is not None):
+                problem("transfer-mismatch", uid, f"{label}: its status and its history disagree about a transfer")
+            for r in H.receipts(events):
+                if not store.verify(r["history"]):
+                    problem("received-content", uid, f"{label}: its history before it was received (event {r['event']}) "
+                                                     "is missing or damaged in the content store")
+            for ev in events:
+                if ev["type"] == "unit.transferred":
+                    from .transfer import TransferError, _kept_files
+                    try:
+                        damaged = [rel for rel, sha in _kept_files(ws, ev["body"]["kept"]).items() if not store.verify(sha)]
+                    except TransferError:
+                        damaged = ["the list of its files"]
+                    if damaged:
+                        problem("kept-content", uid, f"{label}: the copy of its transfer pack (event {ev['n']}) is missing "
+                                                     f"or damaged: {', '.join(damaged[:3])}")
         for c in u["components"].values():
             if c["unit"]:
                 comp = units.get(c["unit"])

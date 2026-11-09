@@ -901,7 +901,7 @@ accepted a signed entry that changed or removed one, and `unit verify` found the
 
 **Verification.** Local: a contract suite, every rule above, forged and damaged entries of every shape including a fuzz, processes racing, processes killed before every file change, simulated client caches. `.github/workflows/shares.yml` runs the same races against real file servers on one hosted machine: Windows SMB 3.1.1 (client and server, by three server names, which makes three connections), the Linux kernel's SMB client against Samba (two mounts), and NFS 4.2 and 3 (two kernel clients). That found behaviour no simulation had, which the design now handles: a Linux SMB client answering EBUSY or EIO for a moment about a file that's fine, a client told a folder exists and then that it doesn't, and NFS taking seconds to show a change. Two NFS 4 mounts, being one client to the server, never heard about each other's changes at all, which is why that job mixes versions. **None of that is evidence across computers:** it's one machine and one network path, with no cable pulled and no server rebooted. `revisionworx share test FOLDER`, run at the same time on two or more computers, produces that evidence for a given share, and until someone has run it, this is unverified.
 
-### ADR-025 Units: serial-numbered units and their configuration live in this journal — IMPLEMENTED (phases 1 to 3 of 4; phase 4 in progress)
+### ADR-025 Units: serial-numbered units and their configuration live in this journal — IMPLEMENTED (phases 1 to 4)
 
 **Decision (2026-11-06).** Every physical unit a company builds, sells or looks after gets one permanent identity and one append-only
 configuration history in the workspace journal, as a subsystem (`revisionworx/units/`, design and data contract in `docs/UNITS.md`)
@@ -930,8 +930,10 @@ deviations and concessions (`docs/UNITS.md` section 12: written once with the un
 signed on phones enrolled to accounts, accepted as verified (ADR-028, done). 4: where-used for other programs
 (`link where-used`, done); journal checkpoints (ADR-022's revision of 2026-11-08 and ADR-029, done); handover packs
 (`docs/UNITS.md` section 13, done), recorded in the unit's history as issued (ADR-030, the Director's decision at gate 4, done);
-signing packs, optional and off by default (ADR-030, done); merged identities (`docs/UNITS.md` section 15, done); transfer
-between workspaces (not started).
+signing packs, optional and off by default (ADR-030, done); merged identities (`docs/UNITS.md` section 15, done); factory lots,
+recorded by OpenMeridian when it registers a completion's units (the Director's decision of 2026-11-08, `docs/UNITS.md` section 8,
+done); transfer between workspaces, the receiver referring to the source's revisions (ADR-031, the Director's decision of
+2026-11-08, `docs/UNITS.md` section 16, done).
 
 **Costs and limits.** Queries read every unit (no index yet): finding one by serial took 57 ms at 2,000 units and 0.69 s at 20,000
 (Linux, local disk, a handle after the first, 2026-11-08), most of it reading each unit's record file. An index of identifiers kept
@@ -1139,6 +1141,43 @@ section 13.1). Only Ed25519 keys; RSA and ECDSA ones are refused when signing is
 **Not verified:** signing with a real YubiKey. The tests sign with software keys through ssh-keygen, which runs in CI on Linux
 and on Windows (the runner's OpenSSH), and check security-key signatures built to OpenSSH's PROTOCOL.u2f, which `ssh-keygen -Y
 verify` accepts.
+
+### ADR-031 A unit is transferred to another workspace by a pack, and the receiver refers to the source's revisions — IMPLEMENTED
+
+**Context.** A machine's record has to follow it when it goes to a customer, a service company or another site that keeps its
+own workspace. Workspaces share nothing: no server, no network (the product is offline). Gate 4 asked what the receiver keeps of
+the documents. The Director decided (2026-11-08) that it **refers** to them: each revision the unit uses is kept as a foreign
+reference (number, revision, SHA-256 and the PDF), read-only, never imported as the receiver's own document. Signing follows
+gate 4's decision for packs: automatic record, optional signature.
+
+**Decision.**
+- **One authority at a time.** The source records the transfer, in one entry, and from then on refuses every action on the unit
+  (status `transferred`). It never takes it back but by receiving it back: there is no cancel, because offline it can't know
+  whether the receiver has recorded the pack already, and cancelling would make two authorities.
+- **The pack is a handover pack** (ADR-030): the unit's next one, recorded as issued, signed where packs are signed, checked by
+  `check-pack` (anywhere, and against the source's register, which says it was the transfer). It adds `transfer.json` and the
+  histories. The source keeps a copy in its content store, so a lost pack is written again byte for byte.
+- **The unit keeps its id** everywhere (a FieldWorx label is fixed for the life of the machine), and everything fitted in it
+  goes with it, ids and all. The receiver starts its own history with `unit.received`, holding the state the transfer carried;
+  the history before is kept as a content object it names, not replayed into the receiver's journal, because the receiver can't
+  vouch for another company's entries (they are signed, if at all, by that company's people and key).
+- **References, not copies.** The receipt holds what is kept of each foreign document (`foreign`); the unit record's documents
+  name the source's document and revision ids, which are unique everywhere. Queries resolve them through the receipt; a PDF is
+  served from the content store; the native file stays with the source. A document the receiver has itself (a unit coming back)
+  is its own again.
+- **Rules every computer applies.** The new events are unit events: written once (team rules 2), chained, checked by `unit
+  verify` (`transfer-mismatch`, `received-content`, `kept-content`). Content clean-up keeps everything a transfer or a receipt
+  names.
+
+**Rejected.** Copying the revisions into the receiver as documents of its own (option (a) at gate 4): heavier, and it makes two
+controlled copies of one drawing that can disagree. Replaying the source's events into the receiver's journal: the receiver
+would hold entries it can't verify as its own. A transfer that a later message cancels: offline, nothing guarantees the message
+arrives before the pack is recorded.
+
+**Consequences.** Build standards, catalog parts, projects, engineering-change compliance and deviations don't become the
+receiver's records; the documents that apply, part numbers and the history carry what they said. A foreign revision never shows a
+newer one beside it: the receiver can't know of one. A unit the receiver already registered under its own record is refused
+until the identifier is freed, then merged after receiving (section 15). **Not verified** between two companies' computers.
 
 ## Shared filesystem coordination — design gate (Phase 3): ADR-024 answers items 1-4; 2, 3 and 5 still need real shares
 

@@ -70,12 +70,13 @@ one has `null`; another revision's PDF is never offered in its place.
 **`unit` objects** (docs/UNITS.md; `REF` is a unit id, a FieldWorx `ast_` id, or an identifier such as a serial or tag):
 `id, label, class, name, model {part, number}, identifiers [{scheme, issuer, value, active, since}], status,
 project {id, number, name} | null, customer, site, location, parent {unit, label, position} | null,
-standard {id, number, title, event, basis} | null, configuration_recorded, documents, components, milestones, notes, aliases,
-events {count, head}, created, updated, rev, history`, and `as_of` when `--at`/`--on` was given. Each of `documents` is
+standard {id, number, title, event, basis} | null, configuration_recorded, documents, components, factory_lots, milestones,
+notes, aliases, events {count, head}, created, updated, rev, history`, and `as_of` when `--at`/`--on` was given. Each of `documents` is
 `{document {id, number, title}, revision {id, label, number, state, state_name, sha256} | null, applies, source ("standard" |
 "unit"), event, basis, released {id, label} | null, flags}`; `flags` among `newer-released`, `not-released`, `obsolete`, `missing`.
 The revision is always the one recorded for this unit; a newer released one is only ever named in `released`. Each of
-`components` is `{position, part, number, unit, label, serial, lot, since, event, basis}`; each of `history` is
+`components` is `{position, part, number, unit, label, serial, lot, since, event, basis}`; each of `factory_lots` (feature
+`unit-lots`, below) is `{number, lot, quantity, units, since, event, basis}`; each of `history` is
 `{n, type, summary, effective, time, actor, basis, evidence, reason, change, voided}`. A unit answered for now (not `--at` or
 `--on`) also has `changes` (feature `unit-changes`): each engineering change that reaches it (docs/UNITS.md section 10), outstanding ones first, as
 `{change, number, title, kind, required, state, outstanding, since, documents: [{document, number, from, from_label, to,
@@ -84,6 +85,14 @@ in effect first, as `{deviation, number, kind ("deviation" | "concession"), titl
 "cleared" | "not-used"), in_effect, overdue, since, documents: [{document, number, revision, label}]}`. A unit that differs from its
 drawings where one in effect allows it is not a mistake in the record. A summary (`units` without `--detail`) is
 `{id, label, class, name, model, status, project, customer, site, location, identifiers, standard, parent, events, rev}`.
+
+**Transferred and received units** (feature `unit-transfers`, docs/UNITS.md section 16). Every `unit` object has `transferred`
+(`{to, event, time, pack, key, units: [{unit, label}]}` or `null`): a transferred unit is recorded in another workspace now,
+and every recording command is refused on it. `received` lists each time this workspace received it: `[{from: {workspace, name},
+event, time, pack, key}]`. A row of `documents` for a document kept from another workspace has the flag `foreign` and
+`foreign: {workspace, name, size, pdf}` (the SHA-256 of the PDF kept here, or `""`); `released` is `null`, because this workspace
+can't know the source's. `fetch DOC --pdf` gives that PDF; without `--pdf` it is `not-found` (the native file stays with the
+source), and `ambiguous` when units here use more than one of its revisions and `--revision` doesn't say which.
 
 **Merged units** (feature `unit-merges`, docs/UNITS.md section 15). Every `unit` object has `merged_into` (`{unit, label, event, time}` or `null`) and
 `merged_from` (`[{unit, label, event, time}]`, oldest first). `aliases` is sorted: the unit's FieldWorx `ast_` ids and the `unt_`
@@ -121,7 +130,10 @@ a where-used report. Give one of:
 - What is fitted: `--part-number`, `--serial`, `--lot` and `--component` in any combination, all of which must hold. A lot
   belongs to a part, so `--lot` needs `--part-number`. Each row has `unit`, `position`, `fitted` (the event), `removed`,
   `current`, `serial` and `lot`. With `--history`, it is wherever that has ever been fitted, and a removed row adds
-  `fitted_on`, `removed_on` and `disposition`.
+  `fitted_on`, `removed_on` and `disposition`. A unit built from that lot of that part (its `factory_lots`, feature
+  `unit-lots`) is a row too, with `position` `""` and `built_from: {units, quantity}`: how many units were built with the lot,
+  and how much of it that work used. Nothing records a factory lot leaving a unit, so these rows are always `current`; with
+  `units` more than 1, the unit holds some of that lot, not necessarily any particular part of it.
 
 Matching ignores case. Every `unit` is the unit's summary, the same as `units` returns: label, status, customer, site,
 location, identifiers and project. So the caller knows where each one is without asking again. `coverage` says what was
@@ -137,7 +149,7 @@ or nothing**. In a team workspace it is in the name of the person logged in on t
 
 | Command | Records |
 |---|---|
-| `unit-register (--serial S ... [--issuer I] \| --serial-from NUMBERING [--count N] \| --tag T [--tag-issuer I] \| --other X) [--name] [--model] [--class] [--status] [--project P] [--customer] [--site] [--location] [--standard STD] [--doc DOC@REV ...] [--built\|--shipped\|--installed\|--commissioned\|--decommissioned DATE] [--notes]` | new units, all or none: one per `--serial`, or `--count` units (1 to 1000) each issued the next serial of a numbering, or one unit known by a tag or other code. Answer: `units` |
+| `unit-register (--serial S ... [--issuer I] \| --serial-from NUMBERING [--count N] \| --tag T [--tag-issuer I] \| --other X) [--name] [--model] [--class] [--status] [--project P] [--customer] [--site] [--location] [--standard STD] [--doc DOC@REV ...] [--built\|--shipped\|--installed\|--commissioned\|--decommissioned DATE] [--notes] [--lots JSON \| --lots-file FILE]` | new units, all or none: one per `--serial`, or `--count` units (1 to 1000) each issued the next serial of a numbering, or one unit known by a tag or other code. With `--lots` (feature `unit-lots`), the lots the work that built them used: below. Answer: `units` |
 | `unit-fit REF POSITION (--part-number PN [--serial S] [--lot L] \| --component REF) [--replace [--disposition D]]` | something fitted; an occupied position is refused without `--replace` |
 | `unit-remove REF POSITION [--disposition D]` | something taken out; an empty position is refused |
 | `unit-note REF TEXT` | a note in the unit's history |
@@ -164,6 +176,14 @@ Every one also takes:
 **Answer:** `result` (`recorded` or `already-recorded`), `unit` (as `unit` answers it, after the action) and `events` (the numbers
 of the events this attempt wrote on it); `unit-register` answers `units` instead. `warning` when it was saved but finishing was
 delayed (the workspace completes it when next opened for writing): it is recorded, so don't record it again.
+
+**Factory lots** (feature `unit-lots`, the Director's decision of 2026-11-08). `unit-register --lots JSON` gives the lots the
+work that built the units used, as a JSON list of `{"number": PART-NUMBER, "lot": LOT, "quantity": TEXT}` (1 to 1000; `quantity`
+is how much of the lot that work used, as your program writes it, or left out). `--lots-file FILE` reads the same from a UTF-8
+file, which has no command-line length limit. Each unit registered records them in the same entry (`lots.used`, docs/UNITS.md
+section 4), with `units`: how many units were registered with them, so with several, each holds some of them. A part's lot is given
+once; anything else is `bad-input` and nothing is written. The lots are part of what the txid stands for: the same txid with other
+lots is `txid-used`. A registration without `--lots` asks for exactly what it asked before, so retrying an older one still works.
 
 ## Phones enrolled to accounts (feature `field-signatures`)
 

@@ -19,7 +19,8 @@ SCHEMA = 1
 CLASSES = ("product", "component", "instrument", "tool")
 STATUSES = ("planned", "in-build", "built", "in-service", "out-of-service", "retired", "scrapped")   # what a person sets
 MERGED = "merged"                                        # a duplicate's status once it is merged into another (section 15)
-RECORD_STATUSES = STATUSES + (MERGED,)
+TRANSFERRED = "transferred"                              # a unit another workspace keeps from now on (section 16)
+RECORD_STATUSES = STATUSES + (MERGED, TRANSFERRED)
 BASES = ("verified", "reported", "declared", "legacy")
 MILESTONES = ("built", "shipped", "installed", "commissioned", "decommissioned")
 DISPOSITIONS = ("scrapped", "returned", "repair", "stock", "reused", "unknown")
@@ -30,9 +31,9 @@ UPDATABLE = ("class", "name", "model", "project", "customer", "site", "location"
 EVENT_TYPES = ("unit.registered", "unit.updated", "identifier.added", "identifier.retired", "identifier.removed",
                "status.changed", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
                "component.removed", "parent.set", "note", "verified", "void", "pack.issued", "pack.withdrawn", "unit.merged",
-               "unit.absorbed")
+               "unit.absorbed", "lots.used", "unit.transferred", "unit.received")
 VOIDABLE = ("unit.updated", "milestone", "standard.set", "document.set", "document.reset", "component.installed",
-            "component.removed", "note", "verified", "unit.merged", "unit.absorbed")
+            "component.removed", "note", "verified", "unit.merged", "unit.absorbed", "lots.used")
 # a pack that was issued stays issued: it is withdrawn, never voided
 
 # Engineering changes reaching units (docs/UNITS.md section 10)
@@ -65,7 +66,7 @@ LIMITS = {"name": 200, "model": 100, "customer": 200, "site": 200, "location": 2
           "issuer": 200, "position": 64, "serial": 100, "lot": 100, "reason": 2000, "text": 4000, "evidence": 50,
           "evidence_ref": 200, "evidence_label": 200, "standard_number": 64, "standard_title": 200,
           "standard_documents": 2000, "deviation_number": 64, "deviation_title": 200, "departure": 4000,
-          "deviation_documents": 200, "deviation_units": 10000}
+          "deviation_documents": 200, "deviation_units": 10000, "number": 100, "quantity": 50, "lots": 1000}
 
 ID_PATTERNS = {"unit": "unt", "event": "uev", "key": "uky", "standard": "bst", "project": "prj", "document": "doc",
                "revision": "rev", "part": "prt", "change": "eco", "fieldworx": "ast", "effectivity": "uef",
@@ -411,9 +412,13 @@ def _int(v: Any, what: str, minimum: int = 0) -> int:
     return v
 
 
+LOT_RECORD_FIELDS = {"number", "lot", "quantity", "units", "event", "since", "basis"}
+
+
 def load_unit(record: Any) -> dict:
-    """The unit record, refused unless it is exactly schema 1. Returns it without ``_rev``."""
-    r = _fields(record, UNIT_FIELDS, "unit")
+    """The unit record, refused unless it is exactly schema 1. Returns it without ``_rev``. ``lots`` is there only once the
+    unit has factory lots (``lots.used``), so a unit without them reads as it always did."""
+    r = _fields(record, UNIT_FIELDS | ({"lots"} if isinstance(record, dict) and "lots" in record else set()), "unit")
     what = f"unit {r.get('id')!r}"
     try:
         if not is_id("unit", r["id"]):
@@ -473,6 +478,17 @@ def load_unit(record: Any) -> dict:
                 raise MalformedUnitRecord(f"{what}: milestone {name} has the wrong fields")
             _str(m["date"], "milestone date")
             _int(m["event"], "milestone event", 1)
+        if "lots" in r:
+            if not isinstance(r["lots"], list) or not r["lots"]:
+                raise MalformedUnitRecord(f"{what}: lots, when there, lists the unit's factory lots")
+            for x in r["lots"]:
+                if not isinstance(x, dict) or set(x) != LOT_RECORD_FIELDS:
+                    raise MalformedUnitRecord(f"{what}: a factory lot has the wrong fields")
+                for k in ("number", "lot", "quantity", "since"):
+                    _str(x[k], f"{what} factory lot {k}")
+                _int(x["units"], f"{what} factory lot units", 1)
+                _int(x["event"], f"{what} factory lot event", 1)
+                check_choice(x["basis"], BASES, "basis")
         ev = r["events"]
         if not isinstance(ev, dict) or set(ev) != {"count", "head"}:
             raise MalformedUnitRecord(f"{what}: events must be {{count, head}}")
@@ -505,7 +521,129 @@ BODY_KEYS = {
     "pack.withdrawn": {"pack"},
     "unit.merged": {"into", "identifiers"},
     "unit.absorbed": {"unit", "identifiers"},
+    "lots.used": {"lots", "units"},
+    "unit.transferred": {"to", "pack", "key", "kept", "units"},
+    "unit.received": {"from", "pack", "key", "state", "foreign", "history"},
 }
+# A unit as a transfer hands it over (docs/UNITS.md section 16): what the receiving workspace starts from. Nothing in it is
+# an id of the source workspace's own records but documents, revisions and units, which keep their ids everywhere.
+STATE_FIELDS = {"class", "name", "model", "identifiers", "status", "customer", "site", "location", "notes", "parent",
+                "documents", "components", "milestones", "lots", "aliases"}
+STATE_COMPONENT_FIELDS = {"position", "number", "unit", "serial", "lot", "since", "basis"}
+STATE_LOT_FIELDS = {"number", "lot", "quantity", "units", "since", "basis"}
+FOREIGN_FIELDS = {"workspace", "workspace_name", "number", "title", "revision", "label", "state", "state_name", "sha256",
+                  "size", "pdf"}
+WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+MAX_TRANSFER_UNITS = 1000
+
+
+def _text(v: Any, what: str, limit: int, required: bool = False) -> str:
+    if clean(v, what, limit, required=required) != v:
+        raise ValidationError(f"{what} isn't as it would have been written")
+    return v
+
+
+def check_state(st: Any) -> dict:
+    """A unit's state as a transfer carries it (``unit.received``, section 16), exactly; nothing is taken partially."""
+    if not isinstance(st, dict) or set(st) != STATE_FIELDS:
+        raise ValidationError("a transferred unit's state has the wrong fields")
+    check_choice(st["class"], CLASSES, "class")
+    check_choice(st["status"], STATUSES, "status")
+    if check_model(st["model"])["part"]:
+        raise ValidationError("a transferred unit's model names no catalog part of the workspace it came from")
+    for k in ("name", "customer", "site", "location"):
+        _text(st[k], k, LIMITS[k])
+    _text(st["notes"], "notes", LIMITS["notes"])
+    if not isinstance(st["identifiers"], list) or not st["identifiers"]:
+        raise ValidationError("a transferred unit has identifiers")
+    for i in st["identifiers"]:
+        if not isinstance(i, dict) or set(i) != {"scheme", "issuer", "value", "active"} or not isinstance(i["active"], bool):
+            raise ValidationError("a transferred identifier is {scheme, issuer, value, active}")
+        if check_identifier(i["scheme"], i["value"], i["issuer"]) != {k: i[k] for k in ("scheme", "issuer", "value")}:
+            raise ValidationError("a transferred identifier isn't as it would have been written")
+    if st["parent"] is not None and (not isinstance(st["parent"], dict) or set(st["parent"]) != {"unit", "position"}
+                                     or not is_id("unit", st["parent"]["unit"])):
+        raise ValidationError("a transferred unit's parent is null or {unit, position}")
+    if not isinstance(st["documents"], dict):
+        raise ValidationError("a transferred unit's documents are an object")
+    for doc, d in st["documents"].items():
+        if not is_id("document", doc) or not isinstance(d, dict) or set(d) != {"revision", "basis"}:
+            raise ValidationError("a transferred document is {revision, basis}")
+        check_id("revision", d["revision"], "revision", empty_ok=True)
+        check_choice(d["basis"], BASES, "basis")
+    if not isinstance(st["components"], list):
+        raise ValidationError("a transferred unit's components are a list")
+    seen = set()
+    for c in st["components"]:
+        if not isinstance(c, dict) or set(c) != STATE_COMPONENT_FIELDS:
+            raise ValidationError("a transferred component has the wrong fields")
+        key = position_key(_text(c["position"], "position", LIMITS["position"], required=True))
+        if key in seen:
+            raise ValidationError(f"position {c['position']} is given twice")
+        seen.add(key)
+        check_id("unit", c["unit"], "component unit", empty_ok=True)
+        for k, limit in (("number", LIMITS["number"]), ("serial", LIMITS["serial"]), ("lot", LIMITS["lot"])):
+            _text(c[k], k, limit)
+        _str(c["since"], "since")
+        check_choice(c["basis"], BASES, "basis")
+    if not isinstance(st["milestones"], dict) or not all(
+            m in MILESTONES and isinstance(d, str) and check_date(d, m) == d for m, d in st["milestones"].items()):
+        raise ValidationError("a transferred unit's milestones are {milestone: date}")
+    if not isinstance(st["lots"], list):
+        raise ValidationError("a transferred unit's lots are a list")
+    for x in st["lots"]:
+        if not isinstance(x, dict) or set(x) != STATE_LOT_FIELDS:
+            raise ValidationError("a transferred lot has the wrong fields")
+        check_lots([{"number": x["number"], "lot": x["lot"], "quantity": x["quantity"]}])
+        _int(x["units"], "units", 1)
+        _str(x["since"], "since")
+        check_choice(x["basis"], BASES, "basis")
+    if not isinstance(st["aliases"], list) or not all(is_id("unit", a) for a in st["aliases"]):
+        raise ValidationError("a transferred unit's aliases are unit ids")
+    return st
+
+
+def check_foreign(doc: str, f: Any) -> dict:
+    """What a receiving workspace keeps of a document from another one (section 16): its number, title and the revision
+    the unit uses, with that revision's SHA-256 and the SHA-256 of its PDF, or ``""`` when no PDF came with it."""
+    if not is_id("document", doc) or not isinstance(f, dict) or set(f) != FOREIGN_FIELDS:
+        raise ValidationError("a document from another workspace has the wrong fields")
+    if not isinstance(f["workspace"], str) or not WORKSPACE_ID_RE.match(f["workspace"]):
+        raise ValidationError("a document from another workspace names that workspace")
+    for k, limit in (("workspace_name", 200), ("number", 200), ("title", 500), ("label", 100), ("state", 100),
+                     ("state_name", 100)):
+        _text(f[k], k, limit)
+    check_id("revision", f["revision"], "revision", empty_ok=True)
+    for k in ("sha256", "pdf"):
+        if not isinstance(f[k], str) or (f[k] and not _HEX64_RE.match(f[k])):
+            raise ValidationError(f"{k} is a SHA-256 or empty")
+    if bool(f["revision"]) != bool(f["sha256"]) or (f["pdf"] and not f["revision"]):
+        raise ValidationError("a revision from another workspace has its SHA-256, and only a revision has a PDF")
+    _int(f["size"], "size", 0)
+    return f
+
+LOT_FIELDS = {"number", "lot", "quantity"}
+
+
+def check_lots(lots: Any) -> list[dict]:
+    """The lots the work that built a unit used (``lots.used``, docs/UNITS.md section 4): 1 to 1000 of ``{number, lot,
+    quantity}``. ``number`` is the part number and ``lot`` the lot, both required; ``quantity`` is how much of the lot that
+    work used, as the program that recorded it writes it (``"8"``, ``"2.5 kg"``), or ``""``. A lot of a part is given once."""
+    if not isinstance(lots, list) or not 1 <= len(lots) <= LIMITS["lots"]:
+        raise ValidationError(f"give from 1 to {LIMITS['lots']} lots")
+    out, seen = [], set()
+    for x in lots:
+        if not isinstance(x, dict) or set(x) - LOT_FIELDS or not {"number", "lot"} <= set(x):
+            raise ValidationError("a lot is {number, lot, quantity}")
+        number = clean(x["number"], "a lot's part number", LIMITS["number"], required=True)
+        lot = clean(x["lot"], f"the lot of {number}", LIMITS["lot"], required=True)
+        quantity = clean(x.get("quantity", ""), f"the quantity of lot {lot}", LIMITS["quantity"])
+        key = (norm(number), norm(lot))
+        if key in seen:
+            raise ValidationError(f"lot {lot} of {number} is given twice")
+        seen.add(key)
+        out.append({"number": number, "lot": lot, "quantity": quantity})
+    return out
 
 
 def _check_body(t: str, b: dict, what: str) -> None:
@@ -533,6 +671,43 @@ def _check_body(t: str, b: dict, what: str) -> None:
                 isinstance(i, dict) and set(i) == fields and all(isinstance(i[k], str) for k in ("scheme", "issuer", "value"))
                 and isinstance(i.get("active", True), bool) for i in b["identifiers"]):
             raise MalformedUnitRecord(f"{what}: a {t} event has the wrong shape")
+    elif t == "lots.used":
+        try:
+            ok = check_lots(b["lots"]) == b["lots"]
+        except ValidationError:
+            ok = False
+        if not ok or isinstance(b["units"], bool) or not isinstance(b["units"], int) or b["units"] < 1:
+            raise MalformedUnitRecord(f"{what}: a lots.used event names its lots and how many units were built with them")
+    elif t == "unit.transferred":
+        try:
+            _text(b["to"], "who it was transferred to", 200, required=True)
+            ok = (isinstance(b["pack"], str) and bool(_HEX64_RE.match(b["pack"])) and isinstance(b["kept"], str)
+                  and bool(_HEX64_RE.match(b["kept"])) and isinstance(b["key"], str)
+                  and (not b["key"] or bool(KEY_FINGERPRINT_RE.match(b["key"]))) and isinstance(b["units"], list)
+                  and 1 <= len(b["units"]) <= MAX_TRANSFER_UNITS and all(is_id("unit", u) for u in b["units"])
+                  and len(set(b["units"])) == len(b["units"]))
+        except ValidationError:
+            ok = False
+        if not ok:
+            raise MalformedUnitRecord(f"{what}: a unit.transferred event has the wrong shape")
+    elif t == "unit.received":
+        try:
+            src = b["from"]
+            ok = (isinstance(src, dict) and set(src) == {"workspace", "name"} and isinstance(src["workspace"], str)
+                  and bool(WORKSPACE_ID_RE.match(src["workspace"])) and _text(src["name"], "workspace name", 200) == src["name"]
+                  and isinstance(b["pack"], str) and bool(_HEX64_RE.match(b["pack"])) and isinstance(b["history"], str)
+                  and bool(_HEX64_RE.match(b["history"])) and isinstance(b["key"], str)
+                  and (not b["key"] or bool(KEY_FINGERPRINT_RE.match(b["key"]))) and isinstance(b["foreign"], dict))
+            if ok:
+                check_state(b["state"])
+                for doc, f in b["foreign"].items():
+                    check_foreign(doc, f)
+                    if doc not in b["state"]["documents"] or f["revision"] != b["state"]["documents"][doc]["revision"]:
+                        ok = False
+        except ValidationError:
+            ok = False
+        if not ok:
+            raise MalformedUnitRecord(f"{what}: a unit.received event has the wrong shape")
     elif t in ("pack.issued", "pack.withdrawn"):
         if isinstance(b["pack"], bool) or not isinstance(b["pack"], int) or b["pack"] < 1:
             raise MalformedUnitRecord(f"{what}: a {t} event names a handover pack by its number")
@@ -542,7 +717,8 @@ def _check_body(t: str, b: dict, what: str) -> None:
                                        and (not b["key"] or KEY_FINGERPRINT_RE.match(b["key"]))):
             raise MalformedUnitRecord(f"{what}: a pack.issued event has the wrong shape")
     for k, v in b.items():
-        if k not in ("identifiers", "model", "fields", "cleared", "events", "pack") and not isinstance(v, str):
+        if k not in ("identifiers", "model", "fields", "cleared", "events", "pack", "lots", "units", "from", "state",
+                     "foreign") and not isinstance(v, str):
             raise MalformedUnitRecord(f"{what}: {k} must be text")
 
 

@@ -58,6 +58,17 @@ The first release. Everything below is new.
   physical unit one, in one entry: the duplicate's serials, tags and FieldWorx ids move to the unit that stays, and the
   duplicate takes no more actions. Both histories stay readable; the duplicate's id still finds the unit, for other programs
   and on FieldWorx labels. Voiding the merge undoes it.
+- **Transfers between workspaces.** `revisionworx unit transfer NH-26-0001 FOLDER --to "Bayside Service"` hands a unit, and
+  everything fitted in it, over to another company's or site's workspace with a transfer pack: the unit's next handover pack,
+  signed where packs are signed, with what the receiving workspace needs. The source records it and takes no more actions on
+  the units; `unit transfer-pack` writes a lost pack again, exactly. `revisionworx unit receive FOLDER [--key SENDER.pub]`
+  checks the pack and records the units with the same ids. The revisions they use stay the source's: the receiver keeps each as
+  a reference with its PDF, never as a document of its own (the Director's decision, 2026-11-08). A unit can come back the same
+  way.
+- **Factory lots.** The units a completion of a work order builds are registered with the lots that completion used, in the
+  same entry (`link unit-register --lots`; OpenMeridian sends them, the Director's decision of 2026-11-08). A unit's record and
+  history say which lots and how many units were built with them; `unit show`, the Units window, the handover pack and where-used
+  (as *built from*) show them, and a FieldWorx package carries them in the unit's history.
 - **Where used, for other programs.** `revisionworx link where-used` answers what `unit where-used` does: which units use a
   revision or a document, or hold a part number, serial, lot or component, now or ever. Each answer has the unit's status,
   customer, site and location, so a recall put together elsewhere (OpenMeridian tracing a lot, say) knows where every unit is.
